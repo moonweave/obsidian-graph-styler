@@ -11,9 +11,20 @@ Made by **[Moonweave](https://www.instagram.com/phd.ai.log/)**.
 Obsidian's graph looks amazing in screenshots — but getting there means digging through color groups, force sliders, and CSS snippets. Graph Styler turns that into a single click. Think *Canva templates, but for your graph*.
 
 ## Presets
-⚡ Neon · 🌌 Galaxy · 🌠 Aurora · 🌅 Sunset · 🌴 Vaporwave · 🌊 Ocean · 🌲 Forest · 🍬 Candy · ✨ Gold · 👾 Cyberpunk · ⚪ Mono
+⚡ Neon · 🌌 Galaxy · 🌠 Aurora · 🌅 Sunset · 🌴 Vaporwave · 🌊 Ocean · 🌲 Forest · 🍬 Candy · ✨ Gold · 👾 Cyberpunk · ❄️ Nord · 🧛 Dracula · 🐈 Catppuccin · ⚪ Mono
 
 Each preset applies node/group colors, a glow CSS snippet, and force/size values tuned to the mood.
+
+**Make your own.** Open **🎛️ Customize** in the panel — drag the force/size sliders (repel, link distance, node size…) and pick colors, watch the graph update live, then **💾 Save as preset**. Your presets show up under *My presets* and persist.
+
+## How colors map to your vault
+Graph Styler hardcodes nothing — it adapts to *your* vault:
+
+- It finds your most-used **folders** and assigns the preset's palette to them (up to 4).
+- No folders? It falls back to your most-used **tags**.
+- Totally flat (no folders or tags)? You still get the glow, background, and node colors — just no per-group split.
+
+It writes these into Obsidian's **native graph color groups** (Settings → Graph → Groups), so you can see and tweak them there. Whether you have 2 groups or 4, it just works — and the glow, background, and node styling are identical for everyone. Applying a preset replaces your current color groups; your original config is backed up, so **Restore** brings it back.
 
 ## Usage
 1. Open the graph view (global graph).

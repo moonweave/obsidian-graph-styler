@@ -10,6 +10,7 @@ const { Plugin, ItemView, Notice } = require('obsidian');
 const AUTHOR = 'Moonweave';
 const AUTHOR_URL = 'https://www.instagram.com/phd.ai.log/';
 const VIEW_TYPE = 'graph-styler-panel';
+const LIVE_ID = '__live__';
 
 // ---------------------------------------------------------------- i18n
 function detectLang() {
@@ -37,6 +38,17 @@ const STRINGS = {
     restored: '↩︎ Restored to original',
     noBackup: 'No backup found',
     by: 'made by ',
+    customize: '🎛️ Customize',
+    myPresets: 'My presets',
+    save: '💾 Save as preset',
+    namePh: 'Preset name',
+    saved: (n) => `💾 “${n}” saved`,
+    deleted: 'Preset deleted',
+    f: {
+      colors: 'Group colors', bg: 'Background', glow: 'Glow',
+      repel: 'Repel', dist: 'Link distance', center: 'Center', linkS: 'Link force',
+      node: 'Node size', line: 'Link width', fade: 'Text fade',
+    },
   },
   ko: {
     title: '🎨 Graph Styler',
@@ -50,20 +62,50 @@ const STRINGS = {
     restored: '↩︎ 원래대로 복구함',
     noBackup: '백업이 없어요',
     by: 'made by ',
+    customize: '🎛️ 커스터마이즈',
+    myPresets: '내 프리셋',
+    save: '💾 내 프리셋으로 저장',
+    namePh: '프리셋 이름',
+    saved: (n) => `💾 “${n}” 저장됨`,
+    deleted: '프리셋 삭제됨',
+    f: {
+      colors: '그룹 색', bg: '배경', glow: '글로우',
+      repel: '반발력', dist: '링크 거리', center: '중심력', linkS: '링크력',
+      node: '노드 크기', line: '링크 두께', fade: '텍스트 페이드',
+    },
   },
 };
 
 const L = STRINGS[detectLang()];
 
-// ---------------------------------------------------------------- helpers
+// ---------------------------------------------------------------- color helpers
+function rgbOf(hex) {
+  const h = hex.replace('#', '');
+  return [0, 2, 4].map((i) => parseInt(h.substr(i, 2), 16));
+}
+
+function toHex(rgb) {
+  return '#' + rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+}
+
+function mix(a, b, t) {
+  const A = rgbOf(a);
+  const B = rgbOf(b);
+  return toHex(A.map((v, i) => v + (B[i] - v) * t));
+}
+
+function lighten(hex, t) {
+  return mix(hex, '#ffffff', t);
+}
+
 function hexToRgbInt(hex) {
   return parseInt(hex.replace('#', ''), 16);
 }
 
-// 색 그룹을 "이 vault의 실제 폴더"로 동적 생성 → 어떤 vault에서도 동작.
-function makeGroups(folders, colors) {
-  return folders.map((folder, i) => ({
-    query: `path:"${folder.replace(/"/g, '\\"')}"`,
+// ---------------------------------------------------------------- graph option helpers
+function makeGroups(queries, colors) {
+  return queries.map((query, i) => ({
+    query,
     color: { a: 1, rgb: hexToRgbInt(colors[i % colors.length]) },
   }));
 }
@@ -86,17 +128,17 @@ function makeGlowCss(p) {
 `;
 }
 
+// 테마 관련 옵션만. 구조적 사용자 설정(hideUnresolved/showAttachments/showArrow)은
+// 일부러 건드리지 않아 사용자 선호를 보존한다.
 const BASE_GRAPH = {
-  showTags: true, hideUnresolved: true, showAttachments: false,
+  showTags: true,
   'collapse-color-groups': false, 'collapse-display': false, 'collapse-forces': false,
-  showArrow: false,
 };
 
 function pick(value, fallback) {
   return value === undefined ? fallback : value;
 }
 
-// forces/표시 옵션만 (colorGroups는 적용 시점에 폴더 감지로 채움)
 function graph(o) {
   o = o || {};
   return Object.assign({}, BASE_GRAPH, {
@@ -127,6 +169,34 @@ function P(id, label, emoji, colors, forces, bg, theme) {
   };
 }
 
+function safeHex(hex, fallback) {
+  return typeof hex === 'string' && /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : fallback;
+}
+
+// 사용자 커스텀 raw({id,label,colors[4],bg,glow,forces}) → 프리셋으로 재구성.
+// data.json 손편집 대비 hex 검증.
+function presetFromRaw(raw) {
+  const colors = (raw.colors || []).map((c, i) => safeHex(c, DEFAULT_CUSTOM.colors[i] || '#8899aa'));
+  while (colors.length < 4) colors.push('#8899aa');
+  const bgHex = safeHex(raw.bg, DEFAULT_CUSTOM.bg);
+  const bg = [mix(bgHex, colors[0], 0.2), mix(bgHex, colors[0], 0.08), bgHex];
+  const g = Number(raw.glow) || 0;
+  const theme = {
+    circle: colors[0], fill: colors[1], tag: colors[2],
+    line: mix(colors[0], bgHex, 0.55), text: lighten(colors[0], 0.72),
+    unresolved: mix(bgHex, '#ffffff', 0.1),
+    filter: `brightness(${(1 + g / 280).toFixed(2)}) contrast(1.06) saturate(${(1 + g / 110).toFixed(2)})`,
+  };
+  return P(raw.id, raw.label || 'Custom', '🎛️', colors, raw.forces || {}, bg, theme);
+}
+
+const DEFAULT_CUSTOM = {
+  colors: ['#7dd3fc', '#34d399', '#fbbf24', '#f472b6'],
+  bg: '#0b1624',
+  glow: 40,
+  forces: { node: 2.2, repel: 17, dist: 140, center: 0.1, linkS: 0.2, line: 0.3, fade: 1.2 },
+};
+
 const PRESETS = {
   neon: P('neon', 'Neon', '⚡',
     ['#7dd3fc', '#34d399', '#fbbf24', '#f472b6'], { node: 2.4, repel: 18, dist: 140 },
@@ -149,7 +219,7 @@ const PRESETS = {
       unresolved: '#10241f', filter: 'brightness(1.3) contrast(1.12) saturate(1.5)' }),
 
   sunset: P('sunset', 'Sunset', '🌅',
-    ['#fb923c', '#f472b6', '#fbbf24', '#fca5a5'], { node: 2.3, repel: 16, dist: 135 },
+    ['#fb923c', '#ec4899', '#fbbf24', '#f43f5e'], { node: 2.3, repel: 16, dist: 135 },
     ['rgba(59,31,43,0.92)', 'rgba(42,20,32,0.97)', '#160a10'],
     { circle: '#fdba74', fill: '#fb7185', tag: '#f9a8d4', line: '#7c3f52', text: '#ffe8d6',
       unresolved: '#2a1c22', filter: 'brightness(1.25) contrast(1.1) saturate(1.45)' }),
@@ -167,10 +237,10 @@ const PRESETS = {
       unresolved: '#0c2030', filter: 'brightness(1.2) contrast(1.12) saturate(1.45)' }),
 
   forest: P('forest', 'Forest', '🌲',
-    ['#a3e635', '#4ade80', '#34d399', '#bef264'],
+    ['#a3e635', '#22c55e', '#2dd4bf', '#facc15'],
     { node: 2.0, repel: 13, dist: 115, center: 0.18, linkS: 0.35 },
     ['rgba(17,36,15,0.92)', 'rgba(12,26,11,0.97)', '#060d06'],
-    { circle: '#a3e635', fill: '#4ade80', tag: '#bef264', line: '#2f5a2a', text: '#e6ffd6',
+    { circle: '#a3e635', fill: '#22c55e', tag: '#facc15', line: '#2f5a2a', text: '#e6ffd6',
       unresolved: '#16240f', filter: 'brightness(1.2) contrast(1.1) saturate(1.4)' }),
 
   candy: P('candy', 'Candy', '🍬',
@@ -181,16 +251,35 @@ const PRESETS = {
       unresolved: '#241f2e', filter: 'brightness(1.25) contrast(1.05) saturate(1.35)' }),
 
   gold: P('gold', 'Gold', '✨',
-    ['#fcd34d', '#fbbf24', '#f59e0b', '#fde68a'], { node: 2.5, repel: 16, dist: 140 },
+    ['#fde047', '#fb923c', '#fda4af', '#fef3c7'], { node: 2.5, repel: 16, dist: 140 },
     ['rgba(36,27,8,0.92)', 'rgba(24,18,10,0.97)', '#0c0904'],
-    { circle: '#fcd34d', fill: '#fbbf24', tag: '#fde68a', line: '#6b5320', text: '#fff6dc',
+    { circle: '#fde047', fill: '#fb923c', tag: '#fda4af', line: '#6b5320', text: '#fff6dc',
       unresolved: '#241b08', filter: 'brightness(1.28) contrast(1.15) saturate(1.4)' }),
 
   cyber: P('cyber', 'Cyberpunk', '👾',
-    ['#39ff14', '#ff2bd6', '#16f0ff', '#fdff3a'], { node: 2.4, repel: 18, dist: 150 },
+    ['#39ff14', '#ff2bd6', '#16f0ff', '#a855f7'], { node: 2.4, repel: 18, dist: 150 },
     ['rgba(0,16,5,0.95)', 'rgba(0,10,8,0.98)', '#000000'],
     { circle: '#16f0ff', fill: '#39ff14', tag: '#ff2bd6', line: '#0c5a3a', text: '#d8ffe8',
       unresolved: '#07140d', filter: 'brightness(1.4) contrast(1.25) saturate(1.7)' }),
+
+  nord: P('nord', 'Nord', '❄️',
+    ['#88c0d0', '#81a1c1', '#a3be8c', '#b48ead'],
+    { node: 2.0, repel: 16, dist: 145, fade: 1.3 },
+    ['rgba(46,52,64,0.92)', 'rgba(40,46,58,0.97)', '#21262f'],
+    { circle: '#88c0d0', fill: '#a3be8c', tag: '#b48ead', line: '#434c5e', text: '#e5e9f0',
+      unresolved: '#3b4252', filter: 'brightness(1.12) contrast(1.05) saturate(1.15)' }),
+
+  dracula: P('dracula', 'Dracula', '🧛',
+    ['#bd93f9', '#ff79c6', '#50fa7b', '#8be9fd'], { node: 2.2, repel: 17, dist: 150 },
+    ['rgba(40,42,54,0.92)', 'rgba(30,31,42,0.97)', '#191a21'],
+    { circle: '#bd93f9', fill: '#50fa7b', tag: '#ff79c6', line: '#44475a', text: '#f8f8f2',
+      unresolved: '#383a4a', filter: 'brightness(1.18) contrast(1.08) saturate(1.3)' }),
+
+  catppuccin: P('catppuccin', 'Catppuccin', '🐈',
+    ['#cba6f7', '#f5c2e7', '#a6e3a1', '#89dceb'], { node: 2.1, repel: 16, dist: 145 },
+    ['rgba(49,50,68,0.92)', 'rgba(30,30,46,0.97)', '#181825'],
+    { circle: '#89dceb', fill: '#a6e3a1', tag: '#f5c2e7', line: '#45475a', text: '#cdd6f4',
+      unresolved: '#313244', filter: 'brightness(1.15) contrast(1.05) saturate(1.2)' }),
 
   mono: P('mono', 'Mono', '⚪',
     [], { tags: false, node: 1.6, repel: 12, dist: 100, center: 0.2, linkS: 0.4, fade: 1.0, line: 0.2 },
@@ -199,85 +288,170 @@ const PRESETS = {
       unresolved: '#27272a', filter: 'brightness(1.1) contrast(1.05) saturate(1.0)' }),
 };
 
+const SLIDERS = [
+  ['node', 0.3, 4, 0.1], ['repel', 0, 20, 0.5], ['dist', 30, 500, 5],
+  ['center', 0, 1, 0.02], ['linkS', 0, 1, 0.02], ['line', 0.1, 2, 0.05], ['fade', 0, 3, 0.1],
+];
+
 class StylerView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
+    this._raf = null;
   }
 
-  getViewType() {
-    return VIEW_TYPE;
+  getViewType() { return VIEW_TYPE; }
+  getDisplayText() { return 'Graph Styler'; }
+  getIcon() { return 'palette'; }
+
+  async onOpen() { this.render(); }
+  async onClose() {
+    if (this._raf) window.cancelAnimationFrame(this._raf);
   }
 
-  getDisplayText() {
-    return 'Graph Styler';
+  presetButton(parent, preset, onDelete) {
+    const btn = parent.createEl('button', { cls: 'gs-btn' });
+    const swatch = btn.createSpan({ cls: 'gs-swatch' });
+    for (const color of preset.swatch) {
+      const dot = swatch.createSpan({ cls: 'gs-dot' });
+      dot.style.backgroundColor = color;
+      dot.style.boxShadow = `0 0 5px ${color}`;
+    }
+    btn.createSpan({ cls: 'gs-btn-label', text: `${preset.emoji}  ${preset.label}` });
+    btn.onclick = () => this.plugin.applyPreset(preset);
+    if (onDelete) {
+      const del = btn.createSpan({ cls: 'gs-del', text: '✕' });
+      del.onclick = (ev) => { ev.stopPropagation(); onDelete(); };
+    }
+    return btn;
   }
 
-  getIcon() {
-    return 'palette';
-  }
-
-  async onOpen() {
+  render() {
     const c = this.contentEl;
     c.empty();
-    c.style.padding = '14px';
+    c.addClass('graph-styler-panel');
     c.createEl('h3', { text: L.title });
     c.createEl('p', { text: L.desc, cls: 'setting-item-description' });
 
-    const col = c.createDiv();
-    col.style.display = 'flex';
-    col.style.flexDirection = 'column';
-    col.style.gap = '6px';
-    col.style.margin = '14px 0';
+    // built-in presets
+    const list = c.createDiv({ cls: 'gs-list' });
+    for (const key of Object.keys(PRESETS)) this.presetButton(list, PRESETS[key]);
 
-    for (const key of Object.keys(PRESETS)) {
-      const preset = PRESETS[key];
-      const btn = col.createEl('button');
-      btn.style.display = 'flex';
-      btn.style.alignItems = 'center';
-      btn.style.gap = '10px';
-      btn.style.padding = '11px 12px';
-      btn.style.cursor = 'pointer';
-      btn.style.textAlign = 'left';
-
-      const swatch = btn.createSpan();
-      swatch.style.display = 'inline-flex';
-      swatch.style.gap = '3px';
-      swatch.style.flexShrink = '0';
-      for (const color of preset.swatch) {
-        const dot = swatch.createSpan();
-        dot.style.width = '12px';
-        dot.style.height = '12px';
-        dot.style.borderRadius = '50%';
-        dot.style.background = color;
-        dot.style.boxShadow = `0 0 5px ${color}`;
+    // user presets
+    const custom = this.plugin.settings.custom || [];
+    if (custom.length) {
+      c.createEl('div', { cls: 'gs-section', text: L.myPresets });
+      const myList = c.createDiv({ cls: 'gs-list' });
+      for (const raw of custom) {
+        this.presetButton(myList, presetFromRaw(raw), () => this.plugin.deleteCustom(raw.id));
       }
-
-      btn.createSpan({ text: `${preset.emoji}  ${preset.label}` });
-      btn.onclick = () => this.plugin.applyPreset(preset);
     }
 
-    const restore = c.createEl('button', { text: L.restore });
-    restore.style.width = '100%';
-    restore.style.marginTop = '6px';
+    const restore = c.createEl('button', { cls: 'gs-restore', text: L.restore });
     restore.onclick = () => this.plugin.restore();
 
-    const credit = c.createDiv();
-    credit.style.marginTop = '16px';
-    credit.style.fontSize = '12px';
-    credit.style.opacity = '0.6';
-    credit.style.textAlign = 'center';
+    this.buildCustomize(c);
+
+    const credit = c.createDiv({ cls: 'gs-credit' });
     credit.createSpan({ text: L.by });
     const link = credit.createEl('a', { text: AUTHOR, href: AUTHOR_URL });
     link.setAttr('target', '_blank');
     link.setAttr('rel', 'noopener');
   }
 
-  async onClose() {}
+  // 컨트롤 값은 plugin.draft에 write-through → 재렌더/저장 후에도 유지(리셋 안 됨)
+  buildCustomize(c) {
+    const draft = this.plugin.draft;
+    const details = c.createEl('details', { cls: 'gs-custom' });
+    details.open = this.plugin.customizeOpen;
+    details.addEventListener('toggle', () => { this.plugin.customizeOpen = details.open; });
+    details.createEl('summary', { text: L.customize });
+
+    // group colors
+    const colorRow = details.createDiv({ cls: 'gs-row' });
+    colorRow.createSpan({ cls: 'gs-row-label', text: L.f.colors });
+    const colorBox = colorRow.createSpan({ cls: 'gs-colors' });
+    draft.colors.forEach((hex, i) => {
+      const input = colorBox.createEl('input');
+      input.type = 'color';
+      input.value = hex;
+      input.oninput = () => { draft.colors[i] = input.value; this.schedulePreview(); };
+    });
+
+    // background color
+    const bgRow = details.createDiv({ cls: 'gs-row' });
+    bgRow.createSpan({ cls: 'gs-row-label', text: L.f.bg });
+    const bgEl = bgRow.createEl('input');
+    bgEl.type = 'color';
+    bgEl.value = draft.bg;
+    bgEl.oninput = () => { draft.bg = bgEl.value; this.schedulePreview(); };
+
+    // glow + force/size sliders
+    this.sliderRow(details, L.f.glow, 0, 100, 5, draft.glow, (v) => { draft.glow = v; });
+    for (const [key, min, max, step] of SLIDERS) {
+      this.sliderRow(details, L.f[key], min, max, step, draft.forces[key], (v) => { draft.forces[key] = v; });
+    }
+
+    // name + save
+    const saveRow = details.createDiv({ cls: 'gs-row' });
+    const nameEl = saveRow.createEl('input', { cls: 'gs-name' });
+    nameEl.type = 'text';
+    nameEl.placeholder = L.namePh;
+    nameEl.value = draft.name;
+    nameEl.oninput = () => { draft.name = nameEl.value; };
+    const saveBtn = details.createEl('button', { cls: 'gs-save', text: L.save });
+    saveBtn.onclick = () => this.saveCurrent();
+  }
+
+  sliderRow(parent, label, min, max, step, value, onChange) {
+    const row = parent.createDiv({ cls: 'gs-row' });
+    row.createSpan({ cls: 'gs-row-label', text: label });
+    const input = row.createEl('input');
+    input.type = 'range';
+    input.min = String(min);
+    input.max = String(max);
+    input.step = String(step);
+    input.value = String(value);
+    input.oninput = () => { onChange(Number(input.value)); this.schedulePreview(); };
+    return input;
+  }
+
+  rawFromDraft(id) {
+    const d = this.plugin.draft;
+    return {
+      id,
+      label: (d.name || 'Custom').trim() || 'Custom',
+      colors: d.colors.slice(),
+      bg: d.bg,
+      glow: d.glow,
+      forces: { ...d.forces },
+    };
+  }
+
+  // rAF 스로틀: 한 프레임에 한 번만, 디스크 안 건드리는 in-memory 미리보기
+  schedulePreview() {
+    if (this._raf) return;
+    this._raf = window.requestAnimationFrame(() => {
+      this._raf = null;
+      this.plugin.previewLive(presetFromRaw(this.rawFromDraft(LIVE_ID)));
+    });
+  }
+
+  async saveCurrent() {
+    await this.plugin.saveCustom(this.rawFromDraft(`custom-${Date.now()}`));
+  }
 }
 
 module.exports = class GraphStyler extends Plugin {
   async onload() {
+    this.settings = Object.assign({ custom: [] }, await this.loadData());
+    if (!Array.isArray(this.settings.custom)) this.settings.custom = [];
+    this.draft = {
+      colors: [...DEFAULT_CUSTOM.colors], bg: DEFAULT_CUSTOM.bg,
+      glow: DEFAULT_CUSTOM.glow, forces: { ...DEFAULT_CUSTOM.forces }, name: '',
+    };
+    this.customizeOpen = false;
+
     this.registerView(VIEW_TYPE, (leaf) => new StylerView(leaf, this));
     this.addRibbonIcon('palette', 'Graph Styler', () => this.activateView());
     this.addCommand({
@@ -293,7 +467,12 @@ module.exports = class GraphStyler extends Plugin {
         callback: () => this.applyPreset(preset),
       });
     }
-    console.log('[graph-styler] loaded');
+
+    // 폴더 구조가 바뀌면 색-그룹 캐시 무효화
+    const invalidate = () => { this._queries = null; };
+    this.registerEvent(this.app.vault.on('create', invalidate));
+    this.registerEvent(this.app.vault.on('delete', invalidate));
+    this.registerEvent(this.app.vault.on('rename', invalidate));
   }
 
   async activateView() {
@@ -301,51 +480,141 @@ module.exports = class GraphStyler extends Plugin {
     let leaf = workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) {
       leaf = workspace.getRightLeaf(false);
+      if (!leaf) return;
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
     workspace.revealLeaf(leaf);
+  }
+
+  refreshViews() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view && typeof leaf.view.render === 'function') leaf.view.render();
+    }
+  }
+
+  async saveCustom(raw) {
+    this.settings.custom.push(raw);
+    await this.saveData(this.settings);
+    await this.applyPreset(presetFromRaw(raw));   // 미리보기 상태를 디스크에 확정
+    this.refreshViews();
+    new Notice(L.saved(raw.label));
+  }
+
+  async deleteCustom(id) {
+    this.settings.custom = this.settings.custom.filter((r) => r.id !== id);
+    await this.saveData(this.settings);
+    this.refreshViews();
+    new Notice(L.deleted);
   }
 
   graphPath() {
     return `${this.app.vault.configDir}/graph.json`;
   }
 
-  // 이 vault에서 노트가 가장 많은 폴더 N개 → 색 그룹 대상
-  detectColorFolders(max) {
+  snippetIds() {
+    const ids = new Set(Object.keys(PRESETS));
+    ids.add(LIVE_ID);
+    for (const r of this.settings.custom || []) ids.add(r.id);
+    return ids;
+  }
+
+  setActiveSnippet(activeId) {
+    const customCss = this.app.customCss;
+    if (!customCss || !customCss.setCssEnabledStatus) return;
+    const ids = this.snippetIds();
+    ids.add(activeId);
+    for (const id of ids) customCss.setCssEnabledStatus(`graph-styler-${id}`, id === activeId);
+  }
+
+  // 노트가 많은 폴더 순
+  detectColorFolders() {
     const counts = new Map();
     for (const file of this.app.vault.getMarkdownFiles()) {
       const parent = file.parent && file.parent.path;
       if (!parent || parent === '/') continue;
       counts.set(parent, (counts.get(parent) || 0) + 1);
     }
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, max)
-      .map((entry) => entry[0]);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map((entry) => entry[0]);
   }
 
-  async applyPreset(preset) {
+  // 많이 쓰인 태그 순 (키에 '#' 포함)
+  detectColorTags() {
+    let tags = {};
+    try {
+      if (this.app.metadataCache && this.app.metadataCache.getTags) {
+        tags = this.app.metadataCache.getTags() || {};
+      }
+    } catch (_) {
+      tags = {};
+    }
+    return Object.entries(tags).sort((a, b) => b[1] - a[1]).map((entry) => entry[0]);
+  }
+
+  // 색 그룹 쿼리: 폴더(≥2) → 태그 → 폴더(1개)/빈값.
+  // 한 vault에서 의미 있는 한 축으로만 칠해 조잡함 방지. (세션 캐시 + 변경 시 무효화)
+  getColorQueries(max) {
+    if (!this._queries) {
+      const escape = (f) => `path:"${f.replace(/"/g, '\\"')}"`;
+      const folders = this.detectColorFolders();
+      if (folders.length >= 2) {
+        this._queries = folders.map(escape);
+      } else {
+        const tags = this.detectColorTags();
+        this._queries = tags.length ? tags.map((t) => `tag:${t}`) : folders.map(escape);
+      }
+    }
+    return this._queries.slice(0, max);
+  }
+
+  // 빠른 연속 호출(라이브 드래그)을 직렬화 → graph.json 동시쓰기 레이스 방지 (latest-wins)
+  async applyPreset(preset, opts) {
+    if (this._applying) { this._next = [preset, opts]; return; }
+    this._applying = true;
+    try {
+      await this._doApply(preset, opts);
+    } finally {
+      this._applying = false;
+      if (this._next) {
+        const [p, o] = this._next;
+        this._next = null;
+        this.applyPreset(p, o);
+      }
+    }
+  }
+
+  async _doApply(preset, opts) {
+    const live = !!(opts && opts.silent);
     try {
       await this.backupOnce();
-      const folders = preset.colors.length ? this.detectColorFolders(preset.colors.length) : [];
-      const colorGroups = folders.length ? makeGroups(folders, preset.colors) : [];
-      const graphOptions = Object.assign({}, preset.graph, { colorGroups });
-      await this.writeGraph(graphOptions);
-      await this.installSnippet(preset.id, makeGlowCss(preset.palette));
-      await this.reloadGraph(graphOptions);
-      new Notice(L.applied(preset));
+      const graphOptions = Object.assign({}, preset.graph);
+      if (preset.colors.length === 0) {
+        graphOptions.colorGroups = [];                 // mono: 강제 단색
+      } else {
+        const queries = this.getColorQueries(preset.colors.length);
+        if (queries.length) graphOptions.colorGroups = makeGroups(queries, preset.colors);
+        // 폴더·태그 둘 다 없으면(완전 평면 vault) 기존 colorGroups 보존 — 덮어쓰지 않음
+      }
+      const css = makeGlowCss(preset.palette);
+      this.ensureLiveStyle();
+      this.liveStyle.textContent = css;                  // 즉시 시각 반영(파일 워처 대기 안 함)
+      const merged = await this.writeGraph(graphOptions);
+      await this.installSnippet(preset.id, css);          // 리로드 영속용
+      await this.reloadGraph(merged, live);
+      if (!live) new Notice(L.applied(preset));
     } catch (e) {
       console.error('[graph-styler] apply failed', e);
-      new Notice(L.failed);
+      if (!live) new Notice(L.failed);
     }
   }
 
   async backupOnce() {
+    if (this._backedUp) return;
     const adapter = this.app.vault.adapter;
     const bak = `${this.graphPath()}.styler-bak`;
     if (!(await adapter.exists(bak)) && (await adapter.exists(this.graphPath()))) {
       await adapter.write(bak, await adapter.read(this.graphPath()));
     }
+    this._backedUp = true;
   }
 
   async writeGraph(graphOptions) {
@@ -356,34 +625,35 @@ module.exports = class GraphStyler extends Plugin {
     } catch (_) {
       current = {};
     }
-    await adapter.write(this.graphPath(), JSON.stringify(Object.assign(current, graphOptions), null, 2));
+    const merged = Object.assign(current, graphOptions);
+    await adapter.write(this.graphPath(), JSON.stringify(merged, null, 2));
+    return merged;
   }
 
   async installSnippet(presetId, css) {
     const adapter = this.app.vault.adapter;
     const dir = `${this.app.vault.configDir}/snippets`;
     if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
-    await adapter.write(`${dir}/graph-styler-${presetId}.css`, css);
-
-    const customCss = this.app.customCss;
+    const path = `${dir}/graph-styler-${presetId}.css`;
+    const isNew = !(await adapter.exists(path));
+    await adapter.write(path, css);
     try {
-      if (customCss && customCss.readSnippets) await customCss.readSnippets();
-      if (customCss && customCss.setCssEnabledStatus) {
-        for (const key of Object.keys(PRESETS)) {
-          customCss.setCssEnabledStatus(`graph-styler-${key}`, key === presetId);
-        }
-      }
+      const customCss = this.app.customCss;
+      // 전체 재스캔(readSnippets)은 파일을 새로 만들 때만 — registry 등록용. 재적용은 스킵.
+      if (isNew && customCss && customCss.readSnippets) await customCss.readSnippets();
+      this.setActiveSnippet(presetId);
     } catch (e) {
-      console.warn('[graph-styler] snippet auto-enable failed; toggle it in Settings → CSS snippets', e);
+      console.warn('[graph-styler] snippet enable failed; toggle it in Settings → CSS snippets', e);
     }
   }
 
-  async reloadGraph(graphOptions) {
+  // engineOnly=true (라이브 드래그): 엔진 직접 갱신만, leaf 리로드(깜빡임) 스킵
+  async reloadGraph(graphOptions, engineOnly) {
     const leaves = this.app.workspace
       .getLeavesOfType('graph')
       .concat(this.app.workspace.getLeavesOfType('localgraph'));
     if (!leaves.length) {
-      new Notice(L.openGraph);
+      if (!engineOnly) new Notice(L.openGraph);
       return;
     }
     for (const leaf of leaves) {
@@ -398,9 +668,45 @@ module.exports = class GraphStyler extends Plugin {
           console.warn('[graph-styler] engine.setOptions failed → reloading leaf', e);
         }
       }
+      if (engineOnly) continue;
       const state = leaf.getViewState();
       await leaf.setViewState({ type: 'empty' });
       await leaf.setViewState(state);
+    }
+  }
+
+  ensureLiveStyle() {
+    if (!this.liveStyle) {
+      this.liveStyle = document.head.createEl('style', { attr: { 'data-graph-styler': 'live' } });
+      this.register(() => {
+        if (this.liveStyle) {
+          this.liveStyle.remove();
+          this.liveStyle = null;
+        }
+      });
+    }
+  }
+
+  // 라이브 미리보기: 디스크 I/O 0. 글로우/색=주입 <style>, forces/색그룹=engine(메모리).
+  previewLive(preset) {
+    this.ensureLiveStyle();
+    this.liveStyle.textContent = makeGlowCss(preset.palette);
+    const graphOptions = Object.assign({}, preset.graph);
+    if (preset.colors.length) {
+      const queries = this.getColorQueries(preset.colors.length);
+      if (queries.length) graphOptions.colorGroups = makeGroups(queries, preset.colors);
+    }
+    const leaves = this.app.workspace
+      .getLeavesOfType('graph')
+      .concat(this.app.workspace.getLeavesOfType('localgraph'));
+    for (const leaf of leaves) {
+      const engine = leaf.view && (leaf.view.engine || leaf.view.dataEngine);
+      if (engine && typeof engine.setOptions === 'function') {
+        try {
+          engine.setOptions(graphOptions);
+          if (typeof engine.render === 'function') engine.render();
+        } catch (_) { /* engine API drift — preview just skips */ }
+      }
     }
   }
 
@@ -411,14 +717,17 @@ module.exports = class GraphStyler extends Plugin {
       new Notice(L.noBackup);
       return;
     }
-    await adapter.write(this.graphPath(), await adapter.read(bak));
-    const customCss = this.app.customCss;
-    if (customCss && customCss.setCssEnabledStatus) {
-      for (const key of Object.keys(PRESETS)) {
-        customCss.setCssEnabledStatus(`graph-styler-${key}`, false);
-      }
+    const original = await adapter.read(bak);
+    await adapter.write(this.graphPath(), original);
+    this.setActiveSnippet('__none__');
+    if (this.liveStyle) this.liveStyle.textContent = '';
+    let originalOptions = {};
+    try {
+      originalOptions = JSON.parse(original);
+    } catch (_) {
+      originalOptions = {};
     }
-    await this.reloadGraph({});
+    await this.reloadGraph(originalOptions);
     new Notice(L.restored);
   }
 };
