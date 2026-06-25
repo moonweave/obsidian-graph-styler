@@ -570,10 +570,12 @@ module.exports = class GraphStyler extends Plugin {
         if (folders.length) graphOptions.colorGroups = makeGroups(folders, preset.colors);
         // 폴더 없으면(루트-only/빈 vault) 기존 colorGroups 보존 — 덮어쓰지 않음
       }
+      const css = makeGlowCss(preset.palette);
+      this.ensureLiveStyle();
+      this.liveStyle.textContent = css;                  // 즉시 시각 반영(파일 워처 대기 안 함)
       const merged = await this.writeGraph(graphOptions);
-      await this.installSnippet(preset.id, makeGlowCss(preset.palette));
+      await this.installSnippet(preset.id, css);          // 리로드 영속용
       await this.reloadGraph(merged, live);
-      if (this.liveStyle) this.liveStyle.textContent = '';   // 확정됐으니 라이브 미리보기 스타일 비움
       if (!live) new Notice(L.applied(preset));
     } catch (e) {
       console.error('[graph-styler] apply failed', e);
@@ -608,13 +610,16 @@ module.exports = class GraphStyler extends Plugin {
     const adapter = this.app.vault.adapter;
     const dir = `${this.app.vault.configDir}/snippets`;
     if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
-    await adapter.write(`${dir}/graph-styler-${presetId}.css`, css);
+    const path = `${dir}/graph-styler-${presetId}.css`;
+    const isNew = !(await adapter.exists(path));
+    await adapter.write(path, css);
     try {
       const customCss = this.app.customCss;
-      if (customCss && customCss.readSnippets) await customCss.readSnippets();
+      // 전체 재스캔(readSnippets)은 파일을 새로 만들 때만 — registry 등록용. 재적용은 스킵.
+      if (isNew && customCss && customCss.readSnippets) await customCss.readSnippets();
       this.setActiveSnippet(presetId);
     } catch (e) {
-      console.warn('[graph-styler] snippet auto-enable failed; toggle it in Settings → CSS snippets', e);
+      console.warn('[graph-styler] snippet enable failed; toggle it in Settings → CSS snippets', e);
     }
   }
 
