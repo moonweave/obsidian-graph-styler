@@ -11,7 +11,7 @@ Made by **[Moonweave](https://www.instagram.com/phd.ai.log/)**.
 Obsidian's graph looks amazing in screenshots — but getting there means digging through color groups, force sliders, and CSS snippets. Graph Styler turns that into a single click. Think *Canva templates, but for your graph*.
 
 ## Presets
-⚡ Neon · 🌌 Galaxy · 🌠 Aurora · 🌅 Sunset · 🌴 Vaporwave · 🌊 Ocean · 🌲 Forest · 🍬 Candy · ✨ Gold · 👾 Cyberpunk · ⚪ Mono
+⚡ Neon · 🌌 Galaxy · 🌠 Aurora · 🌅 Sunset · 🌴 Vaporwave · 🌊 Ocean · 🌲 Forest · 🍬 Candy · ✨ Gold · 👾 Cyberpunk · ❄️ Nord · 🧛 Dracula · 🐈 Catppuccin · ⚪ Mono
 
 Each preset applies node/group colors, a glow CSS snippet, and force/size values tuned to the mood.
 

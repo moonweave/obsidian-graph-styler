@@ -149,7 +149,7 @@ const PRESETS = {
       unresolved: '#10241f', filter: 'brightness(1.3) contrast(1.12) saturate(1.5)' }),
 
   sunset: P('sunset', 'Sunset', '🌅',
-    ['#fb923c', '#f472b6', '#fbbf24', '#fca5a5'], { node: 2.3, repel: 16, dist: 135 },
+    ['#fb923c', '#ec4899', '#fbbf24', '#f43f5e'], { node: 2.3, repel: 16, dist: 135 },
     ['rgba(59,31,43,0.92)', 'rgba(42,20,32,0.97)', '#160a10'],
     { circle: '#fdba74', fill: '#fb7185', tag: '#f9a8d4', line: '#7c3f52', text: '#ffe8d6',
       unresolved: '#2a1c22', filter: 'brightness(1.25) contrast(1.1) saturate(1.45)' }),
@@ -167,10 +167,10 @@ const PRESETS = {
       unresolved: '#0c2030', filter: 'brightness(1.2) contrast(1.12) saturate(1.45)' }),
 
   forest: P('forest', 'Forest', '🌲',
-    ['#a3e635', '#4ade80', '#34d399', '#bef264'],
+    ['#a3e635', '#22c55e', '#2dd4bf', '#facc15'],
     { node: 2.0, repel: 13, dist: 115, center: 0.18, linkS: 0.35 },
     ['rgba(17,36,15,0.92)', 'rgba(12,26,11,0.97)', '#060d06'],
-    { circle: '#a3e635', fill: '#4ade80', tag: '#bef264', line: '#2f5a2a', text: '#e6ffd6',
+    { circle: '#a3e635', fill: '#22c55e', tag: '#facc15', line: '#2f5a2a', text: '#e6ffd6',
       unresolved: '#16240f', filter: 'brightness(1.2) contrast(1.1) saturate(1.4)' }),
 
   candy: P('candy', 'Candy', '🍬',
@@ -181,16 +181,35 @@ const PRESETS = {
       unresolved: '#241f2e', filter: 'brightness(1.25) contrast(1.05) saturate(1.35)' }),
 
   gold: P('gold', 'Gold', '✨',
-    ['#fcd34d', '#fbbf24', '#f59e0b', '#fde68a'], { node: 2.5, repel: 16, dist: 140 },
+    ['#fde047', '#fb923c', '#fda4af', '#fef3c7'], { node: 2.5, repel: 16, dist: 140 },
     ['rgba(36,27,8,0.92)', 'rgba(24,18,10,0.97)', '#0c0904'],
-    { circle: '#fcd34d', fill: '#fbbf24', tag: '#fde68a', line: '#6b5320', text: '#fff6dc',
+    { circle: '#fde047', fill: '#fb923c', tag: '#fda4af', line: '#6b5320', text: '#fff6dc',
       unresolved: '#241b08', filter: 'brightness(1.28) contrast(1.15) saturate(1.4)' }),
 
   cyber: P('cyber', 'Cyberpunk', '👾',
-    ['#39ff14', '#ff2bd6', '#16f0ff', '#fdff3a'], { node: 2.4, repel: 18, dist: 150 },
+    ['#39ff14', '#ff2bd6', '#16f0ff', '#a855f7'], { node: 2.4, repel: 18, dist: 150 },
     ['rgba(0,16,5,0.95)', 'rgba(0,10,8,0.98)', '#000000'],
     { circle: '#16f0ff', fill: '#39ff14', tag: '#ff2bd6', line: '#0c5a3a', text: '#d8ffe8',
       unresolved: '#07140d', filter: 'brightness(1.4) contrast(1.25) saturate(1.7)' }),
+
+  nord: P('nord', 'Nord', '❄️',
+    ['#88c0d0', '#81a1c1', '#a3be8c', '#b48ead'],
+    { node: 2.0, repel: 16, dist: 145, fade: 1.3 },
+    ['rgba(46,52,64,0.92)', 'rgba(40,46,58,0.97)', '#21262f'],
+    { circle: '#88c0d0', fill: '#a3be8c', tag: '#b48ead', line: '#434c5e', text: '#e5e9f0',
+      unresolved: '#3b4252', filter: 'brightness(1.12) contrast(1.05) saturate(1.15)' }),
+
+  dracula: P('dracula', 'Dracula', '🧛',
+    ['#bd93f9', '#ff79c6', '#50fa7b', '#8be9fd'], { node: 2.2, repel: 17, dist: 150 },
+    ['rgba(40,42,54,0.92)', 'rgba(30,31,42,0.97)', '#191a21'],
+    { circle: '#bd93f9', fill: '#50fa7b', tag: '#ff79c6', line: '#44475a', text: '#f8f8f2',
+      unresolved: '#383a4a', filter: 'brightness(1.18) contrast(1.08) saturate(1.3)' }),
+
+  catppuccin: P('catppuccin', 'Catppuccin', '🐈',
+    ['#cba6f7', '#f5c2e7', '#a6e3a1', '#89dceb'], { node: 2.1, repel: 16, dist: 145 },
+    ['rgba(49,50,68,0.92)', 'rgba(30,30,46,0.97)', '#181825'],
+    { circle: '#89dceb', fill: '#a6e3a1', tag: '#f5c2e7', line: '#45475a', text: '#cdd6f4',
+      unresolved: '#313244', filter: 'brightness(1.15) contrast(1.05) saturate(1.2)' }),
 
   mono: P('mono', 'Mono', '⚪',
     [], { tags: false, node: 1.6, repel: 12, dist: 100, center: 0.2, linkS: 0.4, fade: 1.0, line: 0.2 },
