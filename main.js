@@ -146,7 +146,7 @@ function graph(o) {
     textFadeMultiplier: pick(o.fade, 1.2),
     nodeSizeMultiplier: pick(o.node, 2.2),
     lineSizeMultiplier: pick(o.line, 0.3),
-    centerStrength: pick(o.center, 0.1),
+    centerStrength: pick(o.center, 0.05),
     repelStrength: pick(o.repel, 17),
     linkStrength: pick(o.linkS, 0.2),
     linkDistance: pick(o.dist, 140),
@@ -194,7 +194,7 @@ const DEFAULT_CUSTOM = {
   colors: ['#7dd3fc', '#34d399', '#fbbf24', '#f472b6'],
   bg: '#0b1624',
   glow: 40,
-  forces: { node: 2.2, repel: 17, dist: 140, center: 0.1, linkS: 0.2, line: 0.3, fade: 1.2 },
+  forces: { node: 2.2, repel: 17, dist: 140, center: 0.05, linkS: 0.2, line: 0.3, fade: 1.2 },
 };
 
 const PRESETS = {
@@ -238,14 +238,14 @@ const PRESETS = {
 
   forest: P('forest', 'Forest', '🌲',
     ['#a3e635', '#22c55e', '#2dd4bf', '#facc15'],
-    { node: 2.0, repel: 13, dist: 115, center: 0.18, linkS: 0.35 },
+    { node: 2.0, repel: 13, dist: 115, center: 0.08, linkS: 0.35 },
     ['rgba(17,36,15,0.92)', 'rgba(12,26,11,0.97)', '#060d06'],
     { circle: '#a3e635', fill: '#22c55e', tag: '#facc15', line: '#2f5a2a', text: '#e6ffd6',
       unresolved: '#16240f', filter: 'brightness(1.2) contrast(1.1) saturate(1.4)' }),
 
   candy: P('candy', 'Candy', '🍬',
     ['#f9a8d4', '#a7f3d0', '#c4b5fd', '#fde68a'],
-    { node: 2.1, repel: 13, dist: 115, center: 0.18, linkS: 0.35 },
+    { node: 2.1, repel: 13, dist: 115, center: 0.08, linkS: 0.35 },
     ['rgba(42,35,54,0.92)', 'rgba(31,26,43,0.97)', '#14111c'],
     { circle: '#f9a8d4', fill: '#a7f3d0', tag: '#c4b5fd', line: '#5a4f6b', text: '#fff0fa',
       unresolved: '#241f2e', filter: 'brightness(1.25) contrast(1.05) saturate(1.35)' }),
@@ -282,7 +282,7 @@ const PRESETS = {
       unresolved: '#313244', filter: 'brightness(1.15) contrast(1.05) saturate(1.2)' }),
 
   mono: P('mono', 'Mono', '⚪',
-    [], { tags: false, node: 1.6, repel: 12, dist: 100, center: 0.2, linkS: 0.4, fade: 1.0, line: 0.2 },
+    [], { tags: false, node: 1.6, repel: 12, dist: 100, center: 0.1, linkS: 0.4, fade: 1.0, line: 0.2 },
     ['rgba(24,24,27,0.9)', 'rgba(15,15,17,0.97)', '#0a0a0b'],
     { circle: '#e4e4e7', fill: '#a1a1aa', tag: '#71717a', line: '#3f3f46', text: '#fafafa',
       unresolved: '#27272a', filter: 'brightness(1.1) contrast(1.05) saturate(1.0)' }),
