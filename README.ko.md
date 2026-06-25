@@ -4,7 +4,8 @@
 
 만든 사람 **[Moonweave](https://www.instagram.com/phd.ai.log/)**.
 
-<!-- ![스크린샷](docs/preview.png) — 추가 예정 -->
+![Graph Styler](docs/preview.png)
+<!-- docs/preview.png 를 실제 그래프 스크린샷으로 언제든 교체 가능. -->
 
 ## 왜
 옵시디언 그래프는 스크린샷이 정말 예쁘게 나오죠 — 근데 그렇게 만들려면 색 그룹, forces 슬라이더, CSS 스니펫을 다 뒤져야 합니다. Graph Styler는 그걸 클릭 한 번으로. *그래프계 Canva 템플릿*이라고 보면 됩니다.
@@ -31,8 +32,9 @@
 *(공식 스토어 등재 예정.)*
 
 ## 참고
-- 전역 그래프 설정(`.obsidian/graph.json`)과 CSS 스니펫(`.obsidian/snippets/graph-styler-*.css`)을 씁니다.
-- 색 그룹은 현재 폴더 기준이며, 어떤 vault에서도 되도록 태그/폴더 자동감지를 추가할 예정입니다.
+- **어떤 vault에서도 동작.** 그룹 색이 *내* vault에서 노트가 가장 많은 폴더에 자동 매핑됩니다 — 설정도, 하드코딩 경로도 없음.
+- **양국어 UI.** 패널이 옵시디언 언어를 따라갑니다 — 영어 또는 한국어.
+- 전역 그래프 설정(`.obsidian/graph.json`)과 CSS 스니펫(`.obsidian/snippets/graph-styler-*.css`)을 쓰며, 원래 `graph.json`은 먼저 백업합니다.
 - 데스크탑 전용.
 
 ## 라이선스

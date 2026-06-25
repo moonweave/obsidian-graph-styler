@@ -9,31 +9,67 @@ const { Plugin, ItemView, Notice } = require('obsidian');
 
 const AUTHOR = 'Moonweave';
 const AUTHOR_URL = 'https://www.instagram.com/phd.ai.log/';
-
 const VIEW_TYPE = 'graph-styler-panel';
 
-// 이 vault의 폴더 기반 색 그룹 (쿼리는 공통, 색은 프리셋마다 다름).
-// 배포용으로 일반화할 땐 태그 기반/사용자 매핑으로 교체.
-const GROUP_QUERIES = [
-  'path:"wiki/concepts"',
-  'path:"wiki/research"',
-  'path:"wiki/meta"',
-  'path:"wiki/general"',
-];
+// ---------------------------------------------------------------- i18n
+function detectLang() {
+  try {
+    const explicit = (window.localStorage.getItem('language') || '').toLowerCase();
+    if (explicit.startsWith('ko')) return 'ko';
+    if (explicit) return 'en';
+  } catch (_) { /* ignore */ }
+  try {
+    if ((navigator.language || '').toLowerCase().startsWith('ko')) return 'ko';
+  } catch (_) { /* ignore */ }
+  return 'en';
+}
 
+const STRINGS = {
+  en: {
+    title: '🎨 Graph Styler',
+    desc: 'Tap a preset — your graph restyles instantly. Keep this panel open while you move the graph around.',
+    restore: '↩︎ Restore original',
+    openCmd: 'Open Graph Styler panel',
+    applyCmd: 'Apply',
+    applied: (p) => `${p.emoji} ${p.label} applied`,
+    failed: 'Apply failed — open the console (Cmd+Opt+I) to see why',
+    openGraph: 'Open a graph view first',
+    restored: '↩︎ Restored to original',
+    noBackup: 'No backup found',
+    by: 'made by ',
+  },
+  ko: {
+    title: '🎨 Graph Styler',
+    desc: '프리셋을 누르면 그래프가 바로 바뀝니다. 패널은 열어둔 채 그래프를 움직여도 됩니다.',
+    restore: '↩︎ 원래대로 되돌리기',
+    openCmd: 'Graph Styler 패널 열기',
+    applyCmd: '적용',
+    applied: (p) => `${p.emoji} ${p.label} 적용 완료`,
+    failed: '적용 실패 — 콘솔(Cmd+Opt+I)에서 원인 확인',
+    openGraph: '그래프 뷰를 먼저 열어주세요',
+    restored: '↩︎ 원래대로 복구함',
+    noBackup: '백업이 없어요',
+    by: 'made by ',
+  },
+};
+
+const L = STRINGS[detectLang()];
+
+// ---------------------------------------------------------------- helpers
 function hexToRgbInt(hex) {
   return parseInt(hex.replace('#', ''), 16);
 }
 
-function makeGroups(colors) {
-  return GROUP_QUERIES.map((query, i) => ({
-    query,
+// 색 그룹을 "이 vault의 실제 폴더"로 동적 생성 → 어떤 vault에서도 동작.
+function makeGroups(folders, colors) {
+  return folders.map((folder, i) => ({
+    query: `path:"${folder.replace(/"/g, '\\"')}"`,
     color: { a: 1, rgb: hexToRgbInt(colors[i % colors.length]) },
   }));
 }
 
 function makeGlowCss(p) {
-  return `/* graph-styler :: ${p.id} (자동 생성) */
+  return `/* graph-styler :: ${p.id} (auto-generated) */
 .graph-view-content {
   background: radial-gradient(circle at 50% 42%, ${p.bg1} 0%, ${p.bg2} 48%, ${p.bg3} 100%) !important;
 }
@@ -60,7 +96,8 @@ function pick(value, fallback) {
   return value === undefined ? fallback : value;
 }
 
-function graph(colors, o) {
+// forces/표시 옵션만 (colorGroups는 적용 시점에 폴더 감지로 채움)
+function graph(o) {
   o = o || {};
   return Object.assign({}, BASE_GRAPH, {
     showTags: pick(o.tags, true),
@@ -71,11 +108,10 @@ function graph(colors, o) {
     repelStrength: pick(o.repel, 17),
     linkStrength: pick(o.linkS, 0.2),
     linkDistance: pick(o.dist, 140),
-    colorGroups: colors.length ? makeGroups(colors) : [],
   });
 }
 
-// id, 라벨, 이모지, 그룹색[4], forces, 배경[3], 테마색
+// id, label, emoji, palette colors[], forces, background[3], theme colors
 function P(id, label, emoji, colors, forces, bg, theme) {
   const palette = {
     id, bg1: bg[0], bg2: bg[1], bg3: bg[2],
@@ -84,9 +120,9 @@ function P(id, label, emoji, colors, forces, bg, theme) {
     text: theme.text, filter: theme.filter,
   };
   return {
-    id, label, emoji,
+    id, label, emoji, colors,
     swatch: colors.length ? colors : [theme.circle, theme.fill, theme.tag, theme.line],
-    graph: graph(colors, forces || {}),
+    graph: graph(forces || {}),
     palette,
   };
 }
@@ -185,11 +221,8 @@ class StylerView extends ItemView {
     const c = this.contentEl;
     c.empty();
     c.style.padding = '14px';
-    c.createEl('h3', { text: '🎨 Graph Styler' });
-    c.createEl('p', {
-      text: '프리셋을 누르면 그래프가 바로 바뀝니다. 패널은 열어둔 채 그래프를 움직여도 됩니다.',
-      cls: 'setting-item-description',
-    });
+    c.createEl('h3', { text: L.title });
+    c.createEl('p', { text: L.desc, cls: 'setting-item-description' });
 
     const col = c.createDiv();
     col.style.display = 'flex';
@@ -224,7 +257,7 @@ class StylerView extends ItemView {
       btn.onclick = () => this.plugin.applyPreset(preset);
     }
 
-    const restore = c.createEl('button', { text: '↩︎ 원래대로 되돌리기' });
+    const restore = c.createEl('button', { text: L.restore });
     restore.style.width = '100%';
     restore.style.marginTop = '6px';
     restore.onclick = () => this.plugin.restore();
@@ -234,7 +267,7 @@ class StylerView extends ItemView {
     credit.style.fontSize = '12px';
     credit.style.opacity = '0.6';
     credit.style.textAlign = 'center';
-    credit.createSpan({ text: 'made by ' });
+    credit.createSpan({ text: L.by });
     const link = credit.createEl('a', { text: AUTHOR, href: AUTHOR_URL });
     link.setAttr('target', '_blank');
     link.setAttr('rel', 'noopener');
@@ -249,14 +282,14 @@ module.exports = class GraphStyler extends Plugin {
     this.addRibbonIcon('palette', 'Graph Styler', () => this.activateView());
     this.addCommand({
       id: 'open-graph-styler',
-      name: 'Graph Styler 패널 열기',
+      name: L.openCmd,
       callback: () => this.activateView(),
     });
     for (const key of Object.keys(PRESETS)) {
       const preset = PRESETS[key];
       this.addCommand({
         id: `apply-${key}`,
-        name: `적용: ${preset.label}`,
+        name: `${L.applyCmd}: ${preset.label}`,
         callback: () => this.applyPreset(preset),
       });
     }
@@ -277,16 +310,33 @@ module.exports = class GraphStyler extends Plugin {
     return `${this.app.vault.configDir}/graph.json`;
   }
 
+  // 이 vault에서 노트가 가장 많은 폴더 N개 → 색 그룹 대상
+  detectColorFolders(max) {
+    const counts = new Map();
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const parent = file.parent && file.parent.path;
+      if (!parent || parent === '/') continue;
+      counts.set(parent, (counts.get(parent) || 0) + 1);
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, max)
+      .map((entry) => entry[0]);
+  }
+
   async applyPreset(preset) {
     try {
       await this.backupOnce();
-      await this.writeGraph(preset.graph);
+      const folders = preset.colors.length ? this.detectColorFolders(preset.colors.length) : [];
+      const colorGroups = folders.length ? makeGroups(folders, preset.colors) : [];
+      const graphOptions = Object.assign({}, preset.graph, { colorGroups });
+      await this.writeGraph(graphOptions);
       await this.installSnippet(preset.id, makeGlowCss(preset.palette));
-      await this.reloadGraph(preset.graph);
-      new Notice(`${preset.emoji} ${preset.label} 적용 완료`);
+      await this.reloadGraph(graphOptions);
+      new Notice(L.applied(preset));
     } catch (e) {
       console.error('[graph-styler] apply failed', e);
-      new Notice('적용 실패 — 콘솔(Cmd+Opt+I) 확인');
+      new Notice(L.failed);
     }
   }
 
@@ -324,7 +374,7 @@ module.exports = class GraphStyler extends Plugin {
         }
       }
     } catch (e) {
-      console.warn('[graph-styler] snippet auto-enable failed; 설정→CSS 스니펫에서 수동 토글', e);
+      console.warn('[graph-styler] snippet auto-enable failed; toggle it in Settings → CSS snippets', e);
     }
   }
 
@@ -333,7 +383,7 @@ module.exports = class GraphStyler extends Plugin {
       .getLeavesOfType('graph')
       .concat(this.app.workspace.getLeavesOfType('localgraph'));
     if (!leaves.length) {
-      new Notice('그래프 뷰를 먼저 열어주세요');
+      new Notice(L.openGraph);
       return;
     }
     for (const leaf of leaves) {
@@ -345,7 +395,7 @@ module.exports = class GraphStyler extends Plugin {
           if (typeof engine.render === 'function') engine.render();
           continue;
         } catch (e) {
-          console.warn('[graph-styler] engine.setOptions 실패 → leaf 리로드로 폴백', e);
+          console.warn('[graph-styler] engine.setOptions failed → reloading leaf', e);
         }
       }
       const state = leaf.getViewState();
@@ -358,7 +408,7 @@ module.exports = class GraphStyler extends Plugin {
     const adapter = this.app.vault.adapter;
     const bak = `${this.graphPath()}.styler-bak`;
     if (!(await adapter.exists(bak))) {
-      new Notice('백업이 없어요');
+      new Notice(L.noBackup);
       return;
     }
     await adapter.write(this.graphPath(), await adapter.read(bak));
@@ -369,6 +419,6 @@ module.exports = class GraphStyler extends Plugin {
       }
     }
     await this.reloadGraph({});
-    new Notice('↩︎ 원래대로 복구함');
+    new Notice(L.restored);
   }
 };

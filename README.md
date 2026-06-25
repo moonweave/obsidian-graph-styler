@@ -4,7 +4,8 @@ One-click aesthetic themes for the Obsidian graph view. Pick a vibe — **color,
 
 Made by **[Moonweave](https://www.instagram.com/phd.ai.log/)**.
 
-<!-- ![screenshot](docs/preview.png) — 스크린샷 추가 예정 -->
+![Graph Styler](docs/preview.png)
+<!-- Replace docs/preview.png with a real graph screenshot anytime. -->
 
 ## Why
 Obsidian's graph looks amazing in screenshots — but getting there means digging through color groups, force sliders, and CSS snippets. Graph Styler turns that into a single click. Think *Canva templates, but for your graph*.
@@ -31,8 +32,9 @@ Each preset applies node/group colors, a glow CSS snippet, and force/size values
 *(Community store submission planned.)*
 
 ## Notes
-- Writes the global graph config (`.obsidian/graph.json`) and a CSS snippet (`.obsidian/snippets/graph-styler-*.css`).
-- Color groups are currently folder-based; tag/folder auto-detection for any vault is on the roadmap.
+- **Works in any vault.** Group colors auto-map to the busiest folders in *your* vault — no setup, no hardcoded paths.
+- **Bilingual UI.** The panel follows Obsidian's language — English or 한국어.
+- Writes the global graph config (`.obsidian/graph.json`) and a CSS snippet (`.obsidian/snippets/graph-styler-*.css`); your original `graph.json` is backed up first.
 - Desktop only.
 
 ## License
