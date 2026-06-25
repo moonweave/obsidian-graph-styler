@@ -297,7 +297,7 @@ class StylerView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
-    this.debounce = null;
+    this._raf = null;
   }
 
   getViewType() { return VIEW_TYPE; }
@@ -306,7 +306,7 @@ class StylerView extends ItemView {
 
   async onOpen() { this.render(); }
   async onClose() {
-    if (this.debounce) window.clearTimeout(this.debounce);
+    if (this._raf) window.cancelAnimationFrame(this._raf);
   }
 
   presetButton(parent, preset, onDelete) {
@@ -375,7 +375,7 @@ class StylerView extends ItemView {
       const input = colorBox.createEl('input');
       input.type = 'color';
       input.value = hex;
-      input.oninput = () => { draft.colors[i] = input.value; this.liveApply(); };
+      input.oninput = () => { draft.colors[i] = input.value; this.schedulePreview(); };
     });
 
     // background color
@@ -384,7 +384,7 @@ class StylerView extends ItemView {
     const bgEl = bgRow.createEl('input');
     bgEl.type = 'color';
     bgEl.value = draft.bg;
-    bgEl.oninput = () => { draft.bg = bgEl.value; this.liveApply(); };
+    bgEl.oninput = () => { draft.bg = bgEl.value; this.schedulePreview(); };
 
     // glow + force/size sliders
     this.sliderRow(details, L.f.glow, 0, 100, 5, draft.glow, (v) => { draft.glow = v; });
@@ -412,7 +412,7 @@ class StylerView extends ItemView {
     input.max = String(max);
     input.step = String(step);
     input.value = String(value);
-    input.oninput = () => { onChange(Number(input.value)); this.liveApply(); };
+    input.oninput = () => { onChange(Number(input.value)); this.schedulePreview(); };
     return input;
   }
 
@@ -428,11 +428,13 @@ class StylerView extends ItemView {
     };
   }
 
-  liveApply() {
-    if (this.debounce) window.clearTimeout(this.debounce);
-    this.debounce = window.setTimeout(() => {
-      this.plugin.applyPreset(presetFromRaw(this.rawFromDraft(LIVE_ID)), { silent: true });
-    }, 160);
+  // rAF 스로틀: 한 프레임에 한 번만, 디스크 안 건드리는 in-memory 미리보기
+  schedulePreview() {
+    if (this._raf) return;
+    this._raf = window.requestAnimationFrame(() => {
+      this._raf = null;
+      this.plugin.previewLive(presetFromRaw(this.rawFromDraft(LIVE_ID)));
+    });
   }
 
   async saveCurrent() {
@@ -493,6 +495,7 @@ module.exports = class GraphStyler extends Plugin {
   async saveCustom(raw) {
     this.settings.custom.push(raw);
     await this.saveData(this.settings);
+    await this.applyPreset(presetFromRaw(raw));   // 미리보기 상태를 디스크에 확정
     this.refreshViews();
     new Notice(L.saved(raw.label));
   }
@@ -570,6 +573,7 @@ module.exports = class GraphStyler extends Plugin {
       const merged = await this.writeGraph(graphOptions);
       await this.installSnippet(preset.id, makeGlowCss(preset.palette));
       await this.reloadGraph(merged, live);
+      if (this.liveStyle) this.liveStyle.textContent = '';   // 확정됐으니 라이브 미리보기 스타일 비움
       if (!live) new Notice(L.applied(preset));
     } catch (e) {
       console.error('[graph-styler] apply failed', e);
@@ -578,11 +582,13 @@ module.exports = class GraphStyler extends Plugin {
   }
 
   async backupOnce() {
+    if (this._backedUp) return;
     const adapter = this.app.vault.adapter;
     const bak = `${this.graphPath()}.styler-bak`;
     if (!(await adapter.exists(bak)) && (await adapter.exists(this.graphPath()))) {
       await adapter.write(bak, await adapter.read(this.graphPath()));
     }
+    this._backedUp = true;
   }
 
   async writeGraph(graphOptions) {
@@ -640,6 +646,41 @@ module.exports = class GraphStyler extends Plugin {
     }
   }
 
+  ensureLiveStyle() {
+    if (!this.liveStyle) {
+      this.liveStyle = document.head.createEl('style', { attr: { 'data-graph-styler': 'live' } });
+      this.register(() => {
+        if (this.liveStyle) {
+          this.liveStyle.remove();
+          this.liveStyle = null;
+        }
+      });
+    }
+  }
+
+  // 라이브 미리보기: 디스크 I/O 0. 글로우/색=주입 <style>, forces/색그룹=engine(메모리).
+  previewLive(preset) {
+    this.ensureLiveStyle();
+    this.liveStyle.textContent = makeGlowCss(preset.palette);
+    const graphOptions = Object.assign({}, preset.graph);
+    if (preset.colors.length) {
+      const folders = this.getFolders(preset.colors.length);
+      if (folders.length) graphOptions.colorGroups = makeGroups(folders, preset.colors);
+    }
+    const leaves = this.app.workspace
+      .getLeavesOfType('graph')
+      .concat(this.app.workspace.getLeavesOfType('localgraph'));
+    for (const leaf of leaves) {
+      const engine = leaf.view && (leaf.view.engine || leaf.view.dataEngine);
+      if (engine && typeof engine.setOptions === 'function') {
+        try {
+          engine.setOptions(graphOptions);
+          if (typeof engine.render === 'function') engine.render();
+        } catch (_) { /* engine API drift — preview just skips */ }
+      }
+    }
+  }
+
   async restore() {
     const adapter = this.app.vault.adapter;
     const bak = `${this.graphPath()}.styler-bak`;
@@ -650,6 +691,7 @@ module.exports = class GraphStyler extends Plugin {
     const original = await adapter.read(bak);
     await adapter.write(this.graphPath(), original);
     this.setActiveSnippet('__none__');
+    if (this.liveStyle) this.liveStyle.textContent = '';
     let originalOptions = {};
     try {
       originalOptions = JSON.parse(original);
