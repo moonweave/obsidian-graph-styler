@@ -8,7 +8,7 @@
 const { Plugin, ItemView, Notice } = require('obsidian');
 
 const AUTHOR = 'Moonweave';
-const AUTHOR_URL = 'https://www.instagram.com/phd.ai.log/';
+const AUTHOR_URL = 'https://github.com/moonweave';
 const VIEW_TYPE = 'graph-styler-panel';
 const LIVE_ID = '__live__';
 
