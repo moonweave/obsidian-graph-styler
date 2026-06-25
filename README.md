@@ -5,7 +5,15 @@ One-click aesthetic themes for the Obsidian graph view. Pick a vibe — **color,
 Made by **[Moonweave](https://www.instagram.com/phd.ai.log/)**.
 
 ![Graph Styler](docs/preview.png)
-<!-- Replace docs/preview.png with a real graph screenshot anytime. -->
+
+<p align="center"><em>Same vault, one click apart — Vaporwave &amp; Sunset:</em></p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/preset-vaporwave.png" alt="Vaporwave preset" /></td>
+    <td width="50%"><img src="docs/preset-sunset.png" alt="Sunset preset" /></td>
+  </tr>
+</table>
 
 ## Why
 Obsidian's graph looks amazing in screenshots — but getting there means digging through color groups, force sliders, and CSS snippets. Graph Styler turns that into a single click. Think *Canva templates, but for your graph*.

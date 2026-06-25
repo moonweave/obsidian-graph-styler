@@ -4,8 +4,16 @@
 
 만든 사람 **[Moonweave](https://www.instagram.com/phd.ai.log/)**.
 
-![Graph Styler](docs/preview.png)
-<!-- docs/preview.png 를 실제 그래프 스크린샷으로 언제든 교체 가능. -->
+![Graph Styler](docs/preview-ko.png)
+
+<p align="center"><em>같은 vault, 클릭 한 번 차이 — Vaporwave &amp; Sunset:</em></p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/preset-vaporwave.png" alt="Vaporwave" /></td>
+    <td width="50%"><img src="docs/preset-sunset.png" alt="Sunset" /></td>
+  </tr>
+</table>
 
 ## 왜
 옵시디언 그래프는 스크린샷이 정말 예쁘게 나오죠 — 근데 그렇게 만들려면 색 그룹, forces 슬라이더, CSS 스니펫을 다 뒤져야 합니다. Graph Styler는 그걸 클릭 한 번으로. *그래프계 Canva 템플릿*이라고 보면 됩니다.
