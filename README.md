@@ -15,6 +15,8 @@ Obsidian's graph looks amazing in screenshots — but getting there means diggin
 
 Each preset applies node/group colors, a glow CSS snippet, and force/size values tuned to the mood.
 
+**Make your own.** Open **🎛️ Customize** in the panel — drag the force/size sliders (repel, link distance, node size…) and pick colors, watch the graph update live, then **💾 Save as preset**. Your presets show up under *My presets* and persist.
+
 ## Usage
 1. Open the graph view (global graph).
 2. Click the 🎨 **palette** icon in the left ribbon → a panel opens on the right.
