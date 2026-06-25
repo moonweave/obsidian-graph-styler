@@ -1,7 +1,7 @@
 {
   "id": "graph-styler",
   "name": "Graph Styler",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "minAppVersion": "1.4.0",
   "description": "Style your Obsidian graph in one click — curated themes (color, glow, forces). No CSS needed.",
   "author": "Moonweave",

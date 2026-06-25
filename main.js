@@ -103,9 +103,9 @@ function hexToRgbInt(hex) {
 }
 
 // ---------------------------------------------------------------- graph option helpers
-function makeGroups(folders, colors) {
-  return folders.map((folder, i) => ({
-    query: `path:"${folder.replace(/"/g, '\\"')}"`,
+function makeGroups(queries, colors) {
+  return queries.map((query, i) => ({
+    query,
     color: { a: 1, rgb: hexToRgbInt(colors[i % colors.length]) },
   }));
 }
@@ -469,7 +469,7 @@ module.exports = class GraphStyler extends Plugin {
     }
 
     // 폴더 구조가 바뀌면 색-그룹 캐시 무효화
-    const invalidate = () => { this._folders = null; };
+    const invalidate = () => { this._queries = null; };
     this.registerEvent(this.app.vault.on('create', invalidate));
     this.registerEvent(this.app.vault.on('delete', invalidate));
     this.registerEvent(this.app.vault.on('rename', invalidate));
@@ -526,7 +526,7 @@ module.exports = class GraphStyler extends Plugin {
     for (const id of ids) customCss.setCssEnabledStatus(`graph-styler-${id}`, id === activeId);
   }
 
-  // 노트가 많은 폴더 순 (세션 캐시 + 구조 변경 시 무효화)
+  // 노트가 많은 폴더 순
   detectColorFolders() {
     const counts = new Map();
     for (const file of this.app.vault.getMarkdownFiles()) {
@@ -537,9 +537,33 @@ module.exports = class GraphStyler extends Plugin {
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).map((entry) => entry[0]);
   }
 
-  getFolders(max) {
-    if (!this._folders) this._folders = this.detectColorFolders();
-    return this._folders.slice(0, max);
+  // 많이 쓰인 태그 순 (키에 '#' 포함)
+  detectColorTags() {
+    let tags = {};
+    try {
+      if (this.app.metadataCache && this.app.metadataCache.getTags) {
+        tags = this.app.metadataCache.getTags() || {};
+      }
+    } catch (_) {
+      tags = {};
+    }
+    return Object.entries(tags).sort((a, b) => b[1] - a[1]).map((entry) => entry[0]);
+  }
+
+  // 색 그룹 쿼리: 폴더(≥2) → 태그 → 폴더(1개)/빈값.
+  // 한 vault에서 의미 있는 한 축으로만 칠해 조잡함 방지. (세션 캐시 + 변경 시 무효화)
+  getColorQueries(max) {
+    if (!this._queries) {
+      const escape = (f) => `path:"${f.replace(/"/g, '\\"')}"`;
+      const folders = this.detectColorFolders();
+      if (folders.length >= 2) {
+        this._queries = folders.map(escape);
+      } else {
+        const tags = this.detectColorTags();
+        this._queries = tags.length ? tags.map((t) => `tag:${t}`) : folders.map(escape);
+      }
+    }
+    return this._queries.slice(0, max);
   }
 
   // 빠른 연속 호출(라이브 드래그)을 직렬화 → graph.json 동시쓰기 레이스 방지 (latest-wins)
@@ -566,9 +590,9 @@ module.exports = class GraphStyler extends Plugin {
       if (preset.colors.length === 0) {
         graphOptions.colorGroups = [];                 // mono: 강제 단색
       } else {
-        const folders = this.getFolders(preset.colors.length);
-        if (folders.length) graphOptions.colorGroups = makeGroups(folders, preset.colors);
-        // 폴더 없으면(루트-only/빈 vault) 기존 colorGroups 보존 — 덮어쓰지 않음
+        const queries = this.getColorQueries(preset.colors.length);
+        if (queries.length) graphOptions.colorGroups = makeGroups(queries, preset.colors);
+        // 폴더·태그 둘 다 없으면(완전 평면 vault) 기존 colorGroups 보존 — 덮어쓰지 않음
       }
       const css = makeGlowCss(preset.palette);
       this.ensureLiveStyle();
@@ -669,8 +693,8 @@ module.exports = class GraphStyler extends Plugin {
     this.liveStyle.textContent = makeGlowCss(preset.palette);
     const graphOptions = Object.assign({}, preset.graph);
     if (preset.colors.length) {
-      const folders = this.getFolders(preset.colors.length);
-      if (folders.length) graphOptions.colorGroups = makeGroups(folders, preset.colors);
+      const queries = this.getColorQueries(preset.colors.length);
+      if (queries.length) graphOptions.colorGroups = makeGroups(queries, preset.colors);
     }
     const leaves = this.app.workspace
       .getLeavesOfType('graph')
