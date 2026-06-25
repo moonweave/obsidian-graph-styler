@@ -1,0 +1,46 @@
+/* Graph Styler — panel styling (dynamic swatch colors stay inline in main.js) */
+
+.graph-styler-panel {
+  padding: 14px;
+}
+
+.graph-styler-panel .gs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 14px 0;
+}
+
+.graph-styler-panel .gs-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.graph-styler-panel .gs-swatch {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 3px;
+}
+
+.graph-styler-panel .gs-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.graph-styler-panel .gs-restore {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.graph-styler-panel .gs-credit {
+  margin-top: 16px;
+  font-size: 12px;
+  text-align: center;
+  opacity: 0.6;
+}

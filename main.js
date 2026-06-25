@@ -220,53 +220,28 @@ class StylerView extends ItemView {
   async onOpen() {
     const c = this.contentEl;
     c.empty();
-    c.style.padding = '14px';
+    c.addClass('graph-styler-panel');
     c.createEl('h3', { text: L.title });
     c.createEl('p', { text: L.desc, cls: 'setting-item-description' });
 
-    const col = c.createDiv();
-    col.style.display = 'flex';
-    col.style.flexDirection = 'column';
-    col.style.gap = '6px';
-    col.style.margin = '14px 0';
-
+    const list = c.createDiv({ cls: 'gs-list' });
     for (const key of Object.keys(PRESETS)) {
       const preset = PRESETS[key];
-      const btn = col.createEl('button');
-      btn.style.display = 'flex';
-      btn.style.alignItems = 'center';
-      btn.style.gap = '10px';
-      btn.style.padding = '11px 12px';
-      btn.style.cursor = 'pointer';
-      btn.style.textAlign = 'left';
-
-      const swatch = btn.createSpan();
-      swatch.style.display = 'inline-flex';
-      swatch.style.gap = '3px';
-      swatch.style.flexShrink = '0';
+      const btn = list.createEl('button', { cls: 'gs-btn' });
+      const swatch = btn.createSpan({ cls: 'gs-swatch' });
       for (const color of preset.swatch) {
-        const dot = swatch.createSpan();
-        dot.style.width = '12px';
-        dot.style.height = '12px';
-        dot.style.borderRadius = '50%';
-        dot.style.background = color;
+        const dot = swatch.createSpan({ cls: 'gs-dot' });
+        dot.style.backgroundColor = color;          // dynamic color stays inline
         dot.style.boxShadow = `0 0 5px ${color}`;
       }
-
       btn.createSpan({ text: `${preset.emoji}  ${preset.label}` });
       btn.onclick = () => this.plugin.applyPreset(preset);
     }
 
-    const restore = c.createEl('button', { text: L.restore });
-    restore.style.width = '100%';
-    restore.style.marginTop = '6px';
+    const restore = c.createEl('button', { cls: 'gs-restore', text: L.restore });
     restore.onclick = () => this.plugin.restore();
 
-    const credit = c.createDiv();
-    credit.style.marginTop = '16px';
-    credit.style.fontSize = '12px';
-    credit.style.opacity = '0.6';
-    credit.style.textAlign = 'center';
+    const credit = c.createDiv({ cls: 'gs-credit' });
     credit.createSpan({ text: L.by });
     const link = credit.createEl('a', { text: AUTHOR, href: AUTHOR_URL });
     link.setAttr('target', '_blank');
@@ -293,7 +268,6 @@ module.exports = class GraphStyler extends Plugin {
         callback: () => this.applyPreset(preset),
       });
     }
-    console.log('[graph-styler] loaded');
   }
 
   async activateView() {
@@ -301,6 +275,7 @@ module.exports = class GraphStyler extends Plugin {
     let leaf = workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) {
       leaf = workspace.getRightLeaf(false);
+      if (!leaf) return;
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
     workspace.revealLeaf(leaf);
@@ -330,9 +305,9 @@ module.exports = class GraphStyler extends Plugin {
       const folders = preset.colors.length ? this.detectColorFolders(preset.colors.length) : [];
       const colorGroups = folders.length ? makeGroups(folders, preset.colors) : [];
       const graphOptions = Object.assign({}, preset.graph, { colorGroups });
-      await this.writeGraph(graphOptions);
+      const merged = await this.writeGraph(graphOptions);
       await this.installSnippet(preset.id, makeGlowCss(preset.palette));
-      await this.reloadGraph(graphOptions);
+      await this.reloadGraph(merged);
       new Notice(L.applied(preset));
     } catch (e) {
       console.error('[graph-styler] apply failed', e);
@@ -348,6 +323,7 @@ module.exports = class GraphStyler extends Plugin {
     }
   }
 
+  // graph.json 에 옵션을 merge 저장하고, merge된 전체 옵션을 반환
   async writeGraph(graphOptions) {
     const adapter = this.app.vault.adapter;
     let current = {};
@@ -356,7 +332,9 @@ module.exports = class GraphStyler extends Plugin {
     } catch (_) {
       current = {};
     }
-    await adapter.write(this.graphPath(), JSON.stringify(Object.assign(current, graphOptions), null, 2));
+    const merged = Object.assign(current, graphOptions);
+    await adapter.write(this.graphPath(), JSON.stringify(merged, null, 2));
+    return merged;
   }
 
   async installSnippet(presetId, css) {
@@ -411,14 +389,21 @@ module.exports = class GraphStyler extends Plugin {
       new Notice(L.noBackup);
       return;
     }
-    await adapter.write(this.graphPath(), await adapter.read(bak));
+    const original = await adapter.read(bak);
+    await adapter.write(this.graphPath(), original);
     const customCss = this.app.customCss;
     if (customCss && customCss.setCssEnabledStatus) {
       for (const key of Object.keys(PRESETS)) {
         customCss.setCssEnabledStatus(`graph-styler-${key}`, false);
       }
     }
-    await this.reloadGraph({});
+    let originalOptions = {};
+    try {
+      originalOptions = JSON.parse(original);
+    } catch (_) {
+      originalOptions = {};
+    }
+    await this.reloadGraph(originalOptions);
     new Notice(L.restored);
   }
 };
