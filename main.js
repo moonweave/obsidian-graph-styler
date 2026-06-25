@@ -10,6 +10,7 @@ const { Plugin, ItemView, Notice } = require('obsidian');
 const AUTHOR = 'Moonweave';
 const AUTHOR_URL = 'https://www.instagram.com/phd.ai.log/';
 const VIEW_TYPE = 'graph-styler-panel';
+const LIVE_ID = '__live__';
 
 // ---------------------------------------------------------------- i18n
 function detectLang() {
@@ -37,6 +38,17 @@ const STRINGS = {
     restored: '↩︎ Restored to original',
     noBackup: 'No backup found',
     by: 'made by ',
+    customize: '🎛️ Customize',
+    myPresets: 'My presets',
+    save: '💾 Save as preset',
+    namePh: 'Preset name',
+    saved: (n) => `💾 “${n}” saved`,
+    deleted: 'Preset deleted',
+    f: {
+      colors: 'Group colors', bg: 'Background', glow: 'Glow',
+      repel: 'Repel', dist: 'Link distance', center: 'Center', linkS: 'Link force',
+      node: 'Node size', line: 'Link width', fade: 'Text fade',
+    },
   },
   ko: {
     title: '🎨 Graph Styler',
@@ -50,17 +62,47 @@ const STRINGS = {
     restored: '↩︎ 원래대로 복구함',
     noBackup: '백업이 없어요',
     by: 'made by ',
+    customize: '🎛️ 커스터마이즈',
+    myPresets: '내 프리셋',
+    save: '💾 내 프리셋으로 저장',
+    namePh: '프리셋 이름',
+    saved: (n) => `💾 “${n}” 저장됨`,
+    deleted: '프리셋 삭제됨',
+    f: {
+      colors: '그룹 색', bg: '배경', glow: '글로우',
+      repel: '반발력', dist: '링크 거리', center: '중심력', linkS: '링크력',
+      node: '노드 크기', line: '링크 두께', fade: '텍스트 페이드',
+    },
   },
 };
 
 const L = STRINGS[detectLang()];
 
-// ---------------------------------------------------------------- helpers
+// ---------------------------------------------------------------- color helpers
+function rgbOf(hex) {
+  const h = hex.replace('#', '');
+  return [0, 2, 4].map((i) => parseInt(h.substr(i, 2), 16));
+}
+
+function toHex(rgb) {
+  return '#' + rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+}
+
+function mix(a, b, t) {
+  const A = rgbOf(a);
+  const B = rgbOf(b);
+  return toHex(A.map((v, i) => v + (B[i] - v) * t));
+}
+
+function lighten(hex, t) {
+  return mix(hex, '#ffffff', t);
+}
+
 function hexToRgbInt(hex) {
   return parseInt(hex.replace('#', ''), 16);
 }
 
-// 색 그룹을 "이 vault의 실제 폴더"로 동적 생성 → 어떤 vault에서도 동작.
+// ---------------------------------------------------------------- graph option helpers
 function makeGroups(folders, colors) {
   return folders.map((folder, i) => ({
     query: `path:"${folder.replace(/"/g, '\\"')}"`,
@@ -96,7 +138,6 @@ function pick(value, fallback) {
   return value === undefined ? fallback : value;
 }
 
-// forces/표시 옵션만 (colorGroups는 적용 시점에 폴더 감지로 채움)
 function graph(o) {
   o = o || {};
   return Object.assign({}, BASE_GRAPH, {
@@ -126,6 +167,27 @@ function P(id, label, emoji, colors, forces, bg, theme) {
     palette,
   };
 }
+
+// 사용자 커스텀 raw({id,label,emoji,colors[4],bg,glow,forces}) → 프리셋으로 재구성
+function presetFromRaw(raw) {
+  const colors = raw.colors;
+  const bg = [mix(raw.bg, colors[0], 0.2), mix(raw.bg, colors[0], 0.08), raw.bg];
+  const g = Number(raw.glow) || 0;
+  const theme = {
+    circle: colors[0], fill: colors[1] || colors[0], tag: colors[2] || colors[0],
+    line: mix(colors[0], raw.bg, 0.55), text: lighten(colors[0], 0.72),
+    unresolved: mix(raw.bg, '#ffffff', 0.1),
+    filter: `brightness(${(1 + g / 280).toFixed(2)}) contrast(1.06) saturate(${(1 + g / 110).toFixed(2)})`,
+  };
+  return P(raw.id, raw.label, raw.emoji || '🎛️', colors, raw.forces, bg, theme);
+}
+
+const DEFAULT_CUSTOM = {
+  colors: ['#7dd3fc', '#34d399', '#fbbf24', '#f472b6'],
+  bg: '#0b1624',
+  glow: 40,
+  forces: { node: 2.2, repel: 17, dist: 140, center: 0.1, linkS: 0.2, line: 0.3, fade: 1.2 },
+};
 
 const PRESETS = {
   neon: P('neon', 'Neon', '⚡',
@@ -218,47 +280,67 @@ const PRESETS = {
       unresolved: '#27272a', filter: 'brightness(1.1) contrast(1.05) saturate(1.0)' }),
 };
 
+const SLIDERS = [
+  ['node', 0.3, 4, 0.1], ['repel', 0, 20, 0.5], ['dist', 30, 500, 5],
+  ['center', 0, 1, 0.02], ['linkS', 0, 1, 0.02], ['line', 0.1, 2, 0.05], ['fade', 0, 3, 0.1],
+];
+
 class StylerView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
+    this.debounce = null;
   }
 
-  getViewType() {
-    return VIEW_TYPE;
+  getViewType() { return VIEW_TYPE; }
+  getDisplayText() { return 'Graph Styler'; }
+  getIcon() { return 'palette'; }
+
+  async onOpen() { this.render(); }
+  async onClose() {}
+
+  presetButton(parent, preset, onDelete) {
+    const btn = parent.createEl('button', { cls: 'gs-btn' });
+    const swatch = btn.createSpan({ cls: 'gs-swatch' });
+    for (const color of preset.swatch) {
+      const dot = swatch.createSpan({ cls: 'gs-dot' });
+      dot.style.backgroundColor = color;
+      dot.style.boxShadow = `0 0 5px ${color}`;
+    }
+    btn.createSpan({ cls: 'gs-btn-label', text: `${preset.emoji}  ${preset.label}` });
+    btn.onclick = () => this.plugin.applyPreset(preset);
+    if (onDelete) {
+      const del = btn.createSpan({ cls: 'gs-del', text: '✕' });
+      del.onclick = (ev) => { ev.stopPropagation(); onDelete(); };
+    }
+    return btn;
   }
 
-  getDisplayText() {
-    return 'Graph Styler';
-  }
-
-  getIcon() {
-    return 'palette';
-  }
-
-  async onOpen() {
+  render() {
     const c = this.contentEl;
     c.empty();
     c.addClass('graph-styler-panel');
     c.createEl('h3', { text: L.title });
     c.createEl('p', { text: L.desc, cls: 'setting-item-description' });
 
+    // built-in presets
     const list = c.createDiv({ cls: 'gs-list' });
-    for (const key of Object.keys(PRESETS)) {
-      const preset = PRESETS[key];
-      const btn = list.createEl('button', { cls: 'gs-btn' });
-      const swatch = btn.createSpan({ cls: 'gs-swatch' });
-      for (const color of preset.swatch) {
-        const dot = swatch.createSpan({ cls: 'gs-dot' });
-        dot.style.backgroundColor = color;          // dynamic color stays inline
-        dot.style.boxShadow = `0 0 5px ${color}`;
+    for (const key of Object.keys(PRESETS)) this.presetButton(list, PRESETS[key]);
+
+    // user presets
+    const custom = this.plugin.settings.custom || [];
+    if (custom.length) {
+      c.createEl('div', { cls: 'gs-section', text: L.myPresets });
+      const myList = c.createDiv({ cls: 'gs-list' });
+      for (const raw of custom) {
+        this.presetButton(myList, presetFromRaw(raw), () => this.plugin.deleteCustom(raw.id));
       }
-      btn.createSpan({ text: `${preset.emoji}  ${preset.label}` });
-      btn.onclick = () => this.plugin.applyPreset(preset);
     }
 
     const restore = c.createEl('button', { cls: 'gs-restore', text: L.restore });
     restore.onclick = () => this.plugin.restore();
+
+    this.buildCustomize(c);
 
     const credit = c.createDiv({ cls: 'gs-credit' });
     credit.createSpan({ text: L.by });
@@ -267,11 +349,92 @@ class StylerView extends ItemView {
     link.setAttr('rel', 'noopener');
   }
 
-  async onClose() {}
+  buildCustomize(c) {
+    const details = c.createEl('details', { cls: 'gs-custom' });
+    details.createEl('summary', { text: L.customize });
+
+    // group colors
+    const colorRow = details.createDiv({ cls: 'gs-row' });
+    colorRow.createSpan({ cls: 'gs-row-label', text: L.f.colors });
+    const colorBox = colorRow.createSpan({ cls: 'gs-colors' });
+    this.colorEls = DEFAULT_CUSTOM.colors.map((hex) => {
+      const input = colorBox.createEl('input');
+      input.type = 'color';
+      input.value = hex;
+      input.oninput = () => this.liveApply();
+      return input;
+    });
+
+    // background color
+    const bgRow = details.createDiv({ cls: 'gs-row' });
+    bgRow.createSpan({ cls: 'gs-row-label', text: L.f.bg });
+    this.bgEl = bgRow.createEl('input');
+    this.bgEl.type = 'color';
+    this.bgEl.value = DEFAULT_CUSTOM.bg;
+    this.bgEl.oninput = () => this.liveApply();
+
+    // glow + force/size sliders
+    this.glowEl = this.sliderRow(details, L.f.glow, 0, 100, 5, DEFAULT_CUSTOM.glow);
+    this.s = {};
+    for (const [key, min, max, step] of SLIDERS) {
+      this.s[key] = this.sliderRow(details, L.f[key], min, max, step, DEFAULT_CUSTOM.forces[key]);
+    }
+
+    // name + save
+    const saveRow = details.createDiv({ cls: 'gs-row' });
+    this.nameEl = saveRow.createEl('input', { cls: 'gs-name' });
+    this.nameEl.type = 'text';
+    this.nameEl.placeholder = L.namePh;
+    const saveBtn = details.createEl('button', { cls: 'gs-save', text: L.save });
+    saveBtn.onclick = () => this.saveCurrent();
+  }
+
+  sliderRow(parent, label, min, max, step, value) {
+    const row = parent.createDiv({ cls: 'gs-row' });
+    row.createSpan({ cls: 'gs-row-label', text: label });
+    const input = row.createEl('input');
+    input.type = 'range';
+    input.min = String(min);
+    input.max = String(max);
+    input.step = String(step);
+    input.value = String(value);
+    input.oninput = () => this.liveApply();
+    return input;
+  }
+
+  readRaw(id) {
+    return {
+      id,
+      label: (this.nameEl.value || 'Custom').trim() || 'Custom',
+      emoji: '🎛️',
+      colors: this.colorEls.map((el) => el.value),
+      bg: this.bgEl.value,
+      glow: Number(this.glowEl.value),
+      forces: {
+        node: Number(this.s.node.value), repel: Number(this.s.repel.value),
+        dist: Number(this.s.dist.value), center: Number(this.s.center.value),
+        linkS: Number(this.s.linkS.value), line: Number(this.s.line.value),
+        fade: Number(this.s.fade.value),
+      },
+    };
+  }
+
+  liveApply() {
+    if (this.debounce) window.clearTimeout(this.debounce);
+    this.debounce = window.setTimeout(() => {
+      this.plugin.applyPreset(presetFromRaw(this.readRaw(LIVE_ID)), { silent: true });
+    }, 160);
+  }
+
+  async saveCurrent() {
+    const raw = this.readRaw(`custom-${Date.now()}`);
+    await this.plugin.saveCustom(raw);
+  }
 }
 
 module.exports = class GraphStyler extends Plugin {
   async onload() {
+    this.settings = Object.assign({ custom: [] }, await this.loadData());
     this.registerView(VIEW_TYPE, (leaf) => new StylerView(leaf, this));
     this.addRibbonIcon('palette', 'Graph Styler', () => this.activateView());
     this.addCommand({
@@ -300,8 +463,43 @@ module.exports = class GraphStyler extends Plugin {
     workspace.revealLeaf(leaf);
   }
 
+  refreshViews() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view && typeof leaf.view.render === 'function') leaf.view.render();
+    }
+  }
+
+  async saveCustom(raw) {
+    this.settings.custom.push(raw);
+    await this.saveData(this.settings);
+    this.refreshViews();
+    new Notice(L.saved(raw.label));
+  }
+
+  async deleteCustom(id) {
+    this.settings.custom = this.settings.custom.filter((r) => r.id !== id);
+    await this.saveData(this.settings);
+    this.refreshViews();
+    new Notice(L.deleted);
+  }
+
   graphPath() {
     return `${this.app.vault.configDir}/graph.json`;
+  }
+
+  snippetIds() {
+    const ids = new Set(Object.keys(PRESETS));
+    ids.add(LIVE_ID);
+    for (const r of this.settings.custom || []) ids.add(r.id);
+    return ids;
+  }
+
+  setActiveSnippet(activeId) {
+    const customCss = this.app.customCss;
+    if (!customCss || !customCss.setCssEnabledStatus) return;
+    const ids = this.snippetIds();
+    ids.add(activeId);
+    for (const id of ids) customCss.setCssEnabledStatus(`graph-styler-${id}`, id === activeId);
   }
 
   // 이 vault에서 노트가 가장 많은 폴더 N개 → 색 그룹 대상
@@ -318,7 +516,7 @@ module.exports = class GraphStyler extends Plugin {
       .map((entry) => entry[0]);
   }
 
-  async applyPreset(preset) {
+  async applyPreset(preset, opts) {
     try {
       await this.backupOnce();
       const folders = preset.colors.length ? this.detectColorFolders(preset.colors.length) : [];
@@ -327,7 +525,7 @@ module.exports = class GraphStyler extends Plugin {
       const merged = await this.writeGraph(graphOptions);
       await this.installSnippet(preset.id, makeGlowCss(preset.palette));
       await this.reloadGraph(merged);
-      new Notice(L.applied(preset));
+      if (!(opts && opts.silent)) new Notice(L.applied(preset));
     } catch (e) {
       console.error('[graph-styler] apply failed', e);
       new Notice(L.failed);
@@ -342,7 +540,6 @@ module.exports = class GraphStyler extends Plugin {
     }
   }
 
-  // graph.json 에 옵션을 merge 저장하고, merge된 전체 옵션을 반환
   async writeGraph(graphOptions) {
     const adapter = this.app.vault.adapter;
     let current = {};
@@ -361,15 +558,10 @@ module.exports = class GraphStyler extends Plugin {
     const dir = `${this.app.vault.configDir}/snippets`;
     if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
     await adapter.write(`${dir}/graph-styler-${presetId}.css`, css);
-
-    const customCss = this.app.customCss;
     try {
+      const customCss = this.app.customCss;
       if (customCss && customCss.readSnippets) await customCss.readSnippets();
-      if (customCss && customCss.setCssEnabledStatus) {
-        for (const key of Object.keys(PRESETS)) {
-          customCss.setCssEnabledStatus(`graph-styler-${key}`, key === presetId);
-        }
-      }
+      this.setActiveSnippet(presetId);
     } catch (e) {
       console.warn('[graph-styler] snippet auto-enable failed; toggle it in Settings → CSS snippets', e);
     }
@@ -410,12 +602,7 @@ module.exports = class GraphStyler extends Plugin {
     }
     const original = await adapter.read(bak);
     await adapter.write(this.graphPath(), original);
-    const customCss = this.app.customCss;
-    if (customCss && customCss.setCssEnabledStatus) {
-      for (const key of Object.keys(PRESETS)) {
-        customCss.setCssEnabledStatus(`graph-styler-${key}`, false);
-      }
-    }
+    this.setActiveSnippet('__none__');
     let originalOptions = {};
     try {
       originalOptions = JSON.parse(original);
