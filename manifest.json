@@ -3,7 +3,7 @@
   "name": "Graph Styler",
   "version": "0.1.4",
   "minAppVersion": "1.4.0",
-  "description": "Style your Obsidian graph in one click — curated themes (color, glow, forces). No CSS needed.",
+  "description": "Style your graph view in one click — curated themes (color, glow, forces). No CSS needed.",
   "author": "Moonweave",
   "authorUrl": "https://github.com/moonweave",
   "isDesktopOnly": true
