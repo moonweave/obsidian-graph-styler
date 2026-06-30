@@ -41,14 +41,14 @@ It writes these into Obsidian's **native graph color groups** (Settings → Grap
 4. Tweak freely afterward, or hit **↩︎ Restore** to revert — your original `graph.json` is backed up automatically.
 
 ## Install
-**Via BRAT (now):**
-1. Install the *BRAT* community plugin.
-2. BRAT → "Add beta plugin" → `moonweave/obsidian-graph-styler`.
-3. Enable **Graph Styler** under Community plugins.
+**Community plugins (recommended):**
+1. In Obsidian, open Settings -> Community plugins -> Browse.
+2. Search for `Graph Styler`.
+3. Install it, then enable **Graph Styler** under Community plugins.
 
-**Manual:** copy `main.js` + `manifest.json` into `<vault>/.obsidian/plugins/graph-styler/`, then enable.
+Direct listing: <https://obsidian.md/plugins?id=graph-styler>
 
-*(Community store submission planned.)*
+**Development builds:** install with BRAT from `moonweave/obsidian-graph-styler`, or copy `main.js` + `manifest.json` into `<vault>/.obsidian/plugins/graph-styler/`, then enable.
 
 ## Notes
 - **Works in any vault.** Group colors auto-map to the busiest folders in *your* vault — no setup, no hardcoded paths.

@@ -41,14 +41,14 @@ Graph Styler는 하드코딩이 없습니다 — *내* vault에 맞춰 적응합
 4. 이후 자유롭게 조정하거나, **↩︎ 되돌리기**로 원상복구 — 원래 `graph.json`은 자동 백업됩니다.
 
 ## 설치
-**BRAT으로 (지금):**
-1. 커뮤니티 플러그인 *BRAT* 설치
-2. BRAT → "Add beta plugin" → `moonweave/obsidian-graph-styler`
-3. 커뮤니티 플러그인에서 **Graph Styler** 켜기
+**커뮤니티 플러그인에서 설치(권장):**
+1. Obsidian에서 설정 -> 커뮤니티 플러그인 -> 탐색을 엽니다.
+2. `Graph Styler`를 검색합니다.
+3. 설치한 뒤 커뮤니티 플러그인에서 **Graph Styler**를 켭니다.
 
-**수동:** `main.js` + `manifest.json`을 `<vault>/.obsidian/plugins/graph-styler/`에 복사 후 켜기.
+공식 등재 페이지: <https://obsidian.md/plugins?id=graph-styler>
 
-*(공식 스토어 등재 예정.)*
+**개발 빌드:** BRAT에서 `moonweave/obsidian-graph-styler`를 추가하거나, `main.js` + `manifest.json`을 `<vault>/.obsidian/plugins/graph-styler/`에 복사 후 켭니다.
 
 ## 참고
 - **어떤 vault에서도 동작.** 그룹 색이 *내* vault에서 노트가 가장 많은 폴더에 자동 매핑됩니다 — 설정도, 하드코딩 경로도 없음.
