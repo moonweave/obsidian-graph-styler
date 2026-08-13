@@ -1,6 +1,6 @@
 # 🎨 Graph Styler
 
-One-click aesthetic themes for the Obsidian graph view. Pick a vibe — **color, glow, and forces** are applied instantly. No CSS, no JSON, no setup.
+One-click aesthetic themes for the Obsidian graph view. Pick a vibe — **color and glow** are applied instantly while your current graph physics stays unchanged. No manual CSS, JSON, or setup.
 
 Made by **[Moonweave](https://www.instagram.com/phd.ai.log/)**.
 
@@ -21,9 +21,9 @@ Obsidian's graph looks amazing in screenshots — but getting there means diggin
 ## Presets
 ⚡ Neon · 🌌 Galaxy · 🌠 Aurora · 🌅 Sunset · 🌴 Vaporwave · 🌊 Ocean · 🌲 Forest · 🍬 Candy · ✨ Gold · 👾 Cyberpunk · ❄️ Nord · 🧛 Dracula · 🐈 Catppuccin · ⚪ Mono
 
-Each preset applies node/group colors, a glow CSS snippet, and force/size values tuned to the mood.
+Each built-in preset applies node/group colors, visual sizing, and a glow CSS snippet while preserving your current force settings. Custom presets can explicitly save force/size values.
 
-**Make your own.** Open **🎛️ Customize** in the panel — drag the force/size sliders (repel, link distance, node size…) and pick colors, watch the graph update live, then **💾 Save as preset**. Your presets show up under *My presets* and persist.
+**Make your own.** Open **🎛️ Customize** in the panel — drag the force/size sliders (repel, link distance, node size…) and pick colors, watch the graph update live, then **💾 Save as preset**. Customization changes graph physics; save it only when you want a reusable custom preset. Your presets show up under *My presets* and persist.
 
 ## How colors map to your vault
 Graph Styler hardcodes nothing — it adapts to *your* vault:
@@ -32,7 +32,7 @@ Graph Styler hardcodes nothing — it adapts to *your* vault:
 - No folders? It falls back to your most-used **tags**.
 - Totally flat (no folders or tags)? You still get the glow, background, and node colors — just no per-group split.
 
-It writes these into Obsidian's **native graph color groups** (Settings → Graph → Groups), so you can see and tweak them there. Whether you have 2 groups or 4, it just works — and the glow, background, and node styling are identical for everyone. Applying a preset replaces your current color groups; your original config is backed up, so **Restore** brings it back.
+It writes these into Obsidian's **native graph color groups** (Settings → Graph → Groups), so you can see and tweak them there. Whether you have 2 groups or 4, it just works — and the glow, background, and node styling are identical for everyone. Applying a preset replaces your current color groups; your original config is backed up, so **Restore** brings it back. Restore returns to the snapshot saved before Graph Styler first changed the vault and may overwrite graph settings changed afterward.
 
 ## Usage
 1. Open the graph view (global graph).
@@ -53,7 +53,7 @@ Direct listing: <https://obsidian.md/plugins?id=graph-styler>
 ## Notes
 - **Works in any vault.** Group colors auto-map to the busiest folders in *your* vault — no setup, no hardcoded paths.
 - **Bilingual UI.** The panel follows Obsidian's language — English or 한국어.
-- Writes the global graph config (`.obsidian/graph.json`) and a CSS snippet (`.obsidian/snippets/graph-styler-*.css`); your original `graph.json` is backed up first.
+- Writes the global graph config (`.obsidian/graph.json`) and a CSS snippet (`.obsidian/snippets/graph-styler-*.css`); your original `graph.json` is backed up first. Restore requires confirmation because it restores that first snapshot.
 - Desktop only.
 
 ## License

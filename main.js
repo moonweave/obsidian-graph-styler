@@ -28,8 +28,12 @@ function detectLang() {
 const STRINGS = {
   en: {
     title: '🎨 Graph Styler',
-    desc: 'Tap a preset — your graph restyles instantly. Keep this panel open while you move the graph around.',
+    desc: 'Tap a preset — colors and glow change instantly while your current graph physics stays unchanged.',
+    themes: 'Themes',
+    physicsNote: 'Built-in themes change color, glow, and visual sizing only. Your force settings stay unchanged.',
     restore: '↩︎ Restore original',
+    restoreNote: 'Restore returns to the graph settings saved before Graph Styler first changed this vault.',
+    restoreConfirm: 'Restore the graph settings saved before Graph Styler first changed this vault? Changes made since then will be overwritten.',
     openCmd: 'Open Graph Styler panel',
     applyCmd: 'Apply',
     applied: (p) => `${p.emoji} ${p.label} applied`,
@@ -39,6 +43,8 @@ const STRINGS = {
     noBackup: 'No backup found',
     by: 'made by ',
     customize: '🎛️ Customize',
+    customizeNote: 'Customize changes graph physics live. Save it only if you want a reusable custom preset.',
+    active: 'active',
     myPresets: 'My presets',
     save: '💾 Save as preset',
     namePh: 'Preset name',
@@ -52,8 +58,12 @@ const STRINGS = {
   },
   ko: {
     title: '🎨 Graph Styler',
-    desc: '프리셋을 누르면 그래프가 바로 바뀝니다. 패널은 열어둔 채 그래프를 움직여도 됩니다.',
+    desc: '프리셋을 누르면 색과 글로우가 바로 바뀌고, 현재 그래프 물리는 그대로 유지됩니다.',
+    themes: '테마',
+    physicsNote: '기본 테마는 색·글로우·표현만 바꾸고 현재 그래프 물리는 유지합니다.',
     restore: '↩︎ 원래대로 되돌리기',
+    restoreNote: '되돌리기는 Graph Styler가 이 vault를 처음 변경하기 전에 저장한 그래프 설정으로 돌아갑니다.',
+    restoreConfirm: 'Graph Styler가 이 vault를 처음 적용하기 전의 그래프 설정으로 되돌릴까요? 그 이후의 변경은 덮어써집니다.',
     openCmd: 'Graph Styler 패널 열기',
     applyCmd: '적용',
     applied: (p) => `${p.emoji} ${p.label} 적용 완료`,
@@ -63,6 +73,8 @@ const STRINGS = {
     noBackup: '백업이 없어요',
     by: 'made by ',
     customize: '🎛️ 커스터마이즈',
+    customizeNote: '커스터마이즈는 그래프 물리를 실시간으로 바꿉니다. 다시 쓸 설정만 프리셋으로 저장하세요.',
+    active: '현재 적용됨',
     myPresets: '내 프리셋',
     save: '💾 내 프리셋으로 저장',
     namePh: '프리셋 이름',
@@ -153,8 +165,26 @@ function graph(o) {
   });
 }
 
+const FORCE_KEYS = ['centerStrength', 'repelStrength', 'linkStrength', 'linkDistance'];
+
+function graphOptionsForPreset(preset) {
+  const graphOptions = Object.assign({}, preset.graph);
+  if (!preset.applyForces) {
+    for (const key of FORCE_KEYS) delete graphOptions[key];
+  }
+  return graphOptions;
+}
+
+function forceOptionsFromGraph(graphOptions) {
+  const forces = {};
+  for (const key of FORCE_KEYS) {
+    if (graphOptions[key] !== undefined) forces[key] = graphOptions[key];
+  }
+  return forces;
+}
+
 // id, label, emoji, palette colors[], forces, background[3], theme colors
-function P(id, label, emoji, colors, forces, bg, theme) {
+function P(id, label, emoji, colors, forces, bg, theme, options) {
   const palette = {
     id, bg1: bg[0], bg2: bg[1], bg3: bg[2],
     circle: theme.circle, fill: theme.fill, tag: theme.tag,
@@ -164,6 +194,7 @@ function P(id, label, emoji, colors, forces, bg, theme) {
   return {
     id, label, emoji, colors,
     swatch: colors.length ? colors : [theme.circle, theme.fill, theme.tag, theme.line],
+    applyForces: !!(options && options.applyForces),
     graph: graph(forces || {}),
     palette,
   };
@@ -187,7 +218,7 @@ function presetFromRaw(raw) {
     unresolved: mix(bgHex, '#ffffff', 0.1),
     filter: `brightness(${(1 + g / 280).toFixed(2)}) contrast(1.06) saturate(${(1 + g / 110).toFixed(2)})`,
   };
-  return P(raw.id, raw.label || 'Custom', '🎛️', colors, raw.forces || {}, bg, theme);
+  return P(raw.id, raw.label || 'Custom', '🎛️', colors, raw.forces || {}, bg, theme, { applyForces: true });
 }
 
 const DEFAULT_CUSTOM = {
@@ -311,6 +342,10 @@ class StylerView extends ItemView {
 
   presetButton(parent, preset, onDelete) {
     const btn = parent.createEl('button', { cls: 'gs-btn' });
+    const active = this.plugin.currentPreset && this.plugin.currentPreset.id === preset.id;
+    btn.toggleClass('is-active', !!active);
+    btn.setAttr('aria-pressed', active ? 'true' : 'false');
+    btn.setAttr('aria-label', `${preset.label}${active ? ` (${L.active})` : ''}`);
     const swatch = btn.createSpan({ cls: 'gs-swatch' });
     for (const color of preset.swatch) {
       const dot = swatch.createSpan({ cls: 'gs-dot' });
@@ -334,6 +369,8 @@ class StylerView extends ItemView {
     c.createEl('p', { text: L.desc, cls: 'setting-item-description' });
 
     // built-in presets
+    c.createEl('div', { cls: 'gs-section', text: L.themes });
+    c.createEl('p', { text: L.physicsNote, cls: 'gs-note' });
     const list = c.createDiv({ cls: 'gs-list' });
     for (const key of Object.keys(PRESETS)) this.presetButton(list, PRESETS[key]);
 
@@ -348,7 +385,9 @@ class StylerView extends ItemView {
     }
 
     const restore = c.createEl('button', { cls: 'gs-restore', text: L.restore });
+    restore.setAttr('title', L.restoreNote);
     restore.onclick = () => this.plugin.restore();
+    c.createEl('p', { text: L.restoreNote, cls: 'gs-note gs-restore-note' });
 
     this.buildCustomize(c);
 
@@ -366,6 +405,7 @@ class StylerView extends ItemView {
     details.open = this.plugin.customizeOpen;
     details.addEventListener('toggle', () => { this.plugin.customizeOpen = details.open; });
     details.createEl('summary', { text: L.customize });
+    details.createEl('p', { text: L.customizeNote, cls: 'gs-note' });
 
     // group colors
     const colorRow = details.createDiv({ cls: 'gs-row' });
@@ -446,11 +486,16 @@ module.exports = class GraphStyler extends Plugin {
   async onload() {
     this.settings = Object.assign({ custom: [] }, await this.loadData());
     if (!Array.isArray(this.settings.custom)) this.settings.custom = [];
+    this.currentForceOptions = {};
+    try {
+      this.currentForceOptions = forceOptionsFromGraph(JSON.parse(await this.app.vault.adapter.read(this.graphPath())));
+    } catch (_) { /* graph.json may not exist yet */ }
     this.draft = {
       colors: [...DEFAULT_CUSTOM.colors], bg: DEFAULT_CUSTOM.bg,
       glow: DEFAULT_CUSTOM.glow, forces: { ...DEFAULT_CUSTOM.forces }, name: '',
     };
     this.customizeOpen = false;
+    this.currentPreset = null;
 
     this.registerView(VIEW_TYPE, (leaf) => new StylerView(leaf, this));
     this.addRibbonIcon('palette', 'Graph Styler', () => this.activateView());
@@ -467,7 +512,6 @@ module.exports = class GraphStyler extends Plugin {
         callback: () => this.applyPreset(preset),
       });
     }
-
     // 폴더 구조가 바뀌면 색-그룹 캐시 무효화
     const invalidate = () => { this._queries = null; };
     this.registerEvent(this.app.vault.on('create', invalidate));
@@ -586,7 +630,7 @@ module.exports = class GraphStyler extends Plugin {
     const live = !!(opts && opts.silent);
     try {
       await this.backupOnce();
-      const graphOptions = Object.assign({}, preset.graph);
+      const graphOptions = graphOptionsForPreset(preset);
       if (preset.colors.length === 0) {
         graphOptions.colorGroups = [];                 // mono: 강제 단색
       } else {
@@ -600,6 +644,9 @@ module.exports = class GraphStyler extends Plugin {
       const merged = await this.writeGraph(graphOptions);
       await this.installSnippet(preset.id, css);          // 리로드 영속용
       await this.reloadGraph(merged, live);
+      this.currentForceOptions = forceOptionsFromGraph(merged);
+      this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, graphOptions) });
+      if (!live) this.refreshViews();
       if (!live) new Notice(L.applied(preset));
     } catch (e) {
       console.error('[graph-styler] apply failed', e);
@@ -691,11 +738,13 @@ module.exports = class GraphStyler extends Plugin {
   previewLive(preset) {
     this.ensureLiveStyle();
     this.liveStyle.textContent = makeGlowCss(preset.palette);
-    const graphOptions = Object.assign({}, preset.graph);
+    const graphOptions = graphOptionsForPreset(preset);
     if (preset.colors.length) {
       const queries = this.getColorQueries(preset.colors.length);
       if (queries.length) graphOptions.colorGroups = makeGroups(queries, preset.colors);
     }
+    if (preset.applyForces) this.currentForceOptions = forceOptionsFromGraph(graphOptions);
+    this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, graphOptions) });
     const leaves = this.app.workspace
       .getLeavesOfType('graph')
       .concat(this.app.workspace.getLeavesOfType('localgraph'));
@@ -717,6 +766,7 @@ module.exports = class GraphStyler extends Plugin {
       new Notice(L.noBackup);
       return;
     }
+    if (typeof window.confirm === 'function' && !window.confirm(L.restoreConfirm)) return;
     const original = await adapter.read(bak);
     await adapter.write(this.graphPath(), original);
     this.setActiveSnippet('__none__');
@@ -727,7 +777,10 @@ module.exports = class GraphStyler extends Plugin {
     } catch (_) {
       originalOptions = {};
     }
+    this.currentForceOptions = forceOptionsFromGraph(originalOptions);
+    this.currentPreset = null;
     await this.reloadGraph(originalOptions);
+    this.refreshViews();
     new Notice(L.restored);
   }
 };
