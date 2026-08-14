@@ -21,7 +21,7 @@ Obsidian's graph looks amazing in screenshots — but getting there means diggin
 ## Presets
 ⚡ Neon · 🌌 Galaxy · 🌠 Aurora · 🌅 Sunset · 🌴 Vaporwave · 🌊 Ocean · 🌲 Forest · 🍬 Candy · ✨ Gold · 👾 Cyberpunk · ❄️ Nord · 🧛 Dracula · 🐈 Catppuccin · ⚪ Mono
 
-Each built-in preset applies node/group colors, visual sizing, and a glow CSS snippet while preserving your current force settings. Custom presets can explicitly save force/size values.
+Each built-in preset applies node/group colors and a glow CSS snippet while preserving your current force and visual size settings. Custom presets can explicitly save force/size values.
 
 **Make your own.** Open **🎛️ Customize** in the panel — drag the force/size sliders (repel, link distance, node size…) and pick colors, watch the graph update live, then **💾 Save as preset**. Customization changes graph physics; save it only when you want a reusable custom preset. Your presets show up under *My presets* and persist.
 
