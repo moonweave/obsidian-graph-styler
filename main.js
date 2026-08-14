@@ -30,7 +30,7 @@ const STRINGS = {
     title: '🎨 Graph Styler',
     desc: 'Tap a preset — colors and glow change instantly while your current graph physics stays unchanged.',
     themes: 'Themes',
-    physicsNote: 'Built-in themes change color, glow, and visual sizing only. Your force settings stay unchanged.',
+    physicsNote: 'Built-in themes change color, glow, and group styling only. Your graph physics and visual size settings stay unchanged.',
     restore: '↩︎ Restore original',
     restoreNote: 'Restore returns to the graph settings saved before Graph Styler first changed this vault.',
     restoreConfirm: 'Restore the graph settings saved before Graph Styler first changed this vault? Changes made since then will be overwritten.',
@@ -60,7 +60,7 @@ const STRINGS = {
     title: '🎨 Graph Styler',
     desc: '프리셋을 누르면 색과 글로우가 바로 바뀌고, 현재 그래프 물리는 그대로 유지됩니다.',
     themes: '테마',
-    physicsNote: '기본 테마는 색·글로우·표현만 바꾸고 현재 그래프 물리는 유지합니다.',
+    physicsNote: '기본 테마는 색·글로우·그룹 스타일만 바꾸고 현재 그래프 물리·크기 설정은 유지합니다.',
     restore: '↩︎ 원래대로 되돌리기',
     restoreNote: '되돌리기는 Graph Styler가 이 vault를 처음 변경하기 전에 저장한 그래프 설정으로 돌아갑니다.',
     restoreConfirm: 'Graph Styler가 이 vault를 처음 적용하기 전의 그래프 설정으로 되돌릴까요? 그 이후의 변경은 덮어써집니다.',
@@ -147,6 +147,11 @@ const BASE_GRAPH = {
   'collapse-color-groups': false, 'collapse-display': false, 'collapse-forces': false,
 };
 
+const CUSTOM_GRAPH_KEYS = [
+  'textFadeMultiplier', 'nodeSizeMultiplier', 'lineSizeMultiplier',
+  'centerStrength', 'repelStrength', 'linkStrength', 'linkDistance',
+];
+
 function pick(value, fallback) {
   return value === undefined ? fallback : value;
 }
@@ -167,14 +172,6 @@ function graph(o) {
 
 const FORCE_KEYS = ['centerStrength', 'repelStrength', 'linkStrength', 'linkDistance'];
 
-function graphOptionsForPreset(preset) {
-  const graphOptions = Object.assign({}, preset.graph);
-  if (!preset.applyForces) {
-    for (const key of FORCE_KEYS) delete graphOptions[key];
-  }
-  return graphOptions;
-}
-
 function forceOptionsFromGraph(graphOptions) {
   const forces = {};
   for (const key of FORCE_KEYS) {
@@ -183,7 +180,18 @@ function forceOptionsFromGraph(graphOptions) {
   return forces;
 }
 
-// id, label, emoji, palette colors[], forces, background[3], theme colors
+// Built-in presets are visual-only. Custom presets explicitly opt into saved forces.
+function graphOptionsForPreset(preset) {
+  // Built-in presets are visual-only. Their graph values are kept as
+  // reference data for customisation, but must not be sent to Obsidian.
+  if (!preset.applyForces) return {};
+  return CUSTOM_GRAPH_KEYS.reduce((options, key) => {
+    if (preset.graph[key] !== undefined) options[key] = preset.graph[key];
+    return options;
+  }, {});
+}
+
+// id, label, emoji, palette colors[], forces, background[3], theme colors, options
 function P(id, label, emoji, colors, forces, bg, theme, options) {
   const palette = {
     id, bg1: bg[0], bg2: bg[1], bg3: bg[2],
@@ -204,21 +212,46 @@ function safeHex(hex, fallback) {
   return typeof hex === 'string' && /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : fallback;
 }
 
+function finiteRange(value, fallback, min, max) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
+function safePresetId(id) {
+  const rawId = typeof id === 'string' ? id.trim() : '';
+  const safe = rawId.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  return safe || 'custom-invalid';
+}
+
 // 사용자 커스텀 raw({id,label,colors[4],bg,glow,forces}) → 프리셋으로 재구성.
 // data.json 손편집 대비 hex 검증.
 function presetFromRaw(raw) {
-  const colors = (raw.colors || []).map((c, i) => safeHex(c, DEFAULT_CUSTOM.colors[i] || '#8899aa'));
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const sourceColors = Array.isArray(source.colors) ? source.colors.slice(0, 4) : [];
+  const colors = sourceColors.map((c, i) => safeHex(c, DEFAULT_CUSTOM.colors[i] || '#8899aa'));
   while (colors.length < 4) colors.push('#8899aa');
-  const bgHex = safeHex(raw.bg, DEFAULT_CUSTOM.bg);
+  const bgHex = safeHex(source.bg, DEFAULT_CUSTOM.bg);
   const bg = [mix(bgHex, colors[0], 0.2), mix(bgHex, colors[0], 0.08), bgHex];
-  const g = Number(raw.glow) || 0;
+  const g = finiteRange(source.glow, DEFAULT_CUSTOM.glow, 0, 100);
+  const sourceForces = source.forces && typeof source.forces === 'object' && !Array.isArray(source.forces)
+    ? source.forces : {};
+  const forces = {
+    node: finiteRange(sourceForces.node, DEFAULT_CUSTOM.forces.node, 0.3, 4),
+    repel: finiteRange(sourceForces.repel, DEFAULT_CUSTOM.forces.repel, 0, 20),
+    dist: finiteRange(sourceForces.dist, DEFAULT_CUSTOM.forces.dist, 30, 500),
+    center: finiteRange(sourceForces.center, DEFAULT_CUSTOM.forces.center, 0, 1),
+    linkS: finiteRange(sourceForces.linkS, DEFAULT_CUSTOM.forces.linkS, 0, 1),
+    line: finiteRange(sourceForces.line, DEFAULT_CUSTOM.forces.line, 0.1, 2),
+    fade: finiteRange(sourceForces.fade, DEFAULT_CUSTOM.forces.fade, 0, 3),
+  };
   const theme = {
     circle: colors[0], fill: colors[1], tag: colors[2],
     line: mix(colors[0], bgHex, 0.55), text: lighten(colors[0], 0.72),
     unresolved: mix(bgHex, '#ffffff', 0.1),
     filter: `brightness(${(1 + g / 280).toFixed(2)}) contrast(1.06) saturate(${(1 + g / 110).toFixed(2)})`,
   };
-  return P(raw.id, raw.label || 'Custom', '🎛️', colors, raw.forces || {}, bg, theme, { applyForces: true });
+  const label = typeof source.label === 'string' ? source.label.trim() : 'Custom';
+  return P(safePresetId(source.id), label || 'Custom', '🎛️', colors, forces, bg, theme, { applyForces: true });
 }
 
 const DEFAULT_CUSTOM = {
@@ -228,6 +261,25 @@ const DEFAULT_CUSTOM = {
   forces: { node: 2.2, repel: 17, dist: 140, center: 0.05, linkS: 0.2, line: 0.3, fade: 1.2 },
 };
 
+function draftFromGraph(options) {
+  const o = options || {};
+  return {
+    colors: [...DEFAULT_CUSTOM.colors],
+    bg: DEFAULT_CUSTOM.bg,
+    glow: DEFAULT_CUSTOM.glow,
+    forces: {
+      node: pick(o.nodeSizeMultiplier, DEFAULT_CUSTOM.forces.node),
+      repel: pick(o.repelStrength, DEFAULT_CUSTOM.forces.repel),
+      dist: pick(o.linkDistance, DEFAULT_CUSTOM.forces.dist),
+      center: pick(o.centerStrength, DEFAULT_CUSTOM.forces.center),
+      linkS: pick(o.linkStrength, DEFAULT_CUSTOM.forces.linkS),
+      line: pick(o.lineSizeMultiplier, DEFAULT_CUSTOM.forces.line),
+      fade: pick(o.textFadeMultiplier, DEFAULT_CUSTOM.forces.fade),
+    },
+    name: '',
+  };
+}
+
 const PRESETS = {
   neon: P('neon', 'Neon', '⚡',
     ['#7dd3fc', '#34d399', '#fbbf24', '#f472b6'], { node: 2.4, repel: 18, dist: 140 },
@@ -236,11 +288,11 @@ const PRESETS = {
       filter: 'brightness(1.25) contrast(1.15) saturate(1.5)' }),
 
   galaxy: P('galaxy', 'Galaxy', '🌌',
-    ['#a5b4fc', '#c4b5fd', '#f0abfc', '#fda4af'],
+    ['#93c5fd', '#a78bfa', '#e879f9', '#fb7185'],
     { node: 1.8, repel: 20, dist: 200, center: 0.05, linkS: 0.12, fade: 1.6 },
-    ['rgba(40,30,70,0.9)', 'rgba(20,16,40,0.97)', '#070512'],
-    { circle: '#a5b4fc', fill: '#c4b5fd', tag: '#f0abfc', line: '#3b2f63', text: '#e9e5ff',
-      unresolved: '#241b3a', filter: 'brightness(1.3) contrast(1.1) saturate(1.4)' }),
+    ['rgba(48,40,86,0.9)', 'rgba(25,24,55,0.97)', '#0b0b1f'],
+    { circle: '#bfdbfe', fill: '#a78bfa', tag: '#e879f9', line: '#51447d', text: '#f3f0ff',
+      unresolved: '#2b2545', filter: 'brightness(1.28) contrast(1.12) saturate(1.25)' }),
 
   aurora: P('aurora', 'Aurora', '🌠',
     ['#6ee7b7', '#5eead4', '#67e8f9', '#a78bfa'],
@@ -262,17 +314,17 @@ const PRESETS = {
       unresolved: '#241033', filter: 'brightness(1.35) contrast(1.1) saturate(1.6)' }),
 
   ocean: P('ocean', 'Ocean', '🌊',
-    ['#38bdf8', '#22d3ee', '#2dd4bf', '#818cf8'], { node: 2.1, repel: 17, dist: 150 },
+    ['#38bdf8', '#14b8a6', '#06b6d4', '#a78bfa'], { node: 2.1, repel: 17, dist: 150 },
     ['rgba(6,32,51,0.92)', 'rgba(4,22,42,0.97)', '#020a16'],
-    { circle: '#38bdf8', fill: '#22d3ee', tag: '#818cf8', line: '#1f4d6b', text: '#d6f1ff',
-      unresolved: '#0c2030', filter: 'brightness(1.2) contrast(1.12) saturate(1.45)' }),
+    { circle: '#67e8f9', fill: '#0ea5e9', tag: '#a78bfa', line: '#245b78', text: '#dff6ff',
+      unresolved: '#0c2030', filter: 'brightness(1.2) contrast(1.14) saturate(1.35)' }),
 
   forest: P('forest', 'Forest', '🌲',
-    ['#a3e635', '#22c55e', '#2dd4bf', '#facc15'],
+    ['#84cc16', '#16a34a', '#2dd4bf', '#eab308'],
     { node: 2.0, repel: 13, dist: 115, center: 0.08, linkS: 0.35 },
     ['rgba(17,36,15,0.92)', 'rgba(12,26,11,0.97)', '#060d06'],
-    { circle: '#a3e635', fill: '#22c55e', tag: '#facc15', line: '#2f5a2a', text: '#e6ffd6',
-      unresolved: '#16240f', filter: 'brightness(1.2) contrast(1.1) saturate(1.4)' }),
+    { circle: '#84cc16', fill: '#16a34a', tag: '#eab308', line: '#315a2a', text: '#e8ffd8',
+      unresolved: '#16240f', filter: 'brightness(1.12) contrast(1.08) saturate(1.25)' }),
 
   candy: P('candy', 'Candy', '🍬',
     ['#f9a8d4', '#a7f3d0', '#c4b5fd', '#fde68a'],
@@ -294,11 +346,11 @@ const PRESETS = {
       unresolved: '#07140d', filter: 'brightness(1.4) contrast(1.25) saturate(1.7)' }),
 
   nord: P('nord', 'Nord', '❄️',
-    ['#88c0d0', '#81a1c1', '#a3be8c', '#b48ead'],
+    ['#88c0d0', '#5e81ac', '#a3be8c', '#b48ead'],
     { node: 2.0, repel: 16, dist: 145, fade: 1.3 },
     ['rgba(46,52,64,0.92)', 'rgba(40,46,58,0.97)', '#21262f'],
-    { circle: '#88c0d0', fill: '#a3be8c', tag: '#b48ead', line: '#434c5e', text: '#e5e9f0',
-      unresolved: '#3b4252', filter: 'brightness(1.12) contrast(1.05) saturate(1.15)' }),
+    { circle: '#88c0d0', fill: '#a3be8c', tag: '#b48ead', line: '#56657a', text: '#eceff4',
+      unresolved: '#434c5e', filter: 'brightness(1.16) contrast(1.08) saturate(1.2)' }),
 
   dracula: P('dracula', 'Dracula', '🧛',
     ['#bd93f9', '#ff79c6', '#50fa7b', '#8be9fd'], { node: 2.2, repel: 17, dist: 150 },
@@ -307,10 +359,10 @@ const PRESETS = {
       unresolved: '#383a4a', filter: 'brightness(1.18) contrast(1.08) saturate(1.3)' }),
 
   catppuccin: P('catppuccin', 'Catppuccin', '🐈',
-    ['#cba6f7', '#f5c2e7', '#a6e3a1', '#89dceb'], { node: 2.1, repel: 16, dist: 145 },
+    ['#cba6f7', '#f38ba8', '#a6e3a1', '#89b4fa'], { node: 2.1, repel: 16, dist: 145 },
     ['rgba(49,50,68,0.92)', 'rgba(30,30,46,0.97)', '#181825'],
-    { circle: '#89dceb', fill: '#a6e3a1', tag: '#f5c2e7', line: '#45475a', text: '#cdd6f4',
-      unresolved: '#313244', filter: 'brightness(1.15) contrast(1.05) saturate(1.2)' }),
+    { circle: '#89b4fa', fill: '#a6e3a1', tag: '#f38ba8', line: '#585b70', text: '#dce3f7',
+      unresolved: '#45475a', filter: 'brightness(1.16) contrast(1.08) saturate(1.2)' }),
 
   mono: P('mono', 'Mono', '⚪',
     [], { tags: false, node: 1.6, repel: 12, dist: 100, center: 0.1, linkS: 0.4, fade: 1.0, line: 0.2 },
@@ -323,6 +375,12 @@ const SLIDERS = [
   ['node', 0.3, 4, 0.1], ['repel', 0, 20, 0.5], ['dist', 30, 500, 5],
   ['center', 0, 1, 0.02], ['linkS', 0, 1, 0.02], ['line', 0.1, 2, 0.05], ['fade', 0, 3, 0.1],
 ];
+
+function sliderStep(value, min, step) {
+  const offset = (Number(value) - min) / step;
+  return Number.isFinite(offset) && Math.abs(offset - Math.round(offset)) < 1e-9
+    ? String(step) : 'any';
+}
 
 class StylerView extends ItemView {
   constructor(leaf, plugin) {
@@ -450,7 +508,7 @@ class StylerView extends ItemView {
     input.type = 'range';
     input.min = String(min);
     input.max = String(max);
-    input.step = String(step);
+    input.step = sliderStep(value, min, step);
     input.value = String(value);
     input.oninput = () => { onChange(Number(input.value)); this.schedulePreview(); };
     return input;
@@ -490,10 +548,7 @@ module.exports = class GraphStyler extends Plugin {
     try {
       this.currentForceOptions = forceOptionsFromGraph(JSON.parse(await this.app.vault.adapter.read(this.graphPath())));
     } catch (_) { /* graph.json may not exist yet */ }
-    this.draft = {
-      colors: [...DEFAULT_CUSTOM.colors], bg: DEFAULT_CUSTOM.bg,
-      glow: DEFAULT_CUSTOM.glow, forces: { ...DEFAULT_CUSTOM.forces }, name: '',
-    };
+    this.draft = draftFromGraph(await this.readGraphOptions());
     this.customizeOpen = false;
     this.currentPreset = null;
 
@@ -517,6 +572,20 @@ module.exports = class GraphStyler extends Plugin {
     this.registerEvent(this.app.vault.on('create', invalidate));
     this.registerEvent(this.app.vault.on('delete', invalidate));
     this.registerEvent(this.app.vault.on('rename', invalidate));
+  }
+
+  async onunload() {
+    try {
+      if (this._applying && this._applyIdle) await this._applyIdle;
+      await this.setActiveSnippet('__none__');
+    } catch (e) {
+      console.warn('[graph-styler] style cleanup on unload skipped', e);
+    }
+    if (this.liveStyle) {
+      this.liveStyle.textContent = '';
+      this.liveStyle.remove();
+      this.liveStyle = null;
+    }
   }
 
   async activateView() {
@@ -547,27 +616,92 @@ module.exports = class GraphStyler extends Plugin {
   async deleteCustom(id) {
     this.settings.custom = this.settings.custom.filter((r) => r.id !== id);
     await this.saveData(this.settings);
+    const customCss = this.app.customCss;
+    if (customCss && customCss.setCssEnabledStatus) {
+      customCss.setCssEnabledStatus(`graph-styler-${safePresetId(id)}`, false);
+    }
+    await this.removeCustomSnippet(id);
     this.refreshViews();
     new Notice(L.deleted);
+  }
+
+  async removeCustomSnippet(id) {
+    const adapter = this.app.vault.adapter;
+    const path = `${this.app.vault.configDir}/snippets/graph-styler-${safePresetId(id)}.css`;
+    try {
+      if (!(await adapter.exists(path))) return;
+      if (typeof adapter.trash === 'function') {
+        try {
+          await adapter.trash(path);
+          return;
+        } catch (_) { /* fall back to adapter removal below */ }
+      }
+      if (typeof adapter.remove === 'function') await adapter.remove(path);
+    } catch (e) {
+      console.warn('[graph-styler] generated snippet cleanup skipped', e);
+    }
   }
 
   graphPath() {
     return `${this.app.vault.configDir}/graph.json`;
   }
 
-  snippetIds() {
+  async readGraphOptions() {
+    try {
+      return JSON.parse(await this.app.vault.adapter.read(this.graphPath()));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  async readGraphSnapshot() {
+    try {
+      return { exists: true, contents: await this.app.vault.adapter.read(this.graphPath()) };
+    } catch (_) {
+      return { exists: false, contents: null };
+    }
+  }
+
+  async snippetIds() {
     const ids = new Set(Object.keys(PRESETS));
     ids.add(LIVE_ID);
     for (const r of this.settings.custom || []) ids.add(r.id);
+    const adapter = this.app.vault.adapter;
+    const dir = `${this.app.vault.configDir}/snippets`;
+    if (adapter && typeof adapter.list === 'function') {
+      try {
+        const listing = await adapter.list(dir);
+        const prefix = `${dir}/graph-styler-`;
+        for (const filePath of listing.files || []) {
+          if (!filePath.startsWith(prefix) || !filePath.endsWith('.css')) continue;
+          const id = filePath.slice(prefix.length, -'.css'.length);
+          if (id) ids.add(id);
+        }
+      } catch (_) { /* snippets directory may not exist yet */ }
+    }
     return ids;
   }
 
-  setActiveSnippet(activeId) {
+  async setActiveSnippet(activeId) {
     const customCss = this.app.customCss;
     if (!customCss || !customCss.setCssEnabledStatus) return;
-    const ids = this.snippetIds();
-    ids.add(activeId);
+    const ids = await this.snippetIds();
+    if (activeId && activeId !== '__none__') ids.add(activeId);
     for (const id of ids) customCss.setCssEnabledStatus(`graph-styler-${id}`, id === activeId);
+    await this.removeSentinelSnippet();
+  }
+
+  async removeSentinelSnippet() {
+    const adapter = this.app.vault.adapter;
+    const path = `${this.app.vault.configDir}/appearance.json`;
+    try {
+      const appearance = JSON.parse(await adapter.read(path));
+      if (!Array.isArray(appearance.enabledCssSnippets)) return;
+      const enabled = appearance.enabledCssSnippets.filter((id) => id !== 'graph-styler-__none__');
+      if (enabled.length === appearance.enabledCssSnippets.length) return;
+      appearance.enabledCssSnippets = enabled;
+      await adapter.write(path, JSON.stringify(appearance, null, 2));
+    } catch (_) { /* appearance.json may be unavailable during startup */ }
   }
 
   // 노트가 많은 폴더 순
@@ -612,8 +746,14 @@ module.exports = class GraphStyler extends Plugin {
 
   // 빠른 연속 호출(라이브 드래그)을 직렬화 → graph.json 동시쓰기 레이스 방지 (latest-wins)
   async applyPreset(preset, opts) {
-    if (this._applying) { this._next = [preset, opts]; return; }
+    if (this._applying) {
+      this._next = [preset, opts];
+      return this._applyIdle;
+    }
     this._applying = true;
+    let resolveIdle;
+    const idle = new Promise((resolve) => { resolveIdle = resolve; });
+    this._applyIdle = idle;
     try {
       await this._doApply(preset, opts);
     } finally {
@@ -621,9 +761,11 @@ module.exports = class GraphStyler extends Plugin {
       if (this._next) {
         const [p, o] = this._next;
         this._next = null;
-        this.applyPreset(p, o);
+        await this.applyPreset(p, o);
       }
+      resolveIdle();
     }
+    return idle;
   }
 
   async _doApply(preset, opts) {
@@ -640,10 +782,14 @@ module.exports = class GraphStyler extends Plugin {
       }
       const css = makeGlowCss(preset.palette);
       this.ensureLiveStyle();
-      this.liveStyle.textContent = css;                  // 즉시 시각 반영(파일 워처 대기 안 함)
       const merged = await this.writeGraph(graphOptions);
+      this.liveStyle.textContent = css;                  // graph.json 확정 뒤 즉시 시각 반영
       await this.installSnippet(preset.id, css);          // 리로드 영속용
-      await this.reloadGraph(merged, live);
+      // Built-ins may update colors in the live engine, but never send force
+      // keys. Custom presets explicitly opt into the full force update.
+      if (Object.keys(graphOptions).length) {
+        await this.reloadGraph(graphOptions, live, true, preset.applyForces);
+      }
       this.currentForceOptions = forceOptionsFromGraph(merged);
       this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, graphOptions) });
       if (!live) this.refreshViews();
@@ -666,15 +812,23 @@ module.exports = class GraphStyler extends Plugin {
 
   async writeGraph(graphOptions) {
     const adapter = this.app.vault.adapter;
-    let current = {};
-    try {
-      current = JSON.parse(await adapter.read(this.graphPath()));
-    } catch (_) {
-      current = {};
+    const maxAttempts = 2;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const before = await this.readGraphSnapshot();
+      let current = {};
+      try {
+        if (before.exists) current = JSON.parse(before.contents);
+      } catch (_) {
+        current = {};
+      }
+      const merged = Object.assign({}, current, graphOptions);
+      const after = await this.readGraphSnapshot();
+      const unchanged = before.exists === after.exists && before.contents === after.contents;
+      if (!unchanged) continue;
+      await adapter.write(this.graphPath(), JSON.stringify(merged, null, 2));
+      return merged;
     }
-    const merged = Object.assign(current, graphOptions);
-    await adapter.write(this.graphPath(), JSON.stringify(merged, null, 2));
-    return merged;
+    throw new Error('graph.json changed while applying preset');
   }
 
   async installSnippet(presetId, css) {
@@ -688,14 +842,14 @@ module.exports = class GraphStyler extends Plugin {
       const customCss = this.app.customCss;
       // 전체 재스캔(readSnippets)은 파일을 새로 만들 때만 — registry 등록용. 재적용은 스킵.
       if (isNew && customCss && customCss.readSnippets) await customCss.readSnippets();
-      this.setActiveSnippet(presetId);
+      await this.setActiveSnippet(presetId);
     } catch (e) {
       console.warn('[graph-styler] snippet enable failed; toggle it in Settings → CSS snippets', e);
     }
   }
 
   // engineOnly=true (라이브 드래그): 엔진 직접 갱신만, leaf 리로드(깜빡임) 스킵
-  async reloadGraph(graphOptions, engineOnly) {
+  async reloadGraph(graphOptions, engineOnly, shouldRender = true, syncView = false) {
     const leaves = this.app.workspace
       .getLeavesOfType('graph')
       .concat(this.app.workspace.getLeavesOfType('localgraph'));
@@ -709,7 +863,12 @@ module.exports = class GraphStyler extends Plugin {
       if (engine && typeof engine.setOptions === 'function') {
         try {
           engine.setOptions(graphOptions);
-          if (typeof engine.render === 'function') engine.render();
+          if (shouldRender && typeof engine.render === 'function') engine.render();
+          if (syncView && !engineOnly) {
+            const state = leaf.getViewState();
+            await leaf.setViewState({ type: 'empty' });
+            await leaf.setViewState(state);
+          }
           continue;
         } catch (e) {
           console.warn('[graph-styler] engine.setOptions failed → reloading leaf', e);
@@ -753,13 +912,15 @@ module.exports = class GraphStyler extends Plugin {
       if (engine && typeof engine.setOptions === 'function') {
         try {
           engine.setOptions(graphOptions);
-          if (typeof engine.render === 'function') engine.render();
+          if ((preset.applyForces || graphOptions.colorGroups)
+            && typeof engine.render === 'function') engine.render();
         } catch (_) { /* engine API drift — preview just skips */ }
       }
     }
   }
 
   async restore() {
+    if (this._applying && this._applyIdle) await this._applyIdle;
     const adapter = this.app.vault.adapter;
     const bak = `${this.graphPath()}.styler-bak`;
     if (!(await adapter.exists(bak))) {
@@ -769,7 +930,7 @@ module.exports = class GraphStyler extends Plugin {
     if (typeof window.confirm === 'function' && !window.confirm(L.restoreConfirm)) return;
     const original = await adapter.read(bak);
     await adapter.write(this.graphPath(), original);
-    this.setActiveSnippet('__none__');
+    await this.setActiveSnippet('__none__');
     if (this.liveStyle) this.liveStyle.textContent = '';
     let originalOptions = {};
     try {

@@ -98,7 +98,7 @@ async function apply(applyForces) {
   assert.strictEqual(visualOnly.graph.repelStrength, 13);
   assert.strictEqual(visualOnly.graph.linkStrength, 0.23);
   assert.strictEqual(visualOnly.graph.linkDistance, 333);
-  assert.strictEqual(visualOnly.graph.nodeSizeMultiplier, 2.1);
+  assert.strictEqual(visualOnly.graph.nodeSizeMultiplier, 1.4);
   assert.strictEqual(visualOnly.graph.colorGroups[0].query, 'path:"notes"');
   assert.strictEqual(visualOnly.graph.colorGroups[0].color.rgb, parseInt('38bdf8', 16));
   assert.strictEqual(visualOnly.currentPreset.graph.centerStrength, undefined);
