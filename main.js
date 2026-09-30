@@ -124,11 +124,11 @@ function makeGroups(queries, colors) {
 
 function makeGlowCss(p) {
   return `/* graph-styler :: ${p.id} (auto-generated) */
-.graph-view-content {
+.theme-dark .graph-view-content {
   background: radial-gradient(circle at 50% 42%, ${p.bg1} 0%, ${p.bg2} 48%, ${p.bg3} 100%) !important;
 }
-.workspace-leaf-content[data-type="graph"],
-.workspace-leaf-content[data-type="localgraph"] { background: ${p.bg3}; }
+.theme-dark .workspace-leaf-content[data-type="graph"],
+.theme-dark .workspace-leaf-content[data-type="localgraph"] { background: ${p.bg3}; }
 .theme-dark .graph-view.color-circle { color: ${p.circle}; }
 .theme-dark .graph-view.color-fill { color: ${p.fill}; }
 .theme-dark .graph-view.color-fill-tag { color: ${p.tag}; }
@@ -136,7 +136,7 @@ function makeGlowCss(p) {
 .theme-dark .graph-view.color-fill-focused { color: #ffffff; }
 .theme-dark .graph-view.color-line { color: ${p.line}; }
 .theme-dark .graph-view.color-text { color: ${p.text}; }
-.graph-view-content canvas { filter: ${p.filter}; }
+.theme-dark .graph-view-content canvas { filter: ${p.filter}; }
 `;
 }
 
@@ -552,6 +552,12 @@ module.exports = class GraphStyler extends Plugin {
     this.customizeOpen = false;
     this.currentPreset = null;
 
+    // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
+    const restoreSnippet = () => this.restoreActiveSnippet();
+    const workspace = this.app.workspace;
+    if (workspace && typeof workspace.onLayoutReady === 'function') workspace.onLayoutReady(restoreSnippet);
+    else restoreSnippet();
+
     this.registerView(VIEW_TYPE, (leaf) => new StylerView(leaf, this));
     this.addRibbonIcon('palette', 'Graph Styler', () => this.activateView());
     this.addCommand({
@@ -615,6 +621,7 @@ module.exports = class GraphStyler extends Plugin {
 
   async deleteCustom(id) {
     this.settings.custom = this.settings.custom.filter((r) => r.id !== id);
+    if (this.settings.activePreset === safePresetId(id)) this.settings.activePreset = null;
     await this.saveData(this.settings);
     const customCss = this.app.customCss;
     if (customCss && customCss.setCssEnabledStatus) {
@@ -689,6 +696,28 @@ module.exports = class GraphStyler extends Plugin {
     if (activeId && activeId !== '__none__') ids.add(activeId);
     for (const id of ids) customCss.setCssEnabledStatus(`graph-styler-${id}`, id === activeId);
     await this.removeSentinelSnippet();
+  }
+
+  async setActivePreset(id) {
+    if (this.settings.activePreset === id) return;
+    this.settings.activePreset = id;
+    try {
+      await this.saveData(this.settings);
+    } catch (e) {
+      console.warn('[graph-styler] active preset was not persisted', e);
+    }
+  }
+
+  async restoreActiveSnippet() {
+    const id = this.settings.activePreset;
+    if (typeof id !== 'string' || !id) return;
+    try {
+      const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
+      if (!(await this.app.vault.adapter.exists(path))) return;
+      await this.setActiveSnippet(id);
+    } catch (e) {
+      console.warn('[graph-styler] snippet restore skipped', e);
+    }
   }
 
   async removeSentinelSnippet() {
@@ -785,6 +814,7 @@ module.exports = class GraphStyler extends Plugin {
       const merged = await this.writeGraph(graphOptions);
       this.liveStyle.textContent = css;                  // graph.json 확정 뒤 즉시 시각 반영
       await this.installSnippet(preset.id, css);          // 리로드 영속용
+      await this.setActivePreset(preset.id);
       // Built-ins may update colors in the live engine, but never send force
       // keys. Custom presets explicitly opt into the full force update.
       if (Object.keys(graphOptions).length) {
@@ -804,10 +834,15 @@ module.exports = class GraphStyler extends Plugin {
     if (this._backedUp) return;
     const adapter = this.app.vault.adapter;
     const bak = `${this.graphPath()}.styler-bak`;
-    if (!(await adapter.exists(bak)) && (await adapter.exists(this.graphPath()))) {
-      await adapter.write(bak, await adapter.read(this.graphPath()));
+    if (await adapter.exists(bak)) {
+      this._backedUp = true;
+      return;
     }
-    this._backedUp = true;
+    // graph.json이 아직 없으면 표시하지 않음 — 이후 적용에서 다시 백업 시도
+    if (await adapter.exists(this.graphPath())) {
+      await adapter.write(bak, await adapter.read(this.graphPath()));
+      this._backedUp = true;
+    }
   }
 
   async writeGraph(graphOptions) {
@@ -931,6 +966,7 @@ module.exports = class GraphStyler extends Plugin {
     const original = await adapter.read(bak);
     await adapter.write(this.graphPath(), original);
     await this.setActiveSnippet('__none__');
+    await this.setActivePreset(null);
     if (this.liveStyle) this.liveStyle.textContent = '';
     let originalOptions = {};
     try {
