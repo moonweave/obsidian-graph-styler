@@ -506,6 +506,35 @@ async function backupWithoutGraphJson() {
     ({ enabled, saved }) => ({ enabled, saved })), { enabled: [], saved: [] });
   assert.deepStrictEqual((await loadPlugin({ data: { custom: [], resumeSnippet: 'neon' } })).enabled, []);
 
+  // A snippet written by an older version (dead .graph-view-content rules) is rewritten on load.
+  const olderSnippet = '/* graph-styler :: neon (auto-generated) */\n.theme-dark .graph-view-content { background: none; }\n';
+  const refreshed = await loadPlugin({
+    data: { custom: [], resumeSnippet: 'neon' },
+    snippets: { neon: 1 },
+    files: { '.obsidian/snippets/graph-styler-neon.css': olderSnippet },
+  });
+  const neonCss = refreshed.files['.obsidian/snippets/graph-styler-neon.css'];
+  assert.ok(neonCss.includes('graph-styler :: neon'));
+  assert.ok(neonCss.includes('.view-content > canvas'));
+  assert.ok(!neonCss.includes('graph-view-content'));
+  // Hand-edited files (no generated header) are left alone; CRLF-only differences are not rewritten.
+  const handEdited = await loadPlugin({
+    data: { custom: [], resumeSnippet: 'neon' },
+    snippets: { neon: 1 },
+    files: { '.obsidian/snippets/graph-styler-neon.css': '/* my own tweak */ .x { color: red; }' },
+  });
+  assert.strictEqual(handEdited.files['.obsidian/snippets/graph-styler-neon.css'], '/* my own tweak */ .x { color: red; }');
+  const crlf = refreshed.files['.obsidian/snippets/graph-styler-neon.css'].replace(/\n/g, '\r\n');
+  const crlfReload = await loadPlugin({
+    data: { custom: [], resumeSnippet: 'neon' },
+    snippets: { neon: 1 },
+    files: { '.obsidian/snippets/graph-styler-neon.css': crlf },
+  });
+  assert.strictEqual(crlfReload.files['.obsidian/snippets/graph-styler-neon.css'], crlf);
+  // A snippet that is not enabled is left alone.
+  const untouched = await loadPlugin({ data: { custom: [], resumeSnippet: null }, snippets: { neon: 1 } });
+  assert.strictEqual(untouched.files['.obsidian/snippets/graph-styler-neon.css'], 'generated');
+
   const unloadEnabled = await unloadWith(['graph-styler-neon']);
   assert.deepStrictEqual(unloadEnabled.saved, ['neon']);
   assert.strictEqual(unloadEnabled.calls['graph-styler-neon'], false);
@@ -545,11 +574,15 @@ async function backupWithoutGraphJson() {
   }
   const darkSelectors = selectors.filter((s) => s.startsWith('.theme-dark ')).map((s) => s.slice('.theme-dark '.length));
   const lightSelectors = selectors.filter((s) => s.startsWith('.theme-light ')).map((s) => s.slice('.theme-light '.length));
-  // The whole leaf (view header included) is painted in dark mode only.
-  const leafSelectors = ['.workspace-leaf-content[data-type="graph"]', '.workspace-leaf-content[data-type="localgraph"]'];
-  assert.deepStrictEqual(lightSelectors, darkSelectors.filter((s) => !leafSelectors.includes(s)));
-  assert.ok(leafSelectors.every((s) => darkSelectors.includes(s)));
-  assert.ok(darkSelectors.includes('.graph-view-content'));
+  assert.deepStrictEqual(lightSelectors, darkSelectors);
+  // The background and glow target the graph pane that exists in Obsidian 1.x (.view-content of a
+  // graph/localgraph leaf), never the whole leaf (view header) and never the absent .graph-view-content.
+  for (const type of ['graph', 'localgraph']) {
+    assert.ok(darkSelectors.includes(`.workspace-leaf-content[data-type="${type}"] .view-content`));
+    assert.ok(darkSelectors.includes(`.workspace-leaf-content[data-type="${type}"] .view-content > canvas`));
+    assert.ok(!darkSelectors.includes(`.workspace-leaf-content[data-type="${type}"]`));
+  }
+  assert.ok(!glowCss.includes('graph-view-content'));
   assert.ok(darkSelectors.includes('.graph-view.color-text'));
 
   // A vault without graph.json is on Obsidian defaults; Restore must return there.

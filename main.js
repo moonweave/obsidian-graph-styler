@@ -128,14 +128,21 @@ function themed(selector) {
   return `.theme-dark ${selector},\n.theme-light ${selector}`;
 }
 
+// Obsidian 1.x의 그래프 영역은 그래프·로컬 그래프 leaf의 .view-content다.
+// (.graph-view-content는 지금 앱에 없는 요소라 배경·필터가 적용되지 않았다.)
+// 창 제목줄은 건드리지 않는다.
+function graphPane(suffix) {
+  return ['graph', 'localgraph']
+    .map((type) => themed(`.workspace-leaf-content[data-type="${type}"] .view-content${suffix}`))
+    .join(',\n');
+}
+
+// 노드·선·글자 색은 렌더러가 body 아래에 잠깐 만드는 .graph-view.color-* 요소에서 읽는다.
 function makeGlowCss(p) {
   return `/* graph-styler :: ${p.id} (auto-generated) */
-${themed('.graph-view-content')} {
+${graphPane('')} {
   background: radial-gradient(circle at 50% 42%, ${p.bg1} 0%, ${p.bg2} 48%, ${p.bg3} 100%) !important;
 }
-/* 창 전체(제목줄 포함)는 어두운 테마에서만 — 밝은 테마의 제목줄 글자가 묻히지 않게 */
-.theme-dark .workspace-leaf-content[data-type="graph"],
-.theme-dark .workspace-leaf-content[data-type="localgraph"] { background: ${p.bg3}; }
 ${themed('.graph-view.color-circle')} { color: ${p.circle}; }
 ${themed('.graph-view.color-fill')} { color: ${p.fill}; }
 ${themed('.graph-view.color-fill-tag')} { color: ${p.tag}; }
@@ -143,7 +150,7 @@ ${themed('.graph-view.color-fill-unresolved')} { color: ${p.unresolved}; }
 ${themed('.graph-view.color-fill-focused')} { color: #ffffff; }
 ${themed('.graph-view.color-line')} { color: ${p.line}; }
 ${themed('.graph-view.color-text')} { color: ${p.text}; }
-${themed('.graph-view-content canvas')} { filter: ${p.filter}; }
+${graphPane(' > canvas')} { filter: ${p.filter}; }
 `;
 }
 
@@ -746,11 +753,33 @@ module.exports = class GraphStyler extends Plugin {
         const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
         if (await this.app.vault.adapter.exists(path)) await this.setActiveSnippet(id);
       }
+      const active = await this.enabledSnippetId();
+      if (active) await this.refreshSnippetFile(active);
     } catch (e) {
       console.warn('[graph-styler] snippet restore skipped', e);
     }
     // 한 번 쓰고 비운다. undefined → null 저장으로 0.1.7 이전 데이터의 추정도 한 번만 한다.
     await this.saveResumeSnippet(null);
+  }
+
+  // 이전 버전이 만든 스니펫 파일은 적용할 때의 CSS를 그대로 담고 있다. 생성 CSS가 바뀌었으면
+  // (0.1.9: 존재하지 않는 .graph-view-content 선택자 교체) 다시 적용하지 않아도 새 CSS를 쓴다.
+  async refreshSnippetFile(id) {
+    const preset = Object.values(PRESETS)
+      .concat((this.settings.custom || []).map((raw) => presetFromRaw(raw)))
+      .find((candidate) => candidate.id === id);
+    if (!preset) return;
+    const adapter = this.app.vault.adapter;
+    const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
+    const css = makeGlowCss(preset.palette);
+    if (!(await adapter.exists(path))) return;
+    const current = (await adapter.read(path)).replace(/\r\n/g, '\n');
+    // 사용자가 손으로 고친 파일(생성 머리말이 없음)은 건드리지 않는다.
+    if (current === css || !current.startsWith(`/* graph-styler :: ${id} (auto-generated) */`)) return;
+    await adapter.write(path, css);
+    const customCss = this.app.customCss;
+    if (customCss && typeof customCss.requestLoadSnippets === 'function') customCss.requestLoadSnippets();
+    else if (customCss && typeof customCss.readSnippets === 'function') await customCss.readSnippets();
   }
 
   // 0.1.7 이하는 업데이트 때 자기 onunload가 스니펫을 끄고 무엇을 껐는지 남기지 않았다.
