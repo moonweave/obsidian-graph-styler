@@ -122,21 +122,46 @@ function makeGroups(queries, colors) {
   }));
 }
 
+function sameJson(a, b) {
+  if (a === b) return true;
+  const canonical = (value) => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === 'object') {
+      return Object.keys(value).sort().reduce((out, key) => {
+        out[key] = canonical(value[key]);
+        return out;
+      }, {});
+    }
+    return value;
+  };
+  try {
+    return JSON.stringify(canonical(JSON.parse(a))) === JSON.stringify(canonical(JSON.parse(b)));
+  } catch (_) {
+    return false;
+  }
+}
+
+// 프리셋은 배경까지 포함한 한 벌의 룩 — 밝은 테마에서도 같은 모습으로 적용한다.
+// 테마 클래스를 앞에 붙이는 건 앱 기본 색 규칙보다 우선하기 위해서다.
+function themed(selector) {
+  return `.theme-dark ${selector},\n.theme-light ${selector}`;
+}
+
 function makeGlowCss(p) {
   return `/* graph-styler :: ${p.id} (auto-generated) */
-.theme-dark .graph-view-content {
+${themed('.graph-view-content')} {
   background: radial-gradient(circle at 50% 42%, ${p.bg1} 0%, ${p.bg2} 48%, ${p.bg3} 100%) !important;
 }
-.theme-dark .workspace-leaf-content[data-type="graph"],
-.theme-dark .workspace-leaf-content[data-type="localgraph"] { background: ${p.bg3}; }
-.theme-dark .graph-view.color-circle { color: ${p.circle}; }
-.theme-dark .graph-view.color-fill { color: ${p.fill}; }
-.theme-dark .graph-view.color-fill-tag { color: ${p.tag}; }
-.theme-dark .graph-view.color-fill-unresolved { color: ${p.unresolved}; }
-.theme-dark .graph-view.color-fill-focused { color: #ffffff; }
-.theme-dark .graph-view.color-line { color: ${p.line}; }
-.theme-dark .graph-view.color-text { color: ${p.text}; }
-.theme-dark .graph-view-content canvas { filter: ${p.filter}; }
+${themed('.workspace-leaf-content[data-type="graph"]')},
+${themed('.workspace-leaf-content[data-type="localgraph"]')} { background: ${p.bg3}; }
+${themed('.graph-view.color-circle')} { color: ${p.circle}; }
+${themed('.graph-view.color-fill')} { color: ${p.fill}; }
+${themed('.graph-view.color-fill-tag')} { color: ${p.tag}; }
+${themed('.graph-view.color-fill-unresolved')} { color: ${p.unresolved}; }
+${themed('.graph-view.color-fill-focused')} { color: #ffffff; }
+${themed('.graph-view.color-line')} { color: ${p.line}; }
+${themed('.graph-view.color-text')} { color: ${p.text}; }
+${themed('.graph-view-content canvas')} { filter: ${p.filter}; }
 `;
 }
 
@@ -709,6 +734,7 @@ module.exports = class GraphStyler extends Plugin {
   }
 
   async restoreActiveSnippet() {
+    if (this.settings.activePreset === undefined) await this.migrateActivePreset();
     const id = this.settings.activePreset;
     if (typeof id !== 'string' || !id) return;
     try {
@@ -718,6 +744,47 @@ module.exports = class GraphStyler extends Plugin {
     } catch (e) {
       console.warn('[graph-styler] snippet restore skipped', e);
     }
+  }
+
+  // 0.1.7 이하는 적용 중인 프리셋을 저장하지 않았고, 업데이트 때 그 버전의 onunload가
+  // 스니펫을 꺼 버린다. 적용할 때마다 스니펫 파일을 다시 쓰므로 가장 최근에 쓴 파일이
+  // 마지막으로 적용한 프리셋이다. 그 뒤 복원했다면(graph.json == 백업) 되살리지 않는다.
+  async migrateActivePreset() {
+    let found = null;
+    try {
+      const adapter = this.app.vault.adapter;
+      if (typeof adapter.stat === 'function' && typeof adapter.list === 'function') {
+        const dir = `${this.app.vault.configDir}/snippets`;
+        const prefix = `${dir}/graph-styler-`;
+        let newest = -1;
+        const listing = await adapter.list(dir);
+        for (const filePath of listing.files || []) {
+          if (!filePath.startsWith(prefix) || !filePath.endsWith('.css')) continue;
+          const id = filePath.slice(prefix.length, -'.css'.length);
+          if (!id || id === '__none__') continue;
+          const stat = await adapter.stat(filePath);
+          const mtime = stat && typeof stat.mtime === 'number' ? stat.mtime : -1;
+          if (mtime > newest) {
+            newest = mtime;
+            found = id;
+          }
+        }
+        if (found) {
+          const bak = `${this.graphPath()}.styler-bak`;
+          if (await adapter.exists(bak)) {
+            const graph = await this.readGraphSnapshot();
+            // Obsidian이 graph.json을 다시 저장하면 서식이 바뀌므로 내용으로 비교한다.
+            if (graph.exists && sameJson(graph.contents, await adapter.read(bak))) found = null;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[graph-styler] active preset migration skipped', e);
+      found = null;
+    }
+    // 되살릴 프리셋이 없으면 로드만으로 data.json을 쓰지 않는다.
+    if (found) await this.setActivePreset(found);
+    else this.settings.activePreset = null;
   }
 
   async removeSentinelSnippet() {
@@ -838,11 +905,12 @@ module.exports = class GraphStyler extends Plugin {
       this._backedUp = true;
       return;
     }
-    // graph.json이 아직 없으면 표시하지 않음 — 이후 적용에서 다시 백업 시도
-    if (await adapter.exists(this.graphPath())) {
-      await adapter.write(bak, await adapter.read(this.graphPath()));
-      this._backedUp = true;
-    }
+    // graph.json이 아직 없으면 사용자는 Obsidian 기본값을 쓰는 중 — 빈 설정을 원본으로 남긴다.
+    const original = (await adapter.exists(this.graphPath()))
+      ? await adapter.read(this.graphPath())
+      : '{}';
+    await adapter.write(bak, original);
+    this._backedUp = true;
   }
 
   async writeGraph(graphOptions) {
@@ -976,7 +1044,8 @@ module.exports = class GraphStyler extends Plugin {
     }
     this.currentForceOptions = forceOptionsFromGraph(originalOptions);
     this.currentPreset = null;
-    await this.reloadGraph(originalOptions);
+    // 원본에 색 그룹이 없으면 열린 그래프에 프리셋 색이 남지 않도록 비운다.
+    await this.reloadGraph(Object.assign({ colorGroups: [] }, originalOptions));
     this.refreshViews();
     new Notice(L.restored);
   }

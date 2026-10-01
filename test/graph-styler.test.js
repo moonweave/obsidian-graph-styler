@@ -338,6 +338,54 @@ async function glowCssFor() {
   return files['.obsidian/snippets/graph-styler-test.css'];
 }
 
+async function migrateFromUnsavedPreset({ snippets, restored = false, reformatted = false }) {
+  const { app, files, cssCalls } = makeHarness();
+  delete files['.obsidian/snippets/graph-styler-stale.css'];
+  const mtimes = {};
+  for (const [id, mtime] of Object.entries(snippets)) {
+    const snippetPath = `.obsidian/snippets/graph-styler-${id}.css`;
+    files[snippetPath] = 'generated';
+    mtimes[snippetPath] = mtime;
+  }
+  app.vault.adapter.stat = async (filePath) => (
+    Object.prototype.hasOwnProperty.call(files, filePath) ? { type: 'file', mtime: mtimes[filePath] || 0 } : null
+  );
+  files['.obsidian/graph.json.styler-bak'] = restored ? files['.obsidian/graph.json'] : '{}';
+  // Obsidian rewrote graph.json after the restore: same settings, different formatting and key order.
+  if (reformatted) {
+    const graph = JSON.parse(files['.obsidian/graph.json']);
+    files['.obsidian/graph.json'] = JSON.stringify(Object.fromEntries(Object.entries(graph).reverse()), null, 2);
+  }
+  let layoutReady = null;
+  app.workspace.onLayoutReady = (callback) => { layoutReady = callback(); };
+  const plugin = new GraphStyler(app);
+  const saved = [];
+  plugin.loadData = async () => ({ custom: [] });
+  plugin.saveData = async (data) => { saved.push(data.activePreset); };
+  await plugin.onload();
+  await layoutReady;
+  return {
+    enabled: cssCalls.filter(([, enabled]) => enabled).map(([id]) => id),
+    activePreset: plugin.settings.activePreset,
+    saved,
+  };
+}
+
+async function restoreEngineOptions(backup) {
+  const { app, files, engineOptions } = makeHarness();
+  files['.obsidian/graph.json.styler-bak'] = backup;
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [] };
+  const originalConfirm = global.window.confirm;
+  global.window.confirm = () => true;
+  try {
+    await plugin.restore();
+  } finally {
+    global.window.confirm = originalConfirm;
+  }
+  return { sent: engineOptions[engineOptions.length - 1], graph: files['.obsidian/graph.json'] };
+}
+
 async function backupWithoutGraphJson() {
   const { app, files } = makeHarness();
   const graphPath = '.obsidian/graph.json';
@@ -464,8 +512,24 @@ async function backupWithoutGraphJson() {
 
   const restoredOnLoad = await loadWithActivePreset('neon');
   assert.deepStrictEqual(restoredOnLoad.cssCalls.filter(([, enabled]) => enabled), [['graph-styler-neon', true]]);
-  assert.strictEqual((await loadWithActivePreset(undefined)).cssCalls.filter(([, enabled]) => enabled).length, 0);
+  assert.strictEqual((await loadWithActivePreset(null)).cssCalls.filter(([, enabled]) => enabled).length, 0);
   assert.strictEqual((await loadWithActivePreset('neon', false)).cssCalls.length, 0);
+
+  // 0.1.7 → 0.1.8: no saved preset, so the most recently written snippet is the last applied one.
+  assert.deepStrictEqual(await migrateFromUnsavedPreset({ snippets: { neon: 200, galaxy: 100 } }), {
+    enabled: ['graph-styler-neon'], activePreset: 'neon', saved: ['neon'],
+  });
+  assert.strictEqual((await migrateFromUnsavedPreset({ snippets: { neon: 100, galaxy: 200 } })).activePreset, 'galaxy');
+  assert.deepStrictEqual(await migrateFromUnsavedPreset({ snippets: { neon: 200 }, restored: true }), {
+    enabled: [], activePreset: null, saved: [],
+  });
+  assert.strictEqual(
+    (await migrateFromUnsavedPreset({ snippets: { neon: 200 }, restored: true, reformatted: true })).activePreset,
+    null,
+  );
+  assert.deepStrictEqual(await migrateFromUnsavedPreset({ snippets: {} }), {
+    enabled: [], activePreset: null, saved: [],
+  });
 
   const persisted = await persistsActivePreset();
   assert.strictEqual(persisted.afterApply, 'test');
@@ -476,16 +540,30 @@ async function backupWithoutGraphJson() {
   assert.strictEqual(unloadedSettings.activePreset, 'neon');
   assert.strictEqual(unloadedSettings.saves, 0);
 
+  // Presets are a full look: every rule applies in both themes, never unscoped.
   const glowCss = (await glowCssFor()).replace(/\/\*[\s\S]*?\*\//g, '');
-  const backgroundRules = glowCss.split('}').filter((block) => /background/.test(block));
-  assert.ok(backgroundRules.length >= 2);
-  for (const rule of backgroundRules) {
-    const selectors = rule.split('{')[0].split(',').map((selector) => selector.trim());
-    assert.ok(selectors.every((selector) => selector.startsWith('.theme-dark ')), `unscoped background rule: ${selectors}`);
+  const selectors = glowCss.split('}')
+    .filter((block) => block.includes('{'))
+    .flatMap((block) => block.split('{')[0].split(',').map((selector) => selector.trim()));
+  assert.ok(selectors.length >= 22);
+  for (const selector of selectors) {
+    assert.ok(/^\.theme-(dark|light) /.test(selector), `unscoped rule: ${selector}`);
   }
+  const darkSelectors = selectors.filter((s) => s.startsWith('.theme-dark ')).map((s) => s.slice('.theme-dark '.length));
+  const lightSelectors = selectors.filter((s) => s.startsWith('.theme-light ')).map((s) => s.slice('.theme-light '.length));
+  assert.deepStrictEqual(lightSelectors, darkSelectors);
+  assert.ok(darkSelectors.includes('.graph-view-content'));
+  assert.ok(darkSelectors.includes('.graph-view.color-text'));
 
+  // A vault without graph.json is on Obsidian defaults; Restore must return there.
   const backup = await backupWithoutGraphJson();
-  assert.deepStrictEqual(backup.missing, { backedUp: undefined, hasBackup: false });
-  assert.strictEqual(backup.backedUp, true);
-  assert.strictEqual(backup.backup, backup.original);
+  assert.deepStrictEqual(backup.missing, { backedUp: true, hasBackup: true });
+  assert.strictEqual(backup.backup, '{}');
+
+  const restoredWithoutGroups = await restoreEngineOptions('{"centerStrength":0.42}');
+  assert.deepStrictEqual(restoredWithoutGroups.sent, { colorGroups: [], centerStrength: 0.42 });
+  assert.strictEqual(restoredWithoutGroups.graph, '{"centerStrength":0.42}');
+  const groups = [{ query: 'tag:#a', color: { a: 1, rgb: 1 } }];
+  const restoredWithGroups = await restoreEngineOptions(JSON.stringify({ colorGroups: groups }));
+  assert.deepStrictEqual(restoredWithGroups.sent.colorGroups, groups);
 })();
