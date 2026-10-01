@@ -289,6 +289,70 @@ async function unloadPlugin() {
   };
 }
 
+async function loadWithActivePreset(activePreset, snippetExists = true) {
+  const { app, files, cssCalls } = makeHarness();
+  if (snippetExists) files['.obsidian/snippets/graph-styler-neon.css'] = 'generated';
+  let layoutReady = null;
+  app.workspace.onLayoutReady = (callback) => { layoutReady = callback(); };
+  const plugin = new GraphStyler(app);
+  plugin.loadData = async () => ({ custom: [], activePreset });
+  await plugin.onload();
+  await layoutReady;
+  return { cssCalls, settings: plugin.settings };
+}
+
+async function persistsActivePreset() {
+  const { app, files } = makeHarness();
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [] };
+  const saved = [];
+  plugin.saveData = async (data) => { saved.push(data.activePreset); };
+  await plugin._doApply(preset(false));
+  const afterApply = plugin.settings.activePreset;
+  files['.obsidian/graph.json.styler-bak'] = '{}';
+  const originalConfirm = global.window.confirm;
+  global.window.confirm = () => true;
+  try {
+    await plugin.restore();
+  } finally {
+    global.window.confirm = originalConfirm;
+  }
+  return { afterApply, afterRestore: plugin.settings.activePreset, saved };
+}
+
+async function unloadKeepsActivePreset() {
+  const { app } = makeHarness();
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [], activePreset: 'neon' };
+  let saves = 0;
+  plugin.saveData = async () => { saves += 1; };
+  await plugin.onunload();
+  return { activePreset: plugin.settings.activePreset, saves };
+}
+
+async function glowCssFor() {
+  const { app, files } = makeHarness();
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [] };
+  await plugin._doApply(preset(false));
+  return files['.obsidian/snippets/graph-styler-test.css'];
+}
+
+async function backupWithoutGraphJson() {
+  const { app, files } = makeHarness();
+  const graphPath = '.obsidian/graph.json';
+  const backupPath = `${graphPath}.styler-bak`;
+  const original = files[graphPath];
+  delete files[graphPath];
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [] };
+  await plugin.backupOnce();
+  const missing = { backedUp: plugin._backedUp, hasBackup: backupPath in files };
+  files[graphPath] = original;
+  await plugin.backupOnce();
+  return { missing, backedUp: plugin._backedUp, backup: files[backupPath], original };
+}
+
 (async () => {
   const visualOnly = await apply(false);
   assert.strictEqual(visualOnly.graph.centerStrength, 0.42);
@@ -397,4 +461,31 @@ async function unloadPlugin() {
   assert.strictEqual(unloaded.calls['graph-styler-stale'], false);
 
   assert.strictEqual(await restoreWaitsForApply(), false);
+
+  const restoredOnLoad = await loadWithActivePreset('neon');
+  assert.deepStrictEqual(restoredOnLoad.cssCalls.filter(([, enabled]) => enabled), [['graph-styler-neon', true]]);
+  assert.strictEqual((await loadWithActivePreset(undefined)).cssCalls.filter(([, enabled]) => enabled).length, 0);
+  assert.strictEqual((await loadWithActivePreset('neon', false)).cssCalls.length, 0);
+
+  const persisted = await persistsActivePreset();
+  assert.strictEqual(persisted.afterApply, 'test');
+  assert.strictEqual(persisted.afterRestore, null);
+  assert.deepStrictEqual(persisted.saved, ['test', null]);
+
+  const unloadedSettings = await unloadKeepsActivePreset();
+  assert.strictEqual(unloadedSettings.activePreset, 'neon');
+  assert.strictEqual(unloadedSettings.saves, 0);
+
+  const glowCss = (await glowCssFor()).replace(/\/\*[\s\S]*?\*\//g, '');
+  const backgroundRules = glowCss.split('}').filter((block) => /background/.test(block));
+  assert.ok(backgroundRules.length >= 2);
+  for (const rule of backgroundRules) {
+    const selectors = rule.split('{')[0].split(',').map((selector) => selector.trim());
+    assert.ok(selectors.every((selector) => selector.startsWith('.theme-dark ')), `unscoped background rule: ${selectors}`);
+  }
+
+  const backup = await backupWithoutGraphJson();
+  assert.deepStrictEqual(backup.missing, { backedUp: undefined, hasBackup: false });
+  assert.strictEqual(backup.backedUp, true);
+  assert.strictEqual(backup.backup, backup.original);
 })();

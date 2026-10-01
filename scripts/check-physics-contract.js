@@ -18,6 +18,7 @@ class Plugin {
     this.app = app;
   }
 
+  async saveData() {}
   register() {}
 }
 
