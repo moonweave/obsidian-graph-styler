@@ -507,10 +507,30 @@ async function backupWithoutGraphJson() {
   assert.deepStrictEqual((await loadPlugin({ data: { custom: [], resumeSnippet: 'neon' } })).enabled, []);
 
   // A snippet written by an older version (dead .graph-view-content rules) is rewritten on load.
-  const refreshed = await loadPlugin({ data: { custom: [], resumeSnippet: 'neon' }, snippets: { neon: 1 } });
+  const olderSnippet = '/* graph-styler :: neon (auto-generated) */\n.theme-dark .graph-view-content { background: none; }\n';
+  const refreshed = await loadPlugin({
+    data: { custom: [], resumeSnippet: 'neon' },
+    snippets: { neon: 1 },
+    files: { '.obsidian/snippets/graph-styler-neon.css': olderSnippet },
+  });
   const neonCss = refreshed.files['.obsidian/snippets/graph-styler-neon.css'];
   assert.ok(neonCss.includes('graph-styler :: neon'));
   assert.ok(neonCss.includes('.view-content > canvas'));
+  assert.ok(!neonCss.includes('graph-view-content'));
+  // Hand-edited files (no generated header) are left alone; CRLF-only differences are not rewritten.
+  const handEdited = await loadPlugin({
+    data: { custom: [], resumeSnippet: 'neon' },
+    snippets: { neon: 1 },
+    files: { '.obsidian/snippets/graph-styler-neon.css': '/* my own tweak */ .x { color: red; }' },
+  });
+  assert.strictEqual(handEdited.files['.obsidian/snippets/graph-styler-neon.css'], '/* my own tweak */ .x { color: red; }');
+  const crlf = refreshed.files['.obsidian/snippets/graph-styler-neon.css'].replace(/\n/g, '\r\n');
+  const crlfReload = await loadPlugin({
+    data: { custom: [], resumeSnippet: 'neon' },
+    snippets: { neon: 1 },
+    files: { '.obsidian/snippets/graph-styler-neon.css': crlf },
+  });
+  assert.strictEqual(crlfReload.files['.obsidian/snippets/graph-styler-neon.css'], crlf);
   // A snippet that is not enabled is left alone.
   const untouched = await loadPlugin({ data: { custom: [], resumeSnippet: null }, snippets: { neon: 1 } });
   assert.strictEqual(untouched.files['.obsidian/snippets/graph-styler-neon.css'], 'generated');

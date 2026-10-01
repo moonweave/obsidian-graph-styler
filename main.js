@@ -772,7 +772,10 @@ module.exports = class GraphStyler extends Plugin {
     const adapter = this.app.vault.adapter;
     const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
     const css = makeGlowCss(preset.palette);
-    if (!(await adapter.exists(path)) || (await adapter.read(path)) === css) return;
+    if (!(await adapter.exists(path))) return;
+    const current = (await adapter.read(path)).replace(/\r\n/g, '\n');
+    // 사용자가 손으로 고친 파일(생성 머리말이 없음)은 건드리지 않는다.
+    if (current === css || !current.startsWith(`/* graph-styler :: ${id} (auto-generated) */`)) return;
     await adapter.write(path, css);
     const customCss = this.app.customCss;
     if (customCss && typeof customCss.requestLoadSnippets === 'function') customCss.requestLoadSnippets();
