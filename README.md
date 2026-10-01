@@ -48,12 +48,13 @@ It writes these into Obsidian's **native graph color groups** (Settings → Grap
 
 Direct listing: <https://obsidian.md/plugins?id=graph-styler>
 
-**Development builds:** install with BRAT from `moonweave/obsidian-graph-styler`, or copy `main.js` + `manifest.json` into `<vault>/.obsidian/plugins/graph-styler/`, then enable.
+**Development builds:** install with BRAT from `moonweave/obsidian-graph-styler`, or copy `main.js` + `manifest.json` + `styles.css` into `<vault>/.obsidian/plugins/graph-styler/`, then enable.
 
 ## Notes
 - **Works in any vault.** Group colors auto-map to the busiest folders in *your* vault — no setup, no hardcoded paths.
 - **Bilingual UI.** The panel follows Obsidian's language — English or 한국어.
 - Writes the global graph config (`.obsidian/graph.json`) and a CSS snippet (`.obsidian/snippets/graph-styler-*.css`); your original `graph.json` is backed up first. Restore requires confirmation because it restores that first snapshot.
+- Themes look the same in light and dark mode — the graph pane takes on the theme's own background.
 - Desktop only.
 
 ## License

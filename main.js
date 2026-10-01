@@ -122,21 +122,28 @@ function makeGroups(queries, colors) {
   }));
 }
 
+// 프리셋은 배경까지 포함한 한 벌의 룩 — 밝은 테마에서도 그래프 영역은 같은 모습으로 적용한다.
+// 테마 클래스를 앞에 붙이는 건 앱 기본 색 규칙보다 우선하기 위해서다.
+function themed(selector) {
+  return `.theme-dark ${selector},\n.theme-light ${selector}`;
+}
+
 function makeGlowCss(p) {
   return `/* graph-styler :: ${p.id} (auto-generated) */
-.theme-dark .graph-view-content {
+${themed('.graph-view-content')} {
   background: radial-gradient(circle at 50% 42%, ${p.bg1} 0%, ${p.bg2} 48%, ${p.bg3} 100%) !important;
 }
+/* 창 전체(제목줄 포함)는 어두운 테마에서만 — 밝은 테마의 제목줄 글자가 묻히지 않게 */
 .theme-dark .workspace-leaf-content[data-type="graph"],
 .theme-dark .workspace-leaf-content[data-type="localgraph"] { background: ${p.bg3}; }
-.theme-dark .graph-view.color-circle { color: ${p.circle}; }
-.theme-dark .graph-view.color-fill { color: ${p.fill}; }
-.theme-dark .graph-view.color-fill-tag { color: ${p.tag}; }
-.theme-dark .graph-view.color-fill-unresolved { color: ${p.unresolved}; }
-.theme-dark .graph-view.color-fill-focused { color: #ffffff; }
-.theme-dark .graph-view.color-line { color: ${p.line}; }
-.theme-dark .graph-view.color-text { color: ${p.text}; }
-.theme-dark .graph-view-content canvas { filter: ${p.filter}; }
+${themed('.graph-view.color-circle')} { color: ${p.circle}; }
+${themed('.graph-view.color-fill')} { color: ${p.fill}; }
+${themed('.graph-view.color-fill-tag')} { color: ${p.tag}; }
+${themed('.graph-view.color-fill-unresolved')} { color: ${p.unresolved}; }
+${themed('.graph-view.color-fill-focused')} { color: #ffffff; }
+${themed('.graph-view.color-line')} { color: ${p.line}; }
+${themed('.graph-view.color-text')} { color: ${p.text}; }
+${themed('.graph-view-content canvas')} { filter: ${p.filter}; }
 `;
 }
 
@@ -553,7 +560,7 @@ module.exports = class GraphStyler extends Plugin {
     this.currentPreset = null;
 
     // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
-    const restoreSnippet = () => this.restoreActiveSnippet();
+    const restoreSnippet = () => this.resumeSnippet();
     const workspace = this.app.workspace;
     if (workspace && typeof workspace.onLayoutReady === 'function') workspace.onLayoutReady(restoreSnippet);
     else restoreSnippet();
@@ -583,7 +590,14 @@ module.exports = class GraphStyler extends Plugin {
   async onunload() {
     try {
       if (this._applying && this._applyIdle) await this._applyIdle;
-      await this.setActiveSnippet('__none__');
+      // 사용자가 직접 끈 스니펫은 기록하지 않는다 — 다시 켤 때 되살리는 건 여기서 끈 것뿐.
+      // 끄기를 먼저 해 새 버전의 로드와 겹치는 구간을 줄인다.
+      const resumeId = await this.enabledSnippetId();
+      try {
+        await this.setActiveSnippet('__none__');
+      } finally {
+        await this.saveResumeSnippet(resumeId);
+      }
     } catch (e) {
       console.warn('[graph-styler] style cleanup on unload skipped', e);
     }
@@ -621,7 +635,6 @@ module.exports = class GraphStyler extends Plugin {
 
   async deleteCustom(id) {
     this.settings.custom = this.settings.custom.filter((r) => r.id !== id);
-    if (this.settings.activePreset === safePresetId(id)) this.settings.activePreset = null;
     await this.saveData(this.settings);
     const customCss = this.app.customCss;
     if (customCss && customCss.setCssEnabledStatus) {
@@ -698,26 +711,73 @@ module.exports = class GraphStyler extends Plugin {
     await this.removeSentinelSnippet();
   }
 
-  async setActivePreset(id) {
-    if (this.settings.activePreset === id) return;
-    this.settings.activePreset = id;
+  async enabledSnippetId() {
+    let enabled = this.app.customCss && this.app.customCss.enabledSnippets;
+    if (!enabled || typeof enabled.has !== 'function') {
+      // 내부 필드가 없으면 저장된 외형 설정에서 읽는다.
+      try {
+        const appearance = JSON.parse(await this.app.vault.adapter.read(`${this.app.vault.configDir}/appearance.json`));
+        enabled = new Set(Array.isArray(appearance.enabledCssSnippets) ? appearance.enabledCssSnippets : []);
+      } catch (_) {
+        return null;
+      }
+    }
+    for (const id of await this.snippetIds()) {
+      if (id !== '__none__' && enabled.has(`graph-styler-${id}`)) return id;
+    }
+    return null;
+  }
+
+  async saveResumeSnippet(id) {
+    if (this.settings.resumeSnippet === id) return;
+    this.settings.resumeSnippet = id;
     try {
       await this.saveData(this.settings);
     } catch (e) {
-      console.warn('[graph-styler] active preset was not persisted', e);
+      console.warn('[graph-styler] snippet state was not persisted', e);
     }
   }
 
-  async restoreActiveSnippet() {
-    const id = this.settings.activePreset;
-    if (typeof id !== 'string' || !id) return;
+  async resumeSnippet() {
     try {
-      const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
-      if (!(await this.app.vault.adapter.exists(path))) return;
-      await this.setActiveSnippet(id);
+      let id = this.settings.resumeSnippet;
+      if (id === undefined) id = await this.snippetMatchingGraph();
+      if (typeof id === 'string' && id) {
+        const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
+        if (await this.app.vault.adapter.exists(path)) await this.setActiveSnippet(id);
+      }
     } catch (e) {
       console.warn('[graph-styler] snippet restore skipped', e);
     }
+    // 한 번 쓰고 비운다. undefined → null 저장으로 0.1.7 이전 데이터의 추정도 한 번만 한다.
+    await this.saveResumeSnippet(null);
+  }
+
+  // 0.1.7 이하는 업데이트 때 자기 onunload가 스니펫을 끄고 무엇을 껐는지 남기지 않았다.
+  // 지금 graph.json의 색 그룹이 프리셋 색과 그대로 일치하면 그 프리셋이 적용 중이었다.
+  // 되돌렸거나 색 그룹을 손봤다면 일치하지 않으므로 아무것도 켜지 않는다.
+  async snippetMatchingGraph() {
+    const groups = (await this.readGraphOptions()).colorGroups;
+    if (!Array.isArray(groups) || !groups.length) return null;
+    const rgbs = groups.map((group) => group && group.color && group.color.rgb);
+    const presets = Object.values(PRESETS).concat((this.settings.custom || []).map((raw) => presetFromRaw(raw)));
+    const adapter = this.app.vault.adapter;
+    let found = null;
+    let newest = -Infinity;
+    for (const preset of presets) {
+      if (preset.colors.length < rgbs.length) continue;
+      if (!rgbs.every((rgb, i) => rgb === hexToRgbInt(preset.colors[i]))) continue;
+      const path = `${this.app.vault.configDir}/snippets/graph-styler-${preset.id}.css`;
+      if (!(await adapter.exists(path))) continue;
+      // 첫 색이 겹치는 프리셋이 여럿이면 마지막으로 다시 쓴 스니펫을 고른다.
+      const stat = typeof adapter.stat === 'function' ? await adapter.stat(path) : null;
+      const mtime = stat && typeof stat.mtime === 'number' ? stat.mtime : 0;
+      if (found === null || mtime > newest) {
+        found = preset.id;
+        newest = mtime;
+      }
+    }
+    return found;
   }
 
   async removeSentinelSnippet() {
@@ -814,7 +874,6 @@ module.exports = class GraphStyler extends Plugin {
       const merged = await this.writeGraph(graphOptions);
       this.liveStyle.textContent = css;                  // graph.json 확정 뒤 즉시 시각 반영
       await this.installSnippet(preset.id, css);          // 리로드 영속용
-      await this.setActivePreset(preset.id);
       // Built-ins may update colors in the live engine, but never send force
       // keys. Custom presets explicitly opt into the full force update.
       if (Object.keys(graphOptions).length) {
@@ -838,11 +897,12 @@ module.exports = class GraphStyler extends Plugin {
       this._backedUp = true;
       return;
     }
-    // graph.json이 아직 없으면 표시하지 않음 — 이후 적용에서 다시 백업 시도
-    if (await adapter.exists(this.graphPath())) {
-      await adapter.write(bak, await adapter.read(this.graphPath()));
-      this._backedUp = true;
-    }
+    // graph.json이 아직 없으면 사용자는 Obsidian 기본값을 쓰는 중 — 빈 설정을 원본으로 남긴다.
+    const original = (await adapter.exists(this.graphPath()))
+      ? await adapter.read(this.graphPath())
+      : '{}';
+    await adapter.write(bak, original);
+    this._backedUp = true;
   }
 
   async writeGraph(graphOptions) {
@@ -966,7 +1026,6 @@ module.exports = class GraphStyler extends Plugin {
     const original = await adapter.read(bak);
     await adapter.write(this.graphPath(), original);
     await this.setActiveSnippet('__none__');
-    await this.setActivePreset(null);
     if (this.liveStyle) this.liveStyle.textContent = '';
     let originalOptions = {};
     try {
@@ -976,7 +1035,8 @@ module.exports = class GraphStyler extends Plugin {
     }
     this.currentForceOptions = forceOptionsFromGraph(originalOptions);
     this.currentPreset = null;
-    await this.reloadGraph(originalOptions);
+    // 원본에 색 그룹이 없으면 열린 그래프에 프리셋 색이 남지 않도록 비운다.
+    await this.reloadGraph(Object.assign({ colorGroups: [] }, originalOptions));
     this.refreshViews();
     new Notice(L.restored);
   }

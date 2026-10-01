@@ -48,12 +48,13 @@ Graph Styler는 하드코딩이 없습니다 — *내* vault에 맞춰 적응합
 
 공식 등재 페이지: <https://obsidian.md/plugins?id=graph-styler>
 
-**개발 빌드:** BRAT에서 `moonweave/obsidian-graph-styler`를 추가하거나, `main.js` + `manifest.json`을 `<vault>/.obsidian/plugins/graph-styler/`에 복사 후 켭니다.
+**개발 빌드:** BRAT에서 `moonweave/obsidian-graph-styler`를 추가하거나, `main.js` + `manifest.json` + `styles.css`를 `<vault>/.obsidian/plugins/graph-styler/`에 복사 후 켭니다.
 
 ## 참고
 - **어떤 vault에서도 동작.** 그룹 색이 *내* vault에서 노트가 가장 많은 폴더에 자동 매핑됩니다 — 설정도, 하드코딩 경로도 없음.
 - **양국어 UI.** 패널이 옵시디언 언어를 따라갑니다 — 영어 또는 한국어.
 - 전역 그래프 설정(`.obsidian/graph.json`)과 CSS 스니펫(`.obsidian/snippets/graph-styler-*.css`)을 쓰며, 원래 `graph.json`은 먼저 백업합니다. 되돌리기는 첫 백업을 복구하기 전에 확인을 받습니다.
+- 밝은 테마와 어두운 테마에서 같은 모습으로 보입니다 — 그래프 창이 테마의 배경색을 씁니다.
 - 데스크탑 전용.
 
 ## 라이선스
