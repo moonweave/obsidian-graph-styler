@@ -122,26 +122,7 @@ function makeGroups(queries, colors) {
   }));
 }
 
-function sameJson(a, b) {
-  if (a === b) return true;
-  const canonical = (value) => {
-    if (Array.isArray(value)) return value.map(canonical);
-    if (value && typeof value === 'object') {
-      return Object.keys(value).sort().reduce((out, key) => {
-        out[key] = canonical(value[key]);
-        return out;
-      }, {});
-    }
-    return value;
-  };
-  try {
-    return JSON.stringify(canonical(JSON.parse(a))) === JSON.stringify(canonical(JSON.parse(b)));
-  } catch (_) {
-    return false;
-  }
-}
-
-// 프리셋은 배경까지 포함한 한 벌의 룩 — 밝은 테마에서도 같은 모습으로 적용한다.
+// 프리셋은 배경까지 포함한 한 벌의 룩 — 밝은 테마에서도 그래프 영역은 같은 모습으로 적용한다.
 // 테마 클래스를 앞에 붙이는 건 앱 기본 색 규칙보다 우선하기 위해서다.
 function themed(selector) {
   return `.theme-dark ${selector},\n.theme-light ${selector}`;
@@ -152,8 +133,9 @@ function makeGlowCss(p) {
 ${themed('.graph-view-content')} {
   background: radial-gradient(circle at 50% 42%, ${p.bg1} 0%, ${p.bg2} 48%, ${p.bg3} 100%) !important;
 }
-${themed('.workspace-leaf-content[data-type="graph"]')},
-${themed('.workspace-leaf-content[data-type="localgraph"]')} { background: ${p.bg3}; }
+/* 창 전체(제목줄 포함)는 어두운 테마에서만 — 밝은 테마의 제목줄 글자가 묻히지 않게 */
+.theme-dark .workspace-leaf-content[data-type="graph"],
+.theme-dark .workspace-leaf-content[data-type="localgraph"] { background: ${p.bg3}; }
 ${themed('.graph-view.color-circle')} { color: ${p.circle}; }
 ${themed('.graph-view.color-fill')} { color: ${p.fill}; }
 ${themed('.graph-view.color-fill-tag')} { color: ${p.tag}; }
@@ -578,7 +560,7 @@ module.exports = class GraphStyler extends Plugin {
     this.currentPreset = null;
 
     // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
-    const restoreSnippet = () => this.restoreActiveSnippet();
+    const restoreSnippet = () => this.resumeSnippet();
     const workspace = this.app.workspace;
     if (workspace && typeof workspace.onLayoutReady === 'function') workspace.onLayoutReady(restoreSnippet);
     else restoreSnippet();
@@ -608,6 +590,8 @@ module.exports = class GraphStyler extends Plugin {
   async onunload() {
     try {
       if (this._applying && this._applyIdle) await this._applyIdle;
+      // 사용자가 직접 끈 스니펫은 기록하지 않는다 — 다시 켤 때 되살리는 건 여기서 끈 것뿐.
+      await this.saveResumeSnippet(await this.enabledSnippetId());
       await this.setActiveSnippet('__none__');
     } catch (e) {
       console.warn('[graph-styler] style cleanup on unload skipped', e);
@@ -646,7 +630,6 @@ module.exports = class GraphStyler extends Plugin {
 
   async deleteCustom(id) {
     this.settings.custom = this.settings.custom.filter((r) => r.id !== id);
-    if (this.settings.activePreset === safePresetId(id)) this.settings.activePreset = null;
     await this.saveData(this.settings);
     const customCss = this.app.customCss;
     if (customCss && customCss.setCssEnabledStatus) {
@@ -723,68 +706,65 @@ module.exports = class GraphStyler extends Plugin {
     await this.removeSentinelSnippet();
   }
 
-  async setActivePreset(id) {
-    if (this.settings.activePreset === id) return;
-    this.settings.activePreset = id;
+  async enabledSnippetId() {
+    const enabled = this.app.customCss && this.app.customCss.enabledSnippets;
+    if (!enabled || typeof enabled.has !== 'function') return null;
+    for (const id of await this.snippetIds()) {
+      if (id !== '__none__' && enabled.has(`graph-styler-${id}`)) return id;
+    }
+    return null;
+  }
+
+  async saveResumeSnippet(id) {
+    if (this.settings.resumeSnippet === id) return;
+    this.settings.resumeSnippet = id;
     try {
       await this.saveData(this.settings);
     } catch (e) {
-      console.warn('[graph-styler] active preset was not persisted', e);
+      console.warn('[graph-styler] snippet state was not persisted', e);
     }
   }
 
-  async restoreActiveSnippet() {
-    if (this.settings.activePreset === undefined) await this.migrateActivePreset();
-    const id = this.settings.activePreset;
-    if (typeof id !== 'string' || !id) return;
+  async resumeSnippet() {
     try {
-      const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
-      if (!(await this.app.vault.adapter.exists(path))) return;
-      await this.setActiveSnippet(id);
+      let id = this.settings.resumeSnippet;
+      if (id === undefined) id = await this.snippetMatchingGraph();
+      if (typeof id === 'string' && id) {
+        const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
+        if (await this.app.vault.adapter.exists(path)) await this.setActiveSnippet(id);
+      }
     } catch (e) {
       console.warn('[graph-styler] snippet restore skipped', e);
     }
+    // 한 번 쓰고 비운다. undefined → null 저장으로 0.1.7 이전 데이터의 추정도 한 번만 한다.
+    await this.saveResumeSnippet(null);
   }
 
-  // 0.1.7 이하는 적용 중인 프리셋을 저장하지 않았고, 업데이트 때 그 버전의 onunload가
-  // 스니펫을 꺼 버린다. 적용할 때마다 스니펫 파일을 다시 쓰므로 가장 최근에 쓴 파일이
-  // 마지막으로 적용한 프리셋이다. 그 뒤 복원했다면(graph.json == 백업) 되살리지 않는다.
-  async migrateActivePreset() {
+  // 0.1.7 이하는 업데이트 때 자기 onunload가 스니펫을 끄고 무엇을 껐는지 남기지 않았다.
+  // 지금 graph.json의 색 그룹이 프리셋 색과 그대로 일치하면 그 프리셋이 적용 중이었다.
+  // 되돌렸거나 색 그룹을 손봤다면 일치하지 않으므로 아무것도 켜지 않는다.
+  async snippetMatchingGraph() {
+    const groups = (await this.readGraphOptions()).colorGroups;
+    if (!Array.isArray(groups) || !groups.length) return null;
+    const rgbs = groups.map((group) => group && group.color && group.color.rgb);
+    const presets = Object.values(PRESETS).concat((this.settings.custom || []).map((raw) => presetFromRaw(raw)));
+    const adapter = this.app.vault.adapter;
     let found = null;
-    try {
-      const adapter = this.app.vault.adapter;
-      if (typeof adapter.stat === 'function' && typeof adapter.list === 'function') {
-        const dir = `${this.app.vault.configDir}/snippets`;
-        const prefix = `${dir}/graph-styler-`;
-        let newest = -1;
-        const listing = await adapter.list(dir);
-        for (const filePath of listing.files || []) {
-          if (!filePath.startsWith(prefix) || !filePath.endsWith('.css')) continue;
-          const id = filePath.slice(prefix.length, -'.css'.length);
-          if (!id || id === '__none__') continue;
-          const stat = await adapter.stat(filePath);
-          const mtime = stat && typeof stat.mtime === 'number' ? stat.mtime : -1;
-          if (mtime > newest) {
-            newest = mtime;
-            found = id;
-          }
-        }
-        if (found) {
-          const bak = `${this.graphPath()}.styler-bak`;
-          if (await adapter.exists(bak)) {
-            const graph = await this.readGraphSnapshot();
-            // Obsidian이 graph.json을 다시 저장하면 서식이 바뀌므로 내용으로 비교한다.
-            if (graph.exists && sameJson(graph.contents, await adapter.read(bak))) found = null;
-          }
-        }
+    let newest = -Infinity;
+    for (const preset of presets) {
+      if (preset.colors.length < rgbs.length) continue;
+      if (!rgbs.every((rgb, i) => rgb === hexToRgbInt(preset.colors[i]))) continue;
+      const path = `${this.app.vault.configDir}/snippets/graph-styler-${preset.id}.css`;
+      if (!(await adapter.exists(path))) continue;
+      // 첫 색이 겹치는 프리셋이 여럿이면 마지막으로 다시 쓴 스니펫을 고른다.
+      const stat = typeof adapter.stat === 'function' ? await adapter.stat(path) : null;
+      const mtime = stat && typeof stat.mtime === 'number' ? stat.mtime : 0;
+      if (found === null || mtime > newest) {
+        found = preset.id;
+        newest = mtime;
       }
-    } catch (e) {
-      console.warn('[graph-styler] active preset migration skipped', e);
-      found = null;
     }
-    // 되살릴 프리셋이 없으면 로드만으로 data.json을 쓰지 않는다.
-    if (found) await this.setActivePreset(found);
-    else this.settings.activePreset = null;
+    return found;
   }
 
   async removeSentinelSnippet() {
@@ -881,7 +861,6 @@ module.exports = class GraphStyler extends Plugin {
       const merged = await this.writeGraph(graphOptions);
       this.liveStyle.textContent = css;                  // graph.json 확정 뒤 즉시 시각 반영
       await this.installSnippet(preset.id, css);          // 리로드 영속용
-      await this.setActivePreset(preset.id);
       // Built-ins may update colors in the live engine, but never send force
       // keys. Custom presets explicitly opt into the full force update.
       if (Object.keys(graphOptions).length) {
@@ -1034,7 +1013,6 @@ module.exports = class GraphStyler extends Plugin {
     const original = await adapter.read(bak);
     await adapter.write(this.graphPath(), original);
     await this.setActiveSnippet('__none__');
-    await this.setActivePreset(null);
     if (this.liveStyle) this.liveStyle.textContent = '';
     let originalOptions = {};
     try {

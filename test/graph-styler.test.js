@@ -78,7 +78,12 @@ function makeHarness() {
       on: () => ({}),
     },
     customCss: {
-      setCssEnabledStatus: (id, enabled) => cssCalls.push([id, enabled]),
+      enabledSnippets: new Set(),
+      setCssEnabledStatus(id, enabled) {
+        cssCalls.push([id, enabled]);
+        if (enabled) this.enabledSnippets.add(id);
+        else this.enabledSnippets.delete(id);
+      },
     },
     workspace: {
       getLeavesOfType: (type) => type === 'graph' ? [{
@@ -153,11 +158,14 @@ async function loadPreservesCustomData() {
     custom: [{ id: 'saved-preset', label: 'Saved preset', colors: ['#112233'] }],
     futureField: { keep: true },
   };
-  let saves = 0;
+  const writes = [];
+  let layoutReady = null;
+  app.workspace.onLayoutReady = (callback) => { layoutReady = callback(); };
   plugin.loadData = async () => saved;
-  plugin.saveData = async () => { saves += 1; };
+  plugin.saveData = async (data) => { writes.push(JSON.parse(JSON.stringify(data))); };
   await plugin.onload();
-  return { settings: plugin.settings, saves };
+  await layoutReady;
+  return { settings: plugin.settings, writes };
 }
 
 async function activateSnippet() {
@@ -289,56 +297,10 @@ async function unloadPlugin() {
   };
 }
 
-async function loadWithActivePreset(activePreset, snippetExists = true) {
-  const { app, files, cssCalls } = makeHarness();
-  if (snippetExists) files['.obsidian/snippets/graph-styler-neon.css'] = 'generated';
-  let layoutReady = null;
-  app.workspace.onLayoutReady = (callback) => { layoutReady = callback(); };
-  const plugin = new GraphStyler(app);
-  plugin.loadData = async () => ({ custom: [], activePreset });
-  await plugin.onload();
-  await layoutReady;
-  return { cssCalls, settings: plugin.settings };
-}
+const NEON = ['#7dd3fc', '#34d399', '#fbbf24', '#f472b6'];
+const groupsFor = (colors) => colors.map((hex, i) => ({ query: `path:"f${i}"`, color: { a: 1, rgb: parseInt(hex.slice(1), 16) } }));
 
-async function persistsActivePreset() {
-  const { app, files } = makeHarness();
-  const plugin = new GraphStyler(app);
-  plugin.settings = { custom: [] };
-  const saved = [];
-  plugin.saveData = async (data) => { saved.push(data.activePreset); };
-  await plugin._doApply(preset(false));
-  const afterApply = plugin.settings.activePreset;
-  files['.obsidian/graph.json.styler-bak'] = '{}';
-  const originalConfirm = global.window.confirm;
-  global.window.confirm = () => true;
-  try {
-    await plugin.restore();
-  } finally {
-    global.window.confirm = originalConfirm;
-  }
-  return { afterApply, afterRestore: plugin.settings.activePreset, saved };
-}
-
-async function unloadKeepsActivePreset() {
-  const { app } = makeHarness();
-  const plugin = new GraphStyler(app);
-  plugin.settings = { custom: [], activePreset: 'neon' };
-  let saves = 0;
-  plugin.saveData = async () => { saves += 1; };
-  await plugin.onunload();
-  return { activePreset: plugin.settings.activePreset, saves };
-}
-
-async function glowCssFor() {
-  const { app, files } = makeHarness();
-  const plugin = new GraphStyler(app);
-  plugin.settings = { custom: [] };
-  await plugin._doApply(preset(false));
-  return files['.obsidian/snippets/graph-styler-test.css'];
-}
-
-async function migrateFromUnsavedPreset({ snippets, restored = false, reformatted = false }) {
+async function loadPlugin({ data, graphGroups, snippets = {}, files: extraFiles = {} }) {
   const { app, files, cssCalls } = makeHarness();
   delete files['.obsidian/snippets/graph-styler-stale.css'];
   const mtimes = {};
@@ -347,28 +309,49 @@ async function migrateFromUnsavedPreset({ snippets, restored = false, reformatte
     files[snippetPath] = 'generated';
     mtimes[snippetPath] = mtime;
   }
+  Object.assign(files, extraFiles);
+  if (graphGroups) {
+    const graph = JSON.parse(files['.obsidian/graph.json']);
+    graph.colorGroups = graphGroups;
+    files['.obsidian/graph.json'] = JSON.stringify(graph);
+  }
   app.vault.adapter.stat = async (filePath) => (
     Object.prototype.hasOwnProperty.call(files, filePath) ? { type: 'file', mtime: mtimes[filePath] || 0 } : null
   );
-  files['.obsidian/graph.json.styler-bak'] = restored ? files['.obsidian/graph.json'] : '{}';
-  // Obsidian rewrote graph.json after the restore: same settings, different formatting and key order.
-  if (reformatted) {
-    const graph = JSON.parse(files['.obsidian/graph.json']);
-    files['.obsidian/graph.json'] = JSON.stringify(Object.fromEntries(Object.entries(graph).reverse()), null, 2);
-  }
   let layoutReady = null;
   app.workspace.onLayoutReady = (callback) => { layoutReady = callback(); };
   const plugin = new GraphStyler(app);
   const saved = [];
-  plugin.loadData = async () => ({ custom: [] });
-  plugin.saveData = async (data) => { saved.push(data.activePreset); };
+  plugin.loadData = async () => JSON.parse(JSON.stringify(data));
+  plugin.saveData = async (settings) => { saved.push(settings.resumeSnippet); };
   await plugin.onload();
   await layoutReady;
   return {
     enabled: cssCalls.filter(([, enabled]) => enabled).map(([id]) => id),
-    activePreset: plugin.settings.activePreset,
+    settings: plugin.settings,
     saved,
+    files,
   };
+}
+
+async function unloadWith(enabledIds) {
+  const { app, cssCalls } = makeHarness();
+  app.vault.adapter.write('.obsidian/snippets/graph-styler-neon.css', 'generated');
+  for (const id of enabledIds) app.customCss.enabledSnippets.add(id);
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [], resumeSnippet: null };
+  const saved = [];
+  plugin.saveData = async (settings) => { saved.push(settings.resumeSnippet); };
+  await plugin.onunload();
+  return { saved, calls: Object.fromEntries(cssCalls) };
+}
+
+async function glowCssFor() {
+  const { app, files } = makeHarness();
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [] };
+  await plugin._doApply(preset(false));
+  return files['.obsidian/snippets/graph-styler-test.css'];
 }
 
 async function restoreEngineOptions(backup) {
@@ -460,7 +443,11 @@ async function backupWithoutGraphJson() {
     id: 'saved-preset', label: 'Saved preset', colors: ['#112233'],
   }]);
   assert.deepStrictEqual(preservedData.settings.futureField, { keep: true });
-  assert.strictEqual(preservedData.saves, 0);
+  // 0.1.7 data is written once (resumeSnippet: null) and keeps every existing field.
+  assert.strictEqual(preservedData.writes.length, 1);
+  assert.deepStrictEqual(preservedData.writes[0].custom, preservedData.settings.custom);
+  assert.deepStrictEqual(preservedData.writes[0].futureField, { keep: true });
+  assert.strictEqual(preservedData.writes[0].resumeSnippet, null);
 
   const activeSnippets = await activateSnippet();
   assert.strictEqual(activeSnippets['graph-styler-neon'], true);
@@ -510,48 +497,54 @@ async function backupWithoutGraphJson() {
 
   assert.strictEqual(await restoreWaitsForApply(), false);
 
-  const restoredOnLoad = await loadWithActivePreset('neon');
-  assert.deepStrictEqual(restoredOnLoad.cssCalls.filter(([, enabled]) => enabled), [['graph-styler-neon', true]]);
-  assert.strictEqual((await loadWithActivePreset(null)).cssCalls.filter(([, enabled]) => enabled).length, 0);
-  assert.strictEqual((await loadWithActivePreset('neon', false)).cssCalls.length, 0);
+  // Only what onunload itself switched off is switched back on, once.
+  assert.deepStrictEqual(await loadPlugin({ data: { custom: [], resumeSnippet: 'neon' }, snippets: { neon: 1 } }).then(
+    ({ enabled, saved }) => ({ enabled, saved })), { enabled: ['graph-styler-neon'], saved: [null] });
+  assert.deepStrictEqual(await loadPlugin({ data: { custom: [], resumeSnippet: null }, snippets: { neon: 1 } }).then(
+    ({ enabled, saved }) => ({ enabled, saved })), { enabled: [], saved: [] });
+  assert.deepStrictEqual((await loadPlugin({ data: { custom: [], resumeSnippet: 'neon' } })).enabled, []);
 
-  // 0.1.7 → 0.1.8: no saved preset, so the most recently written snippet is the last applied one.
-  assert.deepStrictEqual(await migrateFromUnsavedPreset({ snippets: { neon: 200, galaxy: 100 } }), {
-    enabled: ['graph-styler-neon'], activePreset: 'neon', saved: ['neon'],
-  });
-  assert.strictEqual((await migrateFromUnsavedPreset({ snippets: { neon: 100, galaxy: 200 } })).activePreset, 'galaxy');
-  assert.deepStrictEqual(await migrateFromUnsavedPreset({ snippets: { neon: 200 }, restored: true }), {
-    enabled: [], activePreset: null, saved: [],
-  });
-  assert.strictEqual(
-    (await migrateFromUnsavedPreset({ snippets: { neon: 200 }, restored: true, reformatted: true })).activePreset,
-    null,
-  );
-  assert.deepStrictEqual(await migrateFromUnsavedPreset({ snippets: {} }), {
-    enabled: [], activePreset: null, saved: [],
-  });
+  const unloadEnabled = await unloadWith(['graph-styler-neon']);
+  assert.deepStrictEqual(unloadEnabled.saved, ['neon']);
+  assert.strictEqual(unloadEnabled.calls['graph-styler-neon'], false);
+  // The user had switched the snippet off in Settings → Appearance: nothing to resume.
+  assert.deepStrictEqual((await unloadWith([])).saved, []);
 
-  const persisted = await persistsActivePreset();
-  assert.strictEqual(persisted.afterApply, 'test');
-  assert.strictEqual(persisted.afterRestore, null);
-  assert.deepStrictEqual(persisted.saved, ['test', null]);
-
-  const unloadedSettings = await unloadKeepsActivePreset();
-  assert.strictEqual(unloadedSettings.activePreset, 'neon');
-  assert.strictEqual(unloadedSettings.saves, 0);
+  // 0.1.7 → 0.1.8: no record, so the preset whose colours match graph.json is the one that was on.
+  const migrated = await loadPlugin({ data: { custom: [] }, graphGroups: groupsFor(NEON.slice(0, 3)), snippets: { neon: 1, galaxy: 2 } });
+  assert.deepStrictEqual(migrated.enabled, ['graph-styler-neon']);
+  assert.deepStrictEqual(migrated.saved, [null]);
+  // Restored (or hand-edited) colour groups match no preset.
+  const restoredBefore = await loadPlugin({ data: { custom: [] }, graphGroups: groupsFor(['#123456']), snippets: { neon: 1 } });
+  assert.deepStrictEqual(restoredBefore.enabled, []);
+  assert.deepStrictEqual(restoredBefore.saved, [null]);
+  assert.deepStrictEqual((await loadPlugin({ data: { custom: [] }, snippets: { neon: 1 } })).enabled, []);
+  // The guess runs once: a later launch with the saved record never re-guesses, even if colours match again.
+  const relaunch = await loadPlugin({ data: { custom: [], resumeSnippet: null }, graphGroups: groupsFor(NEON), snippets: { neon: 1 } });
+  assert.deepStrictEqual({ enabled: relaunch.enabled, saved: relaunch.saved }, { enabled: [], saved: [] });
+  // Two presets with the same colours: the snippet written last wins.
+  const tie = await loadPlugin({
+    data: { custom: [{ id: 'mine', label: 'Mine', colors: NEON }] },
+    graphGroups: groupsFor(NEON),
+    snippets: { neon: 1, mine: 5 },
+  });
+  assert.deepStrictEqual(tie.enabled, ['graph-styler-mine']);
 
   // Presets are a full look: every rule applies in both themes, never unscoped.
   const glowCss = (await glowCssFor()).replace(/\/\*[\s\S]*?\*\//g, '');
   const selectors = glowCss.split('}')
     .filter((block) => block.includes('{'))
     .flatMap((block) => block.split('{')[0].split(',').map((selector) => selector.trim()));
-  assert.ok(selectors.length >= 22);
+  assert.ok(selectors.length >= 20);
   for (const selector of selectors) {
     assert.ok(/^\.theme-(dark|light) /.test(selector), `unscoped rule: ${selector}`);
   }
   const darkSelectors = selectors.filter((s) => s.startsWith('.theme-dark ')).map((s) => s.slice('.theme-dark '.length));
   const lightSelectors = selectors.filter((s) => s.startsWith('.theme-light ')).map((s) => s.slice('.theme-light '.length));
-  assert.deepStrictEqual(lightSelectors, darkSelectors);
+  // The whole leaf (view header included) is painted in dark mode only.
+  const leafSelectors = ['.workspace-leaf-content[data-type="graph"]', '.workspace-leaf-content[data-type="localgraph"]'];
+  assert.deepStrictEqual(lightSelectors, darkSelectors.filter((s) => !leafSelectors.includes(s)));
+  assert.ok(leafSelectors.every((s) => darkSelectors.includes(s)));
   assert.ok(darkSelectors.includes('.graph-view-content'));
   assert.ok(darkSelectors.includes('.graph-view.color-text'));
 
