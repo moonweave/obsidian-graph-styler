@@ -81,6 +81,7 @@ function makeHarness() {
       enabledSnippets: new Set(),
       setCssEnabledStatus(id, enabled) {
         cssCalls.push([id, enabled]);
+        if (!this.enabledSnippets) return;
         if (enabled) this.enabledSnippets.add(id);
         else this.enabledSnippets.delete(id);
       },
@@ -334,8 +335,9 @@ async function loadPlugin({ data, graphGroups, snippets = {}, files: extraFiles 
   };
 }
 
-async function unloadWith(enabledIds) {
+async function unloadWith(enabledIds, { withoutEnabledSet = false } = {}) {
   const { app, cssCalls } = makeHarness();
+  if (withoutEnabledSet) delete app.customCss.enabledSnippets;
   app.vault.adapter.write('.obsidian/snippets/graph-styler-neon.css', 'generated');
   for (const id of enabledIds) app.customCss.enabledSnippets.add(id);
   const plugin = new GraphStyler(app);
@@ -509,6 +511,8 @@ async function backupWithoutGraphJson() {
   assert.strictEqual(unloadEnabled.calls['graph-styler-neon'], false);
   // The user had switched the snippet off in Settings → Appearance: nothing to resume.
   assert.deepStrictEqual((await unloadWith([])).saved, []);
+  // Without the internal Set, appearance.json (harness: graph-styler-neon enabled) is the fallback.
+  assert.deepStrictEqual((await unloadWith([], { withoutEnabledSet: true })).saved, ['neon']);
 
   // 0.1.7 → 0.1.8: no record, so the preset whose colours match graph.json is the one that was on.
   const migrated = await loadPlugin({ data: { custom: [] }, graphGroups: groupsFor(NEON.slice(0, 3)), snippets: { neon: 1, galaxy: 2 } });

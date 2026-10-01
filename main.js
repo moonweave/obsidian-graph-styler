@@ -591,8 +591,13 @@ module.exports = class GraphStyler extends Plugin {
     try {
       if (this._applying && this._applyIdle) await this._applyIdle;
       // 사용자가 직접 끈 스니펫은 기록하지 않는다 — 다시 켤 때 되살리는 건 여기서 끈 것뿐.
-      await this.saveResumeSnippet(await this.enabledSnippetId());
-      await this.setActiveSnippet('__none__');
+      // 끄기를 먼저 해 새 버전의 로드와 겹치는 구간을 줄인다.
+      const resumeId = await this.enabledSnippetId();
+      try {
+        await this.setActiveSnippet('__none__');
+      } finally {
+        await this.saveResumeSnippet(resumeId);
+      }
     } catch (e) {
       console.warn('[graph-styler] style cleanup on unload skipped', e);
     }
@@ -707,8 +712,16 @@ module.exports = class GraphStyler extends Plugin {
   }
 
   async enabledSnippetId() {
-    const enabled = this.app.customCss && this.app.customCss.enabledSnippets;
-    if (!enabled || typeof enabled.has !== 'function') return null;
+    let enabled = this.app.customCss && this.app.customCss.enabledSnippets;
+    if (!enabled || typeof enabled.has !== 'function') {
+      // 내부 필드가 없으면 저장된 외형 설정에서 읽는다.
+      try {
+        const appearance = JSON.parse(await this.app.vault.adapter.read(`${this.app.vault.configDir}/appearance.json`));
+        enabled = new Set(Array.isArray(appearance.enabledCssSnippets) ? appearance.enabledCssSnippets : []);
+      } catch (_) {
+        return null;
+      }
+    }
     for (const id of await this.snippetIds()) {
       if (id !== '__none__' && enabled.has(`graph-styler-${id}`)) return id;
     }
