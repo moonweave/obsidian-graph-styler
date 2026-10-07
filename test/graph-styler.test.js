@@ -27,9 +27,10 @@ class Plugin {
 
 class ItemView {}
 
+const notices = [];
 const originalLoad = Module._load;
 Module._load = function load(request, parent, isMain) {
-  if (request === 'obsidian') return { Plugin, ItemView, Notice: class Notice {} };
+  if (request === 'obsidian') return { Plugin, ItemView, Notice: class Notice { constructor(message) { notices.push(message); } } };
   return originalLoad.call(this, request, parent, isMain);
 };
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
@@ -386,6 +387,114 @@ async function backupWithoutGraphJson() {
   return { missing, backedUp: plugin._backedUp, backup: files[backupPath], original };
 }
 
+function fakeCanvas() {
+  const drawn = [];
+  return {
+    width: 0,
+    height: 0,
+    drawn,
+    getContext: () => ({
+      fillRect() {},
+      drawImage: (source) => drawn.push(source),
+      createRadialGradient: () => ({ addColorStop() {} }),
+    }),
+    toBlob: (callback) => callback({ arrayBuffer: async () => new ArrayBuffer(4) }),
+  };
+}
+
+// Mirrors the Obsidian 1.11 graph renderer fields the export touches. setScale recomputes
+// nodeScale/textAlpha and renderCallback re-runs it (updateZoom), as the real renderer does.
+class FakeGraphRenderer {
+  constructor(maxTexture) {
+    const self = this;
+    this.view = { width: 200, height: 100 };
+    this.px = {
+      renderer: {
+        width: 200,
+        height: 100,
+        view: this.view,
+        gl: { MAX_TEXTURE_SIZE: 3379, getParameter: () => maxTexture },
+        resize(w, h) {
+          this.width = w;
+          this.height = h;
+          self.view.width = w;
+          self.view.height = h;
+        },
+      },
+    };
+    this.width = 100;
+    this.height = 50;
+    this.scale = 1.5;
+    this.targetScale = 1.5;
+    this.panX = 7;
+    this.panY = 9;
+    this.nodeScale = 0.8;
+    this.textAlpha = 0.4;
+    this.fLineSizeMult = 1;
+    this.idleFrames = 61;
+    this.nodes = [{ text: { resolution: 2 } }, { text: { resolution: 2 } }, { rendered: false }];
+    this.changedCalls = 0;
+    this.during = null;
+  }
+
+  setScale(scale) {
+    this.scale = scale;
+    this.nodeScale = Math.sqrt(1 / scale);
+    this.textAlpha = 0;
+  }
+
+  setPan(x, y) {
+    this.panX = x;
+    this.panY = y;
+  }
+
+  renderCallback() {
+    this.setScale(this.targetScale);
+    this.during = rendererState(this);
+  }
+
+  changed() { this.changedCalls += 1; }
+}
+
+function rendererState(r) {
+  return {
+    W: r.px.renderer.width, H: r.px.renderer.height, width: r.width, height: r.height,
+    scale: r.scale, targetScale: r.targetScale, panX: r.panX, panY: r.panY,
+    nodeScale: r.nodeScale, textAlpha: r.textAlpha, line: r.fLineSizeMult, idleFrames: r.idleFrames,
+    textResolution: r.nodes.filter((node) => node.text).map((node) => node.text.resolution),
+    ownSetScale: Object.prototype.hasOwnProperty.call(r, 'setScale'),
+  };
+}
+
+async function exportWith(renderer) {
+  const { app } = makeHarness();
+  const created = [];
+  const canvases = [];
+  app.vault.getFiles = () => [];
+  app.vault.createBinary = async (filePath) => { created.push(filePath); };
+  app.workspace.getLeavesOfType = (type) => (type === 'graph' && renderer
+    ? [{ view: { renderer, contentEl: { nodeType: 1, parentElement: null } } }] : []);
+  const originalCreate = global.document.createElement;
+  global.document.createElement = () => {
+    const canvas = fakeCanvas();
+    canvases.push(canvas);
+    return canvas;
+  };
+  global.window.getComputedStyle = () => ({ backgroundColor: 'rgb(30, 30, 30)' });
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [] };
+  notices.length = 0;
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    await plugin.exportPng(3);
+  } finally {
+    console.error = originalError;
+    global.document.createElement = originalCreate;
+  }
+  return { created, canvas: canvases[0], notices: notices.slice() };
+}
+
 (async () => {
   const visualOnly = await apply(false);
   assert.strictEqual(visualOnly.graph.centerStrength, 0.42);
@@ -498,6 +607,72 @@ async function backupWithoutGraphJson() {
   assert.strictEqual(unloaded.calls['graph-styler-stale'], false);
 
   assert.strictEqual(await restoreWaitsForApply(), false);
+
+  // PNG export: scale is clamped to the GL limit and never drops below 1x.
+  const { exportScaleLimit, exportFileName } = GraphStyler;
+  assert.strictEqual(exportScaleLimit(16384, 1360, 1444, 3), 3);
+  assert.strictEqual(exportScaleLimit(16384, 1360, 1444, 20), 11);
+  assert.strictEqual(exportScaleLimit(undefined, 1360, 1444, 20), 11);
+  assert.strictEqual(exportScaleLimit(4096, 2000, 1000, 4), 2);
+  assert.strictEqual(exportScaleLimit(4096, 5000, 1000, 4), 1);
+  const at = new Date(2026, 9, 8, 7, 5);
+  assert.strictEqual(exportFileName('neon', at, []), 'graph-neon-20261008-0705.png');
+  assert.strictEqual(exportFileName(null, at, []), 'graph-graph-20261008-0705.png');
+  assert.strictEqual(exportFileName('../bad id', at, []), 'graph-bad-id-20261008-0705.png');
+  assert.strictEqual(exportFileName('neon', at, ['graph-neon-20261008-0705.png']), 'graph-neon-20261008-0705-2.png');
+  assert.strictEqual(exportFileName('neon', at, ['graph-neon-20261008-0705.png', 'graph-neon-20261008-0705-2.png']),
+    'graph-neon-20261008-0705-3.png');
+
+  // With the private renderer API, the graph is redrawn at k× and every field is put back.
+  const hiRes = new FakeGraphRenderer(16384);
+  const before = rendererState(hiRes);
+  const hiResExport = await exportWith(hiRes);
+  assert.deepStrictEqual(rendererState(hiRes), before);
+  assert.strictEqual(hiRes.changedCalls, 1);
+  assert.deepStrictEqual(hiRes.during, Object.assign({}, before, {
+    W: 600, H: 300, width: 300, height: 150, scale: 4.5, targetScale: 4.5, panX: 21, panY: 27,
+    line: 3, idleFrames: 0, textResolution: [6, 6], ownSetScale: true,
+  }));
+  assert.strictEqual(hiResExport.created.length, 1);
+  assert.ok(/^graph-graph-\d{8}-\d{4}\.png$/.test(hiResExport.created[0]));
+  assert.deepStrictEqual([hiResExport.canvas.width, hiResExport.canvas.height], [600, 300]);
+  assert.strictEqual(hiResExport.canvas.drawn[0], hiRes.view);
+  assert.deepStrictEqual(hiResExport.notices, [`🖼️ Saved ${hiResExport.created[0]} (600×300)`]);
+
+  // The GL texture limit caps the scale.
+  const capped = await exportWith(new FakeGraphRenderer(400));
+  assert.deepStrictEqual([capped.canvas.width, capped.canvas.height], [400, 200]);
+
+  // A failure mid-render still restores the renderer and saves nothing.
+  const broken = new FakeGraphRenderer(16384);
+  const brokenBefore = rendererState(broken);
+  broken.renderCallback = () => { throw new Error('render failed'); };
+  const brokenExport = await exportWith(broken);
+  delete broken.renderCallback;
+  assert.deepStrictEqual(rendererState(broken), brokenBefore);
+  assert.deepStrictEqual(brokenExport.created, []);
+  assert.deepStrictEqual(brokenExport.notices, ['PNG export failed — open the console (Cmd+Opt+I) to see why']);
+
+  // Without the private API the export falls back to the screen-resolution screenshot and says so.
+  const shot = { width: 50, height: 20 };
+  const transparentOnly = await exportWith({ getTransparentScreenshot: () => shot });
+  assert.strictEqual(transparentOnly.canvas.drawn[0], shot);
+  assert.deepStrictEqual([transparentOnly.canvas.width, transparentOnly.canvas.height], [50, 20]);
+  assert.strictEqual(transparentOnly.created.length, 1);
+  assert.strictEqual(transparentOnly.notices[0], 'High-resolution export unavailable — saved at screen resolution');
+  const noText = new FakeGraphRenderer(16384);
+  noText.nodes = [{ rendered: false }];
+  noText.getTransparentScreenshot = () => shot;
+  const noTextExport = await exportWith(noText);
+  assert.strictEqual(noTextExport.canvas.drawn[0], shot);
+  assert.strictEqual(noText.changedCalls, 0);
+  const backgroundOnly = await exportWith({ getBackgroundScreenshot: () => shot });
+  assert.strictEqual(backgroundOnly.canvas.drawn[0], shot);
+  assert.strictEqual(backgroundOnly.notices[0], 'High-resolution export unavailable — saved at screen resolution');
+  const noApi = await exportWith({});
+  assert.deepStrictEqual(noApi.created, []);
+  assert.deepStrictEqual(noApi.notices, ['PNG export failed — open the console (Cmd+Opt+I) to see why']);
+  assert.deepStrictEqual((await exportWith(null)).notices, ['Open a graph view first']);
 
   // Only what onunload itself switched off is switched back on, once.
   assert.deepStrictEqual(await loadPlugin({ data: { custom: [], resumeSnippet: 'neon' }, snippets: { neon: 1 } }).then(
