@@ -138,6 +138,9 @@ function graphPane(suffix) {
 }
 
 // 노드·선·글자 색은 렌더러가 body 아래에 잠깐 만드는 .graph-view.color-* 요소에서 읽는다.
+// 글로우 filter는 그래프를 실제로 그리는 iframe에 건다. 1.11.7·1.14.4에서 .view-content의 canvas는
+// 입력만 받는 투명 오버레이라 filter가 화면을 바꾸지 않는다(그 앞 버전이 canvas에 직접 그렸는지는
+// 확인하지 못해 선택자는 남겨 둔다).
 function makeGlowCss(p) {
   return `/* graph-styler :: ${p.id} (auto-generated) */
 ${graphPane('')} {
@@ -150,6 +153,7 @@ ${themed('.graph-view.color-fill-unresolved')} { color: ${p.unresolved}; }
 ${themed('.graph-view.color-fill-focused')} { color: #ffffff; }
 ${themed('.graph-view.color-line')} { color: ${p.line}; }
 ${themed('.graph-view.color-text')} { color: ${p.text}; }
+${graphPane(' > iframe')},
 ${graphPane(' > canvas')} { filter: ${p.filter}; }
 `;
 }

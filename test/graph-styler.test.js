@@ -515,8 +515,17 @@ async function backupWithoutGraphJson() {
   });
   const neonCss = refreshed.files['.obsidian/snippets/graph-styler-neon.css'];
   assert.ok(neonCss.includes('graph-styler :: neon'));
+  assert.ok(neonCss.includes('.view-content > iframe'));
   assert.ok(neonCss.includes('.view-content > canvas'));
   assert.ok(!neonCss.includes('graph-view-content'));
+  // 0.1.9 put the glow only on the input overlay canvas; its enabled snippet is rewritten on load as well.
+  const snippet019 = neonCss.split('\n').filter((line) => !line.includes('> iframe')).join('\n');
+  const from019 = await loadPlugin({
+    data: { custom: [], resumeSnippet: 'neon' },
+    snippets: { neon: 1 },
+    files: { '.obsidian/snippets/graph-styler-neon.css': snippet019 },
+  });
+  assert.strictEqual(from019.files['.obsidian/snippets/graph-styler-neon.css'], neonCss);
   // Hand-edited files (no generated header) are left alone; CRLF-only differences are not rewritten.
   const handEdited = await loadPlugin({
     data: { custom: [], resumeSnippet: 'neon' },
@@ -579,6 +588,7 @@ async function backupWithoutGraphJson() {
   // graph/localgraph leaf), never the whole leaf (view header) and never the absent .graph-view-content.
   for (const type of ['graph', 'localgraph']) {
     assert.ok(darkSelectors.includes(`.workspace-leaf-content[data-type="${type}"] .view-content`));
+    assert.ok(darkSelectors.includes(`.workspace-leaf-content[data-type="${type}"] .view-content > iframe`));
     assert.ok(darkSelectors.includes(`.workspace-leaf-content[data-type="${type}"] .view-content > canvas`));
     assert.ok(!darkSelectors.includes(`.workspace-leaf-content[data-type="${type}"]`));
   }
