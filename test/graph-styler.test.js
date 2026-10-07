@@ -210,6 +210,16 @@ async function applyRaw(raw) {
   return files;
 }
 
+async function importCode(code, custom) {
+  const { app } = makeHarness();
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom };
+  const saved = [];
+  plugin.saveData = async (data) => { saved.push(JSON.parse(JSON.stringify(data))); };
+  const raw = await plugin.importShareCode(code);
+  return { raw, saved, custom: plugin.settings.custom };
+}
+
 async function restoreWaitsForApply() {
   const { app, files } = makeHarness();
   const graphPath = '.obsidian/graph.json';
@@ -596,4 +606,88 @@ async function backupWithoutGraphJson() {
   const groups = [{ query: 'tag:#a', color: { a: 1, rgb: 1 } }];
   const restoredWithGroups = await restoreEngineOptions(JSON.stringify({ colorGroups: groups }));
   assert.deepStrictEqual(restoredWithGroups.sent.colorGroups, groups);
+
+  // Share codes: one line, round-trips the sanitized preset (Korean labels included), never the id.
+  const { encodeShareCode, decodeShareCode } = GraphStyler;
+  const shared = {
+    id: 'custom-1700000000000',
+    label: '  밤하늘 Night  ',
+    colors: ['#112233', '#445566', '#778899', '#aabbcc'],
+    bg: '#010203',
+    glow: 55,
+    forces: { node: 1.5, repel: 9, dist: 210, center: 0.3, linkS: 0.4, line: 0.6, fade: 2 },
+  };
+  const code = encodeShareCode(shared);
+  assert.ok(/^gs1\.[A-Za-z0-9_-]+$/.test(code), code);
+  const decoded = decodeShareCode(code);
+  assert.deepStrictEqual(decoded, {
+    label: '밤하늘 Night',
+    colors: shared.colors,
+    bg: shared.bg,
+    glow: 55,
+    forces: shared.forces,
+  });
+  assert.deepStrictEqual(decodeShareCode(`  ${code}\n`), decoded);
+  // Exported codes are always valid: a hand-edited bad colour is replaced before encoding.
+  assert.strictEqual(decodeShareCode(encodeShareCode({ colors: ['red'], glow: 'x' })).colors[0], '#7dd3fc');
+  assert.strictEqual(decodeShareCode(encodeShareCode({ colors: ['red'], glow: 'x' })).glow, 40);
+
+  assert.strictEqual(decodeShareCode(code.replace('gs1.', 'gs2.')), null);
+  assert.strictEqual(decodeShareCode(code.slice(4)), null);
+  assert.strictEqual(decodeShareCode(''), null);
+  assert.strictEqual(decodeShareCode(undefined), null);
+  assert.strictEqual(decodeShareCode('gs1.not base64!'), null);
+  assert.strictEqual(decodeShareCode(code.slice(0, -7)), null);
+  assert.strictEqual(decodeShareCode(`gs1.${Buffer.from('{"v":1').toString('base64url')}`), null);
+  // A code damaged inside the label is refused rather than imported with replacement characters.
+  const badUtf8 = Buffer.concat([Buffer.from('{"v":1,"label":"'), Buffer.from([0xed, 0x95]), Buffer.from('"}')]);
+  assert.strictEqual(decodeShareCode(`gs1.${badUtf8.toString('base64url')}`), null);
+  assert.strictEqual(decodeShareCode(`gs1.${Buffer.from('{"v":2,"label":"x"}').toString('base64url')}`), null);
+  assert.strictEqual(decodeShareCode(`gs1.${Buffer.from('null').toString('base64url')}`), null);
+
+  // A hostile or hand-made code is clamped on import, never rejected for being out of range.
+  const wild = `gs1.${Buffer.from(JSON.stringify({
+    v: 1, id: '../../evil', label: 'Wild', colors: ['#zzzzzz', 'url(x)'], bg: 'red;}', glow: 999,
+    forces: { node: 99, repel: -5, dist: 1e9, center: 7, linkS: -1, line: 0, fade: 40, extra: 1 },
+  })).toString('base64url')}`;
+  const imported = await importCode(wild, []);
+  assert.deepStrictEqual(imported.raw, {
+    id: 'Wild',
+    label: 'Wild',
+    colors: ['#7dd3fc', '#34d399', '#8899aa', '#8899aa'],
+    bg: '#0b1624',
+    glow: 100,
+    forces: { node: 4, repel: 0, dist: 500, center: 1, linkS: 0, line: 0.1, fade: 3 },
+  });
+  assert.strictEqual(imported.saved.length, 1);
+  assert.deepStrictEqual(imported.saved[0].custom, [imported.raw]);
+
+  // Fresh id from the label; collisions get -2, -3 …, case-insensitively and against built-ins.
+  const existing = [{ id: 'Wild' }, { id: 'wild-2' }];
+  assert.strictEqual((await importCode(wild, existing)).raw.id, 'Wild-3');
+  const neonCode = encodeShareCode({ label: 'NEON' });
+  assert.strictEqual((await importCode(neonCode, [])).raw.id, 'NEON-2');
+  assert.strictEqual((await importCode(encodeShareCode({ label: '__none__' }), [])).raw.id, '__none__-2');
+  assert.strictEqual((await importCode(code, [])).raw.id, 'Night');
+  assert.strictEqual((await importCode(encodeShareCode({ label: '밤하늘' }), [{ id: 'shared' }])).raw.id, 'shared-2');
+
+  // Copy writes the code to the clipboard; a refused clipboard only shows a notice.
+  const clipboard = [];
+  Object.defineProperty(global, 'navigator', {
+    value: { language: 'en', clipboard: { writeText: async (text) => { clipboard.push(text); } } },
+    configurable: true,
+  });
+  const copier = new GraphStyler(makeHarness().app);
+  await copier.copyShareCode(shared);
+  assert.deepStrictEqual(clipboard, [code]);
+  global.navigator.clipboard.writeText = async () => { throw new Error('denied'); };
+  const consoleError = console.error;
+  console.error = () => {};
+  await copier.copyShareCode(shared);
+  console.error = consoleError;
+
+  const rejected = await importCode('gs1.@@', [{ id: 'keep' }]);
+  assert.strictEqual(rejected.raw, null);
+  assert.deepStrictEqual(rejected.saved, []);
+  assert.deepStrictEqual(rejected.custom, [{ id: 'keep' }]);
 })();

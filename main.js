@@ -50,6 +50,13 @@ const STRINGS = {
     namePh: 'Preset name',
     saved: (n) => `💾 “${n}” saved`,
     deleted: 'Preset deleted',
+    copyCode: 'Copy share code',
+    copied: (n) => `📋 Share code for “${n}” copied`,
+    copyFailed: 'Could not copy the share code',
+    codePh: 'Paste a share code (gs1.…)',
+    importCode: 'Import share code',
+    imported: (n) => `📥 “${n}” added to My presets`,
+    badCode: 'That share code is not valid',
     f: {
       colors: 'Group colors', bg: 'Background', glow: 'Glow',
       repel: 'Repel', dist: 'Link distance', center: 'Center', linkS: 'Link force',
@@ -80,6 +87,13 @@ const STRINGS = {
     namePh: '프리셋 이름',
     saved: (n) => `💾 “${n}” 저장됨`,
     deleted: '프리셋 삭제됨',
+    copyCode: '공유 코드 복사',
+    copied: (n) => `📋 “${n}” 공유 코드 복사됨`,
+    copyFailed: '공유 코드를 복사하지 못했어요',
+    codePh: '공유 코드 붙여넣기 (gs1.…)',
+    importCode: '공유 코드 가져오기',
+    imported: (n) => `📥 “${n}” 내 프리셋에 추가됨`,
+    badCode: '유효하지 않은 공유 코드입니다',
     f: {
       colors: '그룹 색', bg: '배경', glow: '글로우',
       repel: '반발력', dist: '링크 거리', center: '중심력', linkS: '링크력',
@@ -237,15 +251,14 @@ function safePresetId(id) {
   return safe || 'custom-invalid';
 }
 
-// 사용자 커스텀 raw({id,label,colors[4],bg,glow,forces}) → 프리셋으로 재구성.
-// data.json 손편집 대비 hex 검증.
-function presetFromRaw(raw) {
+// 사용자 커스텀 raw({id,label,colors[4],bg,glow,forces})의 hex·범위 검증.
+// data.json 손편집과 남이 준 공유 코드 모두 이걸 거친다.
+function sanitizeRaw(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
   const sourceColors = Array.isArray(source.colors) ? source.colors.slice(0, 4) : [];
   const colors = sourceColors.map((c, i) => safeHex(c, DEFAULT_CUSTOM.colors[i] || '#8899aa'));
   while (colors.length < 4) colors.push('#8899aa');
   const bgHex = safeHex(source.bg, DEFAULT_CUSTOM.bg);
-  const bg = [mix(bgHex, colors[0], 0.2), mix(bgHex, colors[0], 0.08), bgHex];
   const g = finiteRange(source.glow, DEFAULT_CUSTOM.glow, 0, 100);
   const sourceForces = source.forces && typeof source.forces === 'object' && !Array.isArray(source.forces)
     ? source.forces : {};
@@ -258,14 +271,21 @@ function presetFromRaw(raw) {
     line: finiteRange(sourceForces.line, DEFAULT_CUSTOM.forces.line, 0.1, 2),
     fade: finiteRange(sourceForces.fade, DEFAULT_CUSTOM.forces.fade, 0, 3),
   };
+  const label = typeof source.label === 'string' ? source.label.trim() : '';
+  return { id: safePresetId(source.id), label: label || 'Custom', colors, bg: bgHex, glow: g, forces };
+}
+
+// 사용자 커스텀 raw → 프리셋으로 재구성.
+function presetFromRaw(raw) {
+  const { id, label, colors, bg: bgHex, glow: g, forces } = sanitizeRaw(raw);
+  const bg = [mix(bgHex, colors[0], 0.2), mix(bgHex, colors[0], 0.08), bgHex];
   const theme = {
     circle: colors[0], fill: colors[1], tag: colors[2],
     line: mix(colors[0], bgHex, 0.55), text: lighten(colors[0], 0.72),
     unresolved: mix(bgHex, '#ffffff', 0.1),
     filter: `brightness(${(1 + g / 280).toFixed(2)}) contrast(1.06) saturate(${(1 + g / 110).toFixed(2)})`,
   };
-  const label = typeof source.label === 'string' ? source.label.trim() : 'Custom';
-  return P(safePresetId(source.id), label || 'Custom', '🎛️', colors, forces, bg, theme, { applyForces: true });
+  return P(id, label, '🎛️', colors, forces, bg, theme, { applyForces: true });
 }
 
 const DEFAULT_CUSTOM = {
@@ -274,6 +294,35 @@ const DEFAULT_CUSTOM = {
   glow: 40,
   forces: { node: 2.2, repel: 17, dist: 140, center: 0.05, linkS: 0.2, line: 0.3, fade: 1.2 },
 };
+
+// 공유 코드 = 'gs1.' + base64url(JSON). 붙여넣기 쉬운 한 줄이고, 라벨의 한글도 UTF-8로 보존한다.
+// id는 담지 않는다 — 가져오는 쪽 vault에서 새로 정한다.
+const SHARE_PREFIX = 'gs1.';
+
+function encodeShareCode(raw) {
+  const { label, colors, bg, glow, forces } = sanitizeRaw(raw);
+  const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, label, colors, bg, glow, forces }));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return SHARE_PREFIX + btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function decodeShareCode(code) {
+  const text = typeof code === 'string' ? code.trim() : '';
+  if (!text.startsWith(SHARE_PREFIX)) return null;
+  const body = text.slice(SHARE_PREFIX.length);
+  if (!/^[A-Za-z0-9_-]+$/.test(body)) return null;
+  try {
+    const binary = atob(body.replace(/-/g, '+').replace(/_/g, '/'));
+    const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
+    const data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    if (!data || data.v !== 1) return null;
+    const { label, colors, bg, glow, forces } = sanitizeRaw(data);
+    return { label, colors, bg, glow, forces };
+  } catch (_) {
+    return null;
+  }
+}
 
 function draftFromGraph(options) {
   const o = options || {};
@@ -412,7 +461,7 @@ class StylerView extends ItemView {
     if (this._raf) window.cancelAnimationFrame(this._raf);
   }
 
-  presetButton(parent, preset, onDelete) {
+  presetButton(parent, preset, onDelete, onShare) {
     const btn = parent.createEl('button', { cls: 'gs-btn' });
     const active = this.plugin.currentPreset && this.plugin.currentPreset.id === preset.id;
     btn.toggleClass('is-active', !!active);
@@ -426,6 +475,12 @@ class StylerView extends ItemView {
     }
     btn.createSpan({ cls: 'gs-btn-label', text: `${preset.emoji}  ${preset.label}` });
     btn.onclick = () => this.plugin.applyPreset(preset);
+    if (onShare) {
+      const share = btn.createSpan({ cls: 'gs-share', text: '📋' });
+      share.setAttr('title', L.copyCode);
+      share.setAttr('aria-label', L.copyCode);
+      share.onclick = (ev) => { ev.stopPropagation(); onShare(); };
+    }
     if (onDelete) {
       const del = btn.createSpan({ cls: 'gs-del', text: '✕' });
       del.onclick = (ev) => { ev.stopPropagation(); onDelete(); };
@@ -446,15 +501,23 @@ class StylerView extends ItemView {
     const list = c.createDiv({ cls: 'gs-list' });
     for (const key of Object.keys(PRESETS)) this.presetButton(list, PRESETS[key]);
 
-    // user presets
+    // user presets — 가져오기 칸이 있어 비어 있어도 섹션은 보인다.
     const custom = this.plugin.settings.custom || [];
+    c.createEl('div', { cls: 'gs-section', text: L.myPresets });
     if (custom.length) {
-      c.createEl('div', { cls: 'gs-section', text: L.myPresets });
       const myList = c.createDiv({ cls: 'gs-list' });
       for (const raw of custom) {
-        this.presetButton(myList, presetFromRaw(raw), () => this.plugin.deleteCustom(raw.id));
+        this.presetButton(myList, presetFromRaw(raw),
+          () => this.plugin.deleteCustom(raw.id),
+          () => this.plugin.copyShareCode(raw));
       }
     }
+    const importRow = c.createDiv({ cls: 'gs-row' });
+    const codeEl = importRow.createEl('input', { cls: 'gs-code' });
+    codeEl.type = 'text';
+    codeEl.placeholder = L.codePh;
+    const importBtn = c.createEl('button', { cls: 'gs-import', text: L.importCode });
+    importBtn.onclick = () => this.plugin.importShareCode(codeEl.value);
 
     const restore = c.createEl('button', { cls: 'gs-restore', text: L.restore });
     restore.setAttr('title', L.restoreNote);
@@ -650,6 +713,41 @@ module.exports = class GraphStyler extends Plugin {
     await this.removeCustomSnippet(id);
     this.refreshViews();
     new Notice(L.deleted);
+  }
+
+  async copyShareCode(raw) {
+    try {
+      await navigator.clipboard.writeText(encodeShareCode(raw));
+      new Notice(L.copied(sanitizeRaw(raw).label));
+    } catch (e) {
+      console.error('[graph-styler] share code copy failed', e);
+      new Notice(L.copyFailed);
+    }
+  }
+
+  // 가져오기는 내 프리셋에 추가만 한다 — 적용은 사용자가 누를 때.
+  async importShareCode(code) {
+    const shared = decodeShareCode(code);
+    if (!shared) {
+      new Notice(L.badCode);
+      return null;
+    }
+    // id는 스니펫 파일 이름이 된다. 기본 프리셋·내부 id와도 겹치면 안 되고,
+    // 대소문자를 구분하지 않는 파일시스템(macOS·Windows)에서는 'Neon'과 'neon'도 같은 파일이다.
+    const taken = new Set(Object.keys(PRESETS).concat(LIVE_ID, '__none__')
+      .concat(this.settings.custom.map((r) => safePresetId(r.id)))
+      .map((id) => id.toLowerCase()));
+    // 한글만 있는 라벨은 ASCII가 남지 않아 'custom-invalid'가 된다 — 스니펫 이름에 보이니 바꿔 둔다.
+    const fromLabel = safePresetId(shared.label);
+    const base = fromLabel === 'custom-invalid' ? 'shared' : fromLabel;
+    let id = base;
+    for (let n = 2; taken.has(id.toLowerCase()); n++) id = `${base}-${n}`;
+    const raw = Object.assign({ id }, shared);
+    this.settings.custom.push(raw);
+    await this.saveData(this.settings);
+    this.refreshViews();
+    new Notice(L.imported(raw.label));
+    return raw;
   }
 
   async removeCustomSnippet(id) {
@@ -1070,3 +1168,7 @@ module.exports = class GraphStyler extends Plugin {
     new Notice(L.restored);
   }
 };
+
+// 플러그인 로더는 module.exports(클래스)만 쓴다. 공유 코드 함수는 테스트용으로 붙여 둔다.
+module.exports.encodeShareCode = encodeShareCode;
+module.exports.decodeShareCode = decodeShareCode;
