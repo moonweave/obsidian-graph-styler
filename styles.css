@@ -145,6 +145,11 @@
   margin-top: 4px;
 }
 
+/* keep the share controls apart from Restore, which acts on the whole vault */
+.graph-styler-panel .gs-import {
+  margin-bottom: 12px;
+}
+
 /* credit — small, elegant italic serif, bottom of the panel */
 .graph-styler-panel .gs-credit {
   margin-top: 24px;
