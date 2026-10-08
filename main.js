@@ -49,6 +49,7 @@ const STRINGS = {
     exportLowRes: 'High-resolution export unavailable — saved at screen resolution',
     exportCapped: (req, k) => `${req}x is too large for this graph view — saved at ${k}x`,
     exportFailed: 'PNG export failed — open the console (Cmd+Opt+I) to see why',
+    exportOpenGraph: 'Open the graph view or a note\'s local graph first',
     customize: '🎛️ Customize',
     customizeNote: 'Customize changes graph physics live. Save it only if you want a reusable custom preset.',
     active: 'active',
@@ -93,6 +94,7 @@ const STRINGS = {
     exportLowRes: '고해상도 불가, 화면 해상도로 저장',
     exportCapped: (req, k) => `${req}x는 이 그래프 화면에 너무 커서 ${k}x로 저장`,
     exportFailed: 'PNG 내보내기 실패 — 콘솔(Cmd+Opt+I)에서 원인 확인',
+    exportOpenGraph: '그래프 뷰나 노트의 로컬 그래프를 먼저 열어주세요',
     customize: '🎛️ 커스터마이즈',
     customizeNote: '커스터마이즈는 그래프 물리를 실시간으로 바꿉니다. 다시 쓸 설정만 프리셋으로 저장하세요.',
     active: '현재 적용됨',
@@ -473,11 +475,20 @@ function exportScaleLimit(maxTexture, width, height, requested) {
   return Math.max(1, Math.min(requested, limit));
 }
 
-function exportFileName(presetId, date, existing) {
+// 로컬 그래프는 노트 이름을 파일 이름에 넣는다. 한글 등은 그대로 두고, 파일 시스템과 Obsidian 링크가
+// 막는 문자·공백만 '-'로 바꾼다.
+function exportNoteName(name) {
+  if (typeof name !== 'string') return '';
+  return name.replace(/[\\/:*?"<>|#^[\]\s\u0000-\u001f]+/g, '-').replace(/-{2,}/g, '-')
+    .slice(0, 60).replace(/^[-.]+|[-.]+$/g, '');
+}
+
+function exportFileName(presetId, date, existing, noteName) {
   const pad = (n) => String(n).padStart(2, '0');
   const stamp = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
     + `-${pad(date.getHours())}${pad(date.getMinutes())}`;
-  const base = `graph-${presetId ? safePresetId(presetId) : 'graph'}-${stamp}`;
+  const note = exportNoteName(noteName);
+  const base = `graph-${presetId ? safePresetId(presetId) : 'graph'}${note ? `-${note}` : ''}-${stamp}`;
   const taken = new Set(existing);
   let name = `${base}.png`;
   for (let i = 2; taken.has(name); i++) name = `${base}-${i}.png`;
@@ -761,6 +772,7 @@ module.exports = class GraphStyler extends Plugin {
   // 플러그인 로더는 클래스만 쓴다. 내보내기 계산 함수는 테스트용으로 붙여 둔다.
   static exportScaleLimit = exportScaleLimit;
   static exportFileName = exportFileName;
+  static exportNoteName = exportNoteName;
 
   async onload() {
     // 업데이트·제자리 재시작 때 Obsidian은 이전 인스턴스의 onunload를 기다리지 않고 이 onload를 부른다.
@@ -858,13 +870,29 @@ module.exports = class GraphStyler extends Plugin {
     }
   }
 
-  // 전역 그래프를 먼저, 없으면 로컬 그래프를 찍는다.
+  // 찍을 그래프: 활성 leaf가 그래프·로컬 그래프면 그것(명령 팔레트), 아니면 가장 최근에 활성이던 것
+  // (패널 버튼을 누르면 패널이 활성이 된다). 숨은 탭의 그래프는 크기가 0이라 보이는 것을 먼저 고른다.
+  // activeTime이 없으면 0.2.0처럼 전역 그래프가 먼저다.
+  exportTarget() {
+    const workspace = this.app.workspace;
+    const leaves = workspace.getLeavesOfType('graph').concat(workspace.getLeavesOfType('localgraph'))
+      .filter((leaf) => leaf && leaf.view && leaf.view.renderer);
+    const visible = (leaf) => {
+      const el = leaf.view.contentEl;
+      return !el || typeof el.clientWidth !== 'number' || el.clientWidth > 0;
+    };
+    const shown = leaves.filter(visible);
+    const candidates = shown.length ? shown : leaves;
+    if (candidates.includes(workspace.activeLeaf)) return workspace.activeLeaf;
+    const time = (leaf) => (typeof leaf.activeTime === 'number' ? leaf.activeTime : 0);
+    return candidates.reduce((best, leaf) => (best === null || time(leaf) > time(best) ? leaf : best), null);
+  }
+
   async exportPng(requestedScale) {
-    const leaf = this.app.workspace.getLeavesOfType('graph')
-      .concat(this.app.workspace.getLeavesOfType('localgraph'))[0];
-    const renderer = leaf && leaf.view && leaf.view.renderer;
+    const leaf = this.exportTarget();
+    const renderer = leaf && leaf.view.renderer;
     if (!renderer) {
-      new Notice(L.openGraph);
+      new Notice(L.exportOpenGraph);
       return;
     }
     try {
@@ -900,8 +928,9 @@ module.exports = class GraphStyler extends Plugin {
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
       if (!blob) throw new Error('canvas.toBlob returned no image');
       const presetId = this.currentPreset ? this.currentPreset.id : await this.enabledSnippetId();
+      const localFile = leaf.view.getViewType && leaf.view.getViewType() === 'localgraph' ? leaf.view.file : null;
       const name = exportFileName(presetId === LIVE_ID ? null : presetId, new Date(),
-        this.app.vault.getFiles().map((file) => file.path));
+        this.app.vault.getFiles().map((file) => file.path), localFile && localFile.basename);
       await this.app.vault.createBinary(name, await blob.arrayBuffer());
       new Notice(L.exported(name, canvas.width, canvas.height));
     } catch (e) {
