@@ -450,6 +450,45 @@ async function restoreEngineOptions(backup) {
 
 // The core graph plugin keeps graph.json in memory and writes it back when a graph leaf is reopened.
 // In Obsidian 1.14.4 that write could land before its file watcher saw the new graph.json.
+// A custom preset saved with "Include filters and display": applied, then restored.
+async function fullViewApply(view) {
+  const { app, files, engineOptions } = makeHarness();
+  const localSent = [];
+  const graphLeaves = app.workspace.getLeavesOfType;
+  const localLeaf = { view: { engine: { setOptions: (options) => localSent.push(options) } },
+    getViewState: () => ({ type: 'localgraph', state: {} }), setViewState: async () => {} };
+  app.workspace.getLeavesOfType = (type) => (type === 'localgraph' ? [localLeaf] : graphLeaves(type));
+  const backup = files['.obsidian/graph.json'];
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [] };
+  const raw = { id: 'fv', label: 'Full view', colors: ['#112233', '#445566', '#778899', '#aabbcc'], bg: '#010203', glow: 40,
+    forces: { node: 1.5, repel: 9, dist: 210, center: 0.3, linkS: 0.4, line: 0.6, fade: 2 }, view };
+  await plugin._doApply(GraphStyler.presetFromRaw(raw));
+  const applied = JSON.parse(files['.obsidian/graph.json']);
+  const originalConfirm = global.window.confirm;
+  global.window.confirm = () => true;
+  try {
+    await plugin.restore();
+  } finally {
+    global.window.confirm = originalConfirm;
+  }
+  return { applied, engine: engineOptions[0], local: localSent[0], restored: files['.obsidian/graph.json'], backup };
+}
+
+async function saveWithView(includeView, coreOptions) {
+  const { app } = makeHarness();
+  if (coreOptions) app.internalPlugins = { plugins: { graph: { instance: { options: coreOptions } } } };
+  const plugin = new GraphStyler(app);
+  let factory = null;
+  plugin.registerView = (type, make) => { factory = make; };
+  await plugin.onload();
+  const saved = [];
+  plugin.saveCustom = async (raw) => { saved.push(raw); };
+  plugin.draft.includeView = includeView;
+  await factory({}).saveCurrent();
+  return saved[0];
+}
+
 async function coreOptionsAtReopen(run) {
   const { app, files } = makeHarness();
   const core = { options: { colorGroups: [{ query: 'old', color: { a: 1, rgb: 2 } }], nodeSizeMultiplier: 1, search: '' } };
@@ -1105,6 +1144,34 @@ async function exportTargetWith(specs, activeIndex) {
     assert.ok(focusRule.includes(`.graph-styler-panel ${selector}`), selector);
   }
 
+  // Full-view presets (opt-in): filters and display ride along, are sanitised, and Restore returns everything.
+  const fullView = { search: 'tag:#paper', showTags: true, showAttachments: false, hideUnresolved: true, showOrphans: false, showArrow: true };
+  const fv = await fullViewApply(fullView);
+  for (const [key, value] of Object.entries(fullView)) assert.strictEqual(fv.applied[key], value, key);
+  assert.strictEqual(fv.applied.nodeSizeMultiplier, 1.5);
+  assert.strictEqual(fv.engine.search, 'tag:#paper');
+  // A note's local graph keeps its own filters: it gets colours and forces, not the global filter/display keys.
+  assert.ok(Object.keys(fullView).every((key) => !(key in fv.local)), JSON.stringify(fv.local));
+  assert.strictEqual(fv.local.nodeSizeMultiplier, 1.5);
+  assert.ok(Array.isArray(fv.local.colorGroups));
+  assert.strictEqual(fv.restored, fv.backup);
+  // Without the opt-in a custom preset leaves filters and display alone, as before.
+  const plain = await fullViewApply(undefined);
+  assert.strictEqual(plain.applied.showTags, false);
+  assert.ok(!('search' in plain.applied) && !('showArrow' in plain.applied));
+  // Every field is type-checked; the search query is cleaned and capped.
+  const wildView = await fullViewApply({ search: `a\u0000b${'x'.repeat(2000)}`, showTags: 'yes', showArrow: 1, hideUnresolved: false, extra: true });
+  assert.strictEqual(wildView.applied.search.length, 500);
+  assert.ok(wildView.applied.search.startsWith('a b'));
+  assert.strictEqual(wildView.applied.showTags, false);
+  assert.ok(!('showArrow' in wildView.applied) && !('extra' in wildView.applied));
+  assert.strictEqual(wildView.applied.hideUnresolved, false);
+  assert.strictEqual((await fullViewApply([true])).applied.showTags, false);
+  // Saving: the checkbox is off by default; on, it captures graph.json overlaid by the core plugin's live options.
+  assert.ok(!('view' in await saveWithView(false)));
+  assert.deepStrictEqual((await saveWithView(true, { search: 'path:Papers', showArrow: true, colorGroups: [] })).view,
+    { search: 'path:Papers', showTags: false, showArrow: true });
+
   // Share codes: one line, round-trips the sanitized preset (Korean labels included), never the id.
   const { encodeShareCode, decodeShareCode } = GraphStyler;
   const shared = {
@@ -1131,6 +1198,17 @@ async function exportTargetWith(specs, activeIndex) {
   assert.strictEqual(decodeShareCode(encodeShareCode({ colors: ['red'], glow: 'x' })).glow, 40);
 
   assert.strictEqual(decodeShareCode(code.replace('gs1.', 'gs2.')), null);
+  // gs2. carries filters and display; plain presets keep producing gs1. so older versions can read them.
+  const viewCode = encodeShareCode(Object.assign({}, shared, { view: fullView }));
+  assert.ok(viewCode.startsWith('gs2.'), viewCode);
+  assert.deepStrictEqual((await importCode(viewCode, [])).raw.view, fullView);
+  assert.deepStrictEqual(decodeShareCode(viewCode), Object.assign({}, decoded, { view: fullView }));
+  assert.strictEqual(decodeShareCode(viewCode.replace('gs2.', 'gs1.')), null);
+  assert.ok(encodeShareCode(Object.assign({}, shared, { view: { junk: 1 } })).startsWith('gs1.'));
+  const gs1WithView = `gs1.${Buffer.from(JSON.stringify({ v: 1, label: 'x', view: fullView })).toString('base64url')}`;
+  assert.ok(!('view' in decodeShareCode(gs1WithView)));
+  const gs2Hostile = `gs2.${Buffer.from(JSON.stringify({ v: 2, label: 'x', view: { search: 42, showTags: 'no', showOrphans: true } })).toString('base64url')}`;
+  assert.deepStrictEqual(decodeShareCode(gs2Hostile).view, { showOrphans: true });
   assert.strictEqual(decodeShareCode(code.slice(4)), null);
   assert.strictEqual(decodeShareCode(''), null);
   assert.strictEqual(decodeShareCode(undefined), null);

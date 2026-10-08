@@ -140,6 +140,11 @@
   margin: 8px 0;
 }
 
+.graph-styler-panel .gs-check {
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .graph-styler-panel .gs-row-label {
   flex: 0 0 84px;
   font-size: 12px;
