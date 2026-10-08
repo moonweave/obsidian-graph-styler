@@ -27,6 +27,8 @@
 }
 
 .graph-styler-panel .gs-btn:focus-visible,
+.graph-styler-panel .gs-share:focus-visible,
+.graph-styler-panel .gs-del:focus-visible,
 .graph-styler-panel .gs-restore:focus-visible,
 .graph-styler-panel .gs-save:focus-visible,
 .graph-styler-panel .gs-import:focus-visible {
@@ -50,16 +52,44 @@
   border-radius: 50%;
 }
 
+/* My-presets row: the copy/delete buttons sit over the right end of the preset button as siblings */
+.graph-styler-panel .gs-preset-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.graph-styler-panel .gs-preset-row .gs-btn {
+  padding-right: 64px;
+}
+
 .graph-styler-panel .gs-share,
 .graph-styler-panel .gs-del {
-  flex-shrink: 0;
-  padding: 0 2px;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: auto;
+  padding: 2px 4px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
   font-size: 11px;
   opacity: 0.45;
+  cursor: pointer;
+}
+
+.graph-styler-panel .gs-share {
+  right: 34px;
+}
+
+.graph-styler-panel .gs-del {
+  right: 10px;
 }
 
 .graph-styler-panel .gs-share:hover,
-.graph-styler-panel .gs-del:hover {
+.graph-styler-panel .gs-del:hover,
+.graph-styler-panel .gs-share:focus-visible,
+.graph-styler-panel .gs-del:focus-visible {
   opacity: 1;
 }
 

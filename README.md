@@ -25,7 +25,7 @@ Each built-in preset applies node/group colors and a glow CSS snippet while pres
 
 **Make your own.** Open **🎛️ Customize** in the panel — drag the force/size sliders (repel, link distance, node size…) and pick colors, watch the graph update live, then **💾 Save as preset**. Customization changes graph physics; save it only when you want a reusable custom preset. Your presets show up under *My presets* and persist.
 
-**Share a preset.** Click 📋 on one of *My presets* to copy a one-line share code (it starts with `gs1.`) and send it to anyone. To use a code you received, paste it into the box under *My presets* and click **Import share code**. The preset is added to *My presets* without being applied; click it when you want it. Colors and values are checked on import, so a damaged or hand-edited code can't push the graph out of range.
+**Share a preset.** Click 📋 on one of *My presets* to copy a one-line share code (it starts with `gs1.`) and send it to anyone. To use a code you received, paste it into the box under *My presets* and click **Import share code**. The preset is added to *My presets* without being applied; click it when you want it. Colors and values are checked on import, so a damaged or hand-edited code can't push the graph out of range. 📋 and ✕ also work from the keyboard: Tab moves from a preset to its copy and delete buttons, and Enter or Space runs them without applying the preset.
 
 ## How colors map to your vault
 Graph Styler hardcodes nothing — it adapts to *your* vault:
