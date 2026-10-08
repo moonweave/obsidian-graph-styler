@@ -602,18 +602,6 @@ async function backupWithoutGraphJson() {
   assert.ok(!glowCss.includes('graph-view-content'));
   assert.ok(darkSelectors.includes('.graph-view.color-text'));
 
-  // A vault without graph.json is on Obsidian defaults; Restore must return there.
-  const backup = await backupWithoutGraphJson();
-  assert.deepStrictEqual(backup.missing, { backedUp: true, hasBackup: true });
-  assert.strictEqual(backup.backup, '{}');
-
-  const restoredWithoutGroups = await restoreEngineOptions('{"centerStrength":0.42}');
-  assert.deepStrictEqual(restoredWithoutGroups.sent, { colorGroups: [], centerStrength: 0.42 });
-  assert.strictEqual(restoredWithoutGroups.graph, '{"centerStrength":0.42}');
-  const groups = [{ query: 'tag:#a', color: { a: 1, rgb: 1 } }];
-  const restoredWithGroups = await restoreEngineOptions(JSON.stringify({ colorGroups: groups }));
-  assert.deepStrictEqual(restoredWithGroups.sent.colorGroups, groups);
-
   // Applying a custom preset reopens the graph leaf; the core plugin must already hold the new
   // groups and forces, or it writes the previous preset back over them.
   const reopened = await coreOptionsAtReopen((plugin) => plugin._doApply(preset(true)));
@@ -635,4 +623,16 @@ async function backupWithoutGraphJson() {
   });
   assert.deepStrictEqual(restoredCore.core.colorGroups, []);
   assert.strictEqual(restoredCore.core.repelStrength, 3);
+
+  // A vault without graph.json is on Obsidian defaults; Restore must return there.
+  const backup = await backupWithoutGraphJson();
+  assert.deepStrictEqual(backup.missing, { backedUp: true, hasBackup: true });
+  assert.strictEqual(backup.backup, '{}');
+
+  const restoredWithoutGroups = await restoreEngineOptions('{"centerStrength":0.42}');
+  assert.deepStrictEqual(restoredWithoutGroups.sent, { colorGroups: [], centerStrength: 0.42 });
+  assert.strictEqual(restoredWithoutGroups.graph, '{"centerStrength":0.42}');
+  const groups = [{ query: 'tag:#a', color: { a: 1, rgb: 1 } }];
+  const restoredWithGroups = await restoreEngineOptions(JSON.stringify({ colorGroups: groups }));
+  assert.deepStrictEqual(restoredWithGroups.sent.colorGroups, groups);
 })();
