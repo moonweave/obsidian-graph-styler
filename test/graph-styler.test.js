@@ -138,6 +138,26 @@ async function apply(applyForces) {
   return { graph: JSON.parse(files['.obsidian/graph.json']), engineOptions, renderCalls, viewStateCalls };
 }
 
+async function applyNotices({ graphOpen }) {
+  const { app } = makeHarness();
+  if (!graphOpen) app.workspace.getLeavesOfType = () => [];
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [] };
+  notices.length = 0;
+  await plugin._doApply(Object.assign(preset(false), { emoji: '*', label: 'Test' }));
+  return notices.slice();
+}
+
+async function exportScaleAfterLoad(data) {
+  const { app } = makeHarness();
+  const plugin = new GraphStyler(app);
+  const saved = [];
+  plugin.loadData = async () => data;
+  plugin.saveData = async (settings) => { saved.push(JSON.parse(JSON.stringify(settings))); };
+  await plugin.onload();
+  return { plugin, saved };
+}
+
 function preview(applyForces) {
   const { app, engineOptions, renderCalls } = makeHarness();
   const plugin = new GraphStyler(app);
@@ -688,6 +708,21 @@ async function exportWith(renderer, { filters = new Map(), iframe = null } = {})
   assert.strictEqual(unloaded.calls['graph-styler-stale'], false);
 
   assert.strictEqual(await restoreWaitsForApply(), false);
+
+  // No graph open: only "open a graph view first", never a success notice for a change nobody can see.
+  assert.deepStrictEqual(await applyNotices({ graphOpen: false }), ['Open a graph view first']);
+  assert.deepStrictEqual(await applyNotices({ graphOpen: true }), ['* Test applied']);
+
+  // Export scale defaults to 2x (3x wrote ~20 MB per file), and the last choice is remembered.
+  assert.strictEqual((await exportScaleAfterLoad({})).plugin.exportScale, 2);
+  assert.strictEqual((await exportScaleAfterLoad({ exportScale: 4 })).plugin.exportScale, 4);
+  assert.strictEqual((await exportScaleAfterLoad({ exportScale: 7 })).plugin.exportScale, 2);
+  assert.strictEqual((await exportScaleAfterLoad({ exportScale: '3' })).plugin.exportScale, 2);
+  const chosen = await exportScaleAfterLoad({ custom: [{ id: 'keep' }] });
+  await chosen.plugin.setExportScale(3);
+  assert.strictEqual(chosen.plugin.exportScale, 3);
+  assert.strictEqual(chosen.saved[chosen.saved.length - 1].exportScale, 3);
+  assert.deepStrictEqual(chosen.saved[chosen.saved.length - 1].custom, [{ id: 'keep' }]);
 
   // PNG export: scale is clamped to the GL limit and never drops below 1x.
   const { exportScaleLimit, exportFileName } = GraphStyler;
