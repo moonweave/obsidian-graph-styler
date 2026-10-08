@@ -556,6 +556,18 @@ class StylerView extends ItemView {
 
 module.exports = class GraphStyler extends Plugin {
   async onload() {
+    // 업데이트·제자리 재시작 때 Obsidian은 이전 인스턴스의 onunload를 기다리지 않고 이 onload를 부른다.
+    // 이전 인스턴스가 스니펫을 끄고 resumeSnippet을 쓰는 게 아래 loadData보다 늦으면 테마가 꺼진 채
+    // 남았다. 그 늦은 기록은 data.json 변경으로 보이므로, 첫 복원이 끝난 뒤에 다시 읽어 복원한다.
+    // 첫 await 전에 등록해야 loadData와 첫 복원 사이에 온 기록도 놓치지 않는다.
+    let resumed;
+    const firstResume = new Promise((resolve) => { resumed = resolve; });
+    const dataPath = this.manifest && this.manifest.dir ? `${this.manifest.dir}/data.json` : null;
+    if (dataPath) {
+      this.registerEvent(this.app.vault.on('raw', (path) => {
+        if (path === dataPath) firstResume.then(() => this.resumeLateSnippet());
+      }));
+    }
     this.settings = Object.assign({ custom: [] }, await this.loadData());
     if (!Array.isArray(this.settings.custom)) this.settings.custom = [];
     this.currentForceOptions = {};
@@ -567,7 +579,7 @@ module.exports = class GraphStyler extends Plugin {
     this.currentPreset = null;
 
     // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
-    const restoreSnippet = () => this.resumeSnippet();
+    const restoreSnippet = () => this.resumeSnippet().then(resumed);
     const workspace = this.app.workspace;
     if (workspace && typeof workspace.onLayoutReady === 'function') workspace.onLayoutReady(restoreSnippet);
     else restoreSnippet();
@@ -760,6 +772,20 @@ module.exports = class GraphStyler extends Plugin {
     }
     // 한 번 쓰고 비운다. undefined → null 저장으로 0.1.7 이전 데이터의 추정도 한 번만 한다.
     await this.saveResumeSnippet(null);
+  }
+
+  // resumeSnippet에 값을 쓰는 건 onunload뿐이다. 로드된 동안 그 값이 보이면 이전 인스턴스가 늦게 쓴 것이다.
+  async resumeLateSnippet() {
+    let data;
+    try {
+      data = await this.loadData();
+    } catch (_) {
+      return;
+    }
+    const id = data && data.resumeSnippet;
+    if (typeof id !== 'string' || !id) return;
+    this.settings.resumeSnippet = id;
+    await this.resumeSnippet();
   }
 
   // 이전 버전이 만든 스니펫 파일은 적용할 때의 CSS를 그대로 담고 있다. 생성 CSS가 바뀌었으면
