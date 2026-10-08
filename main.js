@@ -47,6 +47,7 @@ const STRINGS = {
     exportScaleNote: 'Scale is relative to the graph as it is drawn on your screen.',
     exported: (path, w, h) => `🖼️ Saved ${path} (${w}×${h})`,
     exportLowRes: 'High-resolution export unavailable — saved at screen resolution',
+    exportCapped: (req, k) => `${req}x is too large for this graph view — saved at ${k}x`,
     exportFailed: 'PNG export failed — open the console (Cmd+Opt+I) to see why',
     customize: '🎛️ Customize',
     customizeNote: 'Customize changes graph physics live. Save it only if you want a reusable custom preset.',
@@ -83,6 +84,7 @@ const STRINGS = {
     exportScaleNote: '배율은 지금 화면에 그려진 그래프 크기 기준입니다.',
     exported: (path, w, h) => `🖼️ ${path} 저장됨 (${w}×${h})`,
     exportLowRes: '고해상도 불가, 화면 해상도로 저장',
+    exportCapped: (req, k) => `${req}x는 이 그래프 화면에 너무 커서 ${k}x로 저장`,
     exportFailed: 'PNG 내보내기 실패 — 콘솔(Cmd+Opt+I)에서 원인 확인',
     customize: '🎛️ 커스터마이즈',
     customizeNote: '커스터마이즈는 그래프 물리를 실시간으로 바꿉니다. 다시 쓸 설정만 프리셋으로 저장하세요.',
@@ -439,7 +441,15 @@ function canRenderHighRes(renderer) {
     && Array.isArray(renderer.nodes) && renderer.nodes.some((node) => node && node.text));
 }
 
-// 렌더러를 k배 크기로 한 번 다시 그리고, 그 순간의 버퍼를 draw(view)에 넘긴다.
+// 브라우저는 너무 큰 WebGL 버퍼를 말없이 줄인다(Chromium은 면적 기준 — 1.14.4에서 6368×6576 요청이
+// 5668×5853이 됐다). 그대로 그리면 그래프가 한쪽으로 밀리고 잘리므로 버퍼가 다 들어갈 때까지 배율을 낮춘다.
+function drawingBufferFits(R) {
+  const gl = R.gl;
+  if (!gl || typeof gl.drawingBufferWidth !== 'number') return true;
+  return gl.drawingBufferWidth >= R.view.width && gl.drawingBufferHeight >= R.view.height;
+}
+
+// 렌더러를 k배 크기로 한 번 다시 그리고, 그 순간의 버퍼를 draw(view)에 넘긴다. 실제로 쓴 배율을 돌려준다.
 // preserveDrawingBuffer가 꺼져 있어 버퍼는 같은 태스크 안에서만 읽힌다.
 // setScale은 nodeScale = sqrt(1/scale)로 노드·글자를 다시 줄이므로 원래 값으로 고정하고,
 // 선 두께와 글자 래스터 해상도만 k배 한다.
@@ -455,6 +465,10 @@ function renderGraphAt(r, k, draw) {
   const texts = r.nodes.filter((node) => node && node.text).map((node) => [node.text, node.text.resolution]);
   try {
     R.resize(save.W * k, save.H * k);
+    while (k > 1 && !drawingBufferFits(R)) {
+      k -= 1;
+      R.resize(save.W * k, save.H * k);
+    }
     r.width = save.width * k;
     r.height = save.height * k;
     r.fLineSizeMult = save.line * k;
@@ -469,7 +483,8 @@ function renderGraphAt(r, k, draw) {
     for (const [text, resolution] of texts) text.resolution = resolution * k;
     r.idleFrames = 0;
     r.renderCallback();
-    return draw(R.view);
+    draw(R.view);
+    return k;
   } finally {
     if (ownSetScale) r.setScale = baseSetScale;
     else delete r.setScale;
@@ -791,7 +806,8 @@ module.exports = class GraphStyler extends Plugin {
         const R = renderer.px.renderer;
         const gl = R.gl;
         const maxTexture = gl && typeof gl.getParameter === 'function' ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : undefined;
-        renderGraphAt(renderer, exportScaleLimit(maxTexture, R.width, R.height, requestedScale), paint);
+        const used = renderGraphAt(renderer, exportScaleLimit(maxTexture, R.width, R.height, requestedScale), paint);
+        if (used < requestedScale) new Notice(L.exportCapped(requestedScale, used));
       } else if (typeof renderer.getTransparentScreenshot === 'function') {
         paint(renderer.getTransparentScreenshot());
         new Notice(L.exportLowRes);

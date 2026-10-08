@@ -669,6 +669,23 @@ async function exportWith(renderer, { filters = new Map(), iframe = null } = {})
   // The GL texture limit caps the scale.
   const capped = await exportWith(new FakeGraphRenderer(400));
   assert.deepStrictEqual([capped.canvas.width, capped.canvas.height], [400, 200]);
+  assert.strictEqual(capped.notices[0], '3x is too large for this graph view — saved at 2x');
+
+  // Chromium shrinks an oversized WebGL drawing buffer by area without an error, which shifted and
+  // cropped the 4x export. The scale drops until the buffer holds the whole canvas.
+  const shrinking = new FakeGraphRenderer(16384);
+  const area = 100000;
+  Object.defineProperties(shrinking.px.renderer.gl, {
+    drawingBufferWidth: { get: () => Math.floor(shrinking.view.width * Math.min(1, Math.sqrt(area / (shrinking.view.width * shrinking.view.height)))) },
+    drawingBufferHeight: { get: () => Math.floor(shrinking.view.height * Math.min(1, Math.sqrt(area / (shrinking.view.width * shrinking.view.height)))) },
+  });
+  const shrinkingBefore = rendererState(shrinking);
+  const shrunk = await exportWith(shrinking);
+  assert.deepStrictEqual([shrunk.canvas.width, shrunk.canvas.height], [400, 200]);
+  assert.strictEqual(shrinking.during.panX, 14);
+  assert.deepStrictEqual(shrinking.during.textResolution, [4, 4]);
+  assert.deepStrictEqual(rendererState(shrinking), shrinkingBefore);
+  assert.deepStrictEqual(shrunk.notices, ['3x is too large for this graph view — saved at 2x', `🖼️ Saved ${shrunk.created[0]} (400×200)`]);
 
   // A failure mid-render still restores the renderer and saves nothing.
   const broken = new FakeGraphRenderer(16384);
