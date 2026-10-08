@@ -725,7 +725,7 @@ class StylerView extends ItemView {
     const scaleEl = row.createEl('select', { cls: 'dropdown' });
     for (const k of EXPORT_SCALES) scaleEl.createEl('option', { value: String(k), text: `${k}x` });
     scaleEl.value = String(this.plugin.exportScale);
-    scaleEl.onchange = () => { this.plugin.exportScale = Number(scaleEl.value); };
+    scaleEl.onchange = () => this.plugin.setExportScale(Number(scaleEl.value));
     const exportBtn = row.createEl('button', { cls: 'gs-export', text: L.exportCmd });
     exportBtn.onclick = () => this.plugin.exportPng(this.plugin.exportScale);
     c.createEl('p', { text: L.exportScaleNote, cls: 'gs-note' });
@@ -783,7 +783,8 @@ module.exports = class GraphStyler extends Plugin {
     } catch (_) { /* graph.json may not exist yet */ }
     this.draft = draftFromGraph(await this.readGraphOptions());
     this.customizeOpen = false;
-    this.exportScale = 3;
+    // 2x면 인스타그램 1080px에 충분하고, 3x는 vault에 20MB 안팎을 쓴다. 마지막으로 고른 배율을 기억한다.
+    this.exportScale = EXPORT_SCALES.includes(this.settings.exportScale) ? this.settings.exportScale : 2;
     this.currentPreset = null;
 
     // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
@@ -907,6 +908,12 @@ module.exports = class GraphStyler extends Plugin {
       console.error('[graph-styler] PNG export failed', e);
       new Notice(L.exportFailed);
     }
+  }
+
+  async setExportScale(scale) {
+    this.exportScale = scale;
+    this.settings.exportScale = scale;
+    await this.saveData(this.settings);
   }
 
   // 그래프 영역에 보이는 프리셋 배경. 적용 중인 스니펫이 없으면 null(테마 배경만).
@@ -1263,13 +1270,15 @@ module.exports = class GraphStyler extends Plugin {
       await this.installSnippet(preset.id, css);          // 리로드 영속용
       // Built-ins may update colors in the live engine, but never send force
       // keys. Custom presets explicitly opt into the full force update.
+      // 그래프가 열려 있지 않으면 '먼저 열어주세요'만 보인다. 적용은 됐지만 눈에 보이는 건 없으니 성공이라 하지 않는다.
+      let shown = true;
       if (Object.keys(graphOptions).length) {
-        await this.reloadGraph(graphOptions, live, true, preset.applyForces);
+        shown = await this.reloadGraph(graphOptions, live, true, preset.applyForces);
       }
       this.currentForceOptions = forceOptionsFromGraph(merged);
       this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, graphOptions) });
       if (!live) this.refreshViews();
-      if (!live) new Notice(L.applied(preset));
+      if (!live && shown) new Notice(L.applied(preset));
     } catch (e) {
       console.error('[graph-styler] apply failed', e);
       if (!live) new Notice(L.failed);
@@ -1348,7 +1357,7 @@ module.exports = class GraphStyler extends Plugin {
       .concat(this.app.workspace.getLeavesOfType('localgraph'));
     if (!leaves.length) {
       if (!engineOnly) new Notice(L.openGraph);
-      return;
+      return false;
     }
     for (const leaf of leaves) {
       const view = leaf.view;
@@ -1372,6 +1381,7 @@ module.exports = class GraphStyler extends Plugin {
       await leaf.setViewState({ type: 'empty' });
       await leaf.setViewState(state);
     }
+    return true;
   }
 
   ensureLiveStyle() {
