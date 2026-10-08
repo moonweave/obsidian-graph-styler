@@ -42,6 +42,13 @@ const STRINGS = {
     restored: '↩︎ Restored to original',
     noBackup: 'No backup found',
     by: 'made by ',
+    exportTitle: 'Export',
+    exportCmd: 'Export graph as PNG',
+    exportScaleNote: 'Scale is relative to the graph as it is drawn on your screen.',
+    exported: (path, w, h) => `🖼️ Saved ${path} (${w}×${h})`,
+    exportLowRes: 'High-resolution export unavailable — saved at screen resolution',
+    exportCapped: (req, k) => `${req}x is too large for this graph view — saved at ${k}x`,
+    exportFailed: 'PNG export failed — open the console (Cmd+Opt+I) to see why',
     customize: '🎛️ Customize',
     customizeNote: 'Customize changes graph physics live. Save it only if you want a reusable custom preset.',
     active: 'active',
@@ -72,6 +79,13 @@ const STRINGS = {
     restored: '↩︎ 원래대로 복구함',
     noBackup: '백업이 없어요',
     by: 'made by ',
+    exportTitle: '내보내기',
+    exportCmd: '그래프를 PNG로 내보내기',
+    exportScaleNote: '배율은 지금 화면에 그려진 그래프 크기 기준입니다.',
+    exported: (path, w, h) => `🖼️ ${path} 저장됨 (${w}×${h})`,
+    exportLowRes: '고해상도 불가, 화면 해상도로 저장',
+    exportCapped: (req, k) => `${req}x는 이 그래프 화면에 너무 커서 ${k}x로 저장`,
+    exportFailed: 'PNG 내보내기 실패 — 콘솔(Cmd+Opt+I)에서 원인 확인',
     customize: '🎛️ 커스터마이즈',
     customizeNote: '커스터마이즈는 그래프 물리를 실시간으로 바꿉니다. 다시 쓸 설정만 프리셋으로 저장하세요.',
     active: '현재 적용됨',
@@ -400,6 +414,115 @@ function sliderStep(value, min, step) {
     ? String(step) : 'any';
 }
 
+// ---------------------------------------------------------------- PNG export
+const EXPORT_SCALES = [1, 2, 3, 4];
+
+// 그래프 캔버스는 이미 화면 픽셀(DPR) 크기다. 배율은 그 위에 곱하고 GL 최대 치수 안으로 줄인다.
+function exportScaleLimit(maxTexture, width, height, requested) {
+  const max = Number.isFinite(maxTexture) && maxTexture > 0 ? maxTexture : 16384;
+  const limit = Math.floor(max / Math.max(width, height, 1));
+  return Math.max(1, Math.min(requested, limit));
+}
+
+function exportFileName(presetId, date, existing) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+    + `-${pad(date.getHours())}${pad(date.getMinutes())}`;
+  const base = `graph-${presetId ? safePresetId(presetId) : 'graph'}-${stamp}`;
+  const taken = new Set(existing);
+  let name = `${base}.png`;
+  for (let i = 2; taken.has(name); i++) name = `${base}-${i}.png`;
+  return name;
+}
+
+// 그래프 렌더러의 비공개 API(Obsidian 1.11.7·1.14.4에서 확인). 하나라도 없으면 고해상도 재렌더를 시도하지 않는다.
+function canRenderHighRes(renderer) {
+  const px = renderer && renderer.px;
+  return !!(px && px.renderer && px.renderer.view && typeof px.renderer.resize === 'function'
+    && typeof renderer.renderCallback === 'function'
+    && typeof renderer.setScale === 'function' && typeof renderer.setPan === 'function'
+    && typeof renderer.fLineSizeMult === 'number'
+    && Array.isArray(renderer.nodes) && renderer.nodes.some((node) => node && node.text));
+}
+
+// 브라우저는 너무 큰 WebGL 버퍼를 말없이 줄인다(Chromium은 면적 기준 — 1.14.4에서 6368×6576 요청이
+// 5668×5853이 됐다). 그대로 그리면 그래프가 한쪽으로 밀리고 잘리므로 버퍼가 다 들어갈 때까지 배율을 낮춘다.
+function drawingBufferFits(R) {
+  const gl = R.gl;
+  if (!gl || typeof gl.drawingBufferWidth !== 'number') return true;
+  return gl.drawingBufferWidth >= R.view.width && gl.drawingBufferHeight >= R.view.height;
+}
+
+// 렌더러를 k배 크기로 한 번 다시 그리고, 그 순간의 버퍼를 draw(view)에 넘긴다. 실제로 쓴 배율을 돌려준다.
+// preserveDrawingBuffer가 꺼져 있어 버퍼는 같은 태스크 안에서만 읽힌다.
+// setScale은 nodeScale = sqrt(1/scale)로 노드·글자를 다시 줄이므로 원래 값으로 고정하고,
+// 선 두께와 글자 래스터 해상도만 k배 한다.
+function renderGraphAt(r, k, draw) {
+  const R = r.px.renderer;
+  const baseSetScale = r.setScale;
+  const ownSetScale = Object.prototype.hasOwnProperty.call(r, 'setScale');
+  const save = {
+    W: R.width, H: R.height, width: r.width, height: r.height,
+    scale: r.scale, targetScale: r.targetScale, panX: r.panX, panY: r.panY,
+    nodeScale: r.nodeScale, textAlpha: r.textAlpha, line: r.fLineSizeMult, idleFrames: r.idleFrames,
+  };
+  const texts = r.nodes.filter((node) => node && node.text).map((node) => [node.text, node.text.resolution]);
+  try {
+    R.resize(save.W * k, save.H * k);
+    while (k > 1 && !drawingBufferFits(R)) {
+      k -= 1;
+      R.resize(save.W * k, save.H * k);
+    }
+    r.width = save.width * k;
+    r.height = save.height * k;
+    r.fLineSizeMult = save.line * k;
+    r.setScale = function (scale) {
+      baseSetScale.call(this, scale);
+      this.nodeScale = save.nodeScale;
+      this.textAlpha = save.textAlpha;
+    };
+    r.targetScale = save.scale * k;
+    r.setScale(save.scale * k);
+    r.setPan(save.panX * k, save.panY * k);
+    for (const [text, resolution] of texts) text.resolution = resolution * k;
+    r.idleFrames = 0;
+    r.renderCallback();
+    draw(R.view);
+    return k;
+  } finally {
+    if (ownSetScale) r.setScale = baseSetScale;
+    else delete r.setScale;
+    R.resize(save.W, save.H);
+    r.width = save.width;
+    r.height = save.height;
+    r.fLineSizeMult = save.line;
+    r.targetScale = save.targetScale;
+    r.setScale(save.scale);
+    r.setPan(save.panX, save.panY);
+    r.nodeScale = save.nodeScale;
+    r.textAlpha = save.textAlpha;
+    for (const [text, resolution] of texts) text.resolution = resolution;
+    r.idleFrames = save.idleFrames;
+    r.changed();
+  }
+}
+
+// 프리셋 배경은 makeGlowCss의 radial-gradient(circle at 50% 42%, …)와 같은 모양으로 칠한다.
+// circle의 기본 반지름은 가장 먼 모서리까지다.
+function paintGraphBackground(ctx, w, h, base, palette) {
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, w, h);
+  if (!palette) return;
+  const cx = w * 0.5;
+  const cy = h * 0.42;
+  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.hypot(Math.max(cx, w - cx), Math.max(cy, h - cy)));
+  gradient.addColorStop(0, palette.bg1);
+  gradient.addColorStop(0.48, palette.bg2);
+  gradient.addColorStop(1, palette.bg3);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, w, h);
+}
+
 class StylerView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -466,6 +589,7 @@ class StylerView extends ItemView {
     c.createEl('p', { text: L.restoreNote, cls: 'gs-note gs-restore-note' });
 
     this.buildCustomize(c);
+    this.buildExport(c);
 
     const credit = c.createDiv({ cls: 'gs-credit' });
     credit.createSpan({ text: L.by });
@@ -532,6 +656,18 @@ class StylerView extends ItemView {
     return input;
   }
 
+  buildExport(c) {
+    c.createEl('div', { cls: 'gs-section', text: L.exportTitle });
+    const row = c.createDiv({ cls: 'gs-row' });
+    const scaleEl = row.createEl('select', { cls: 'dropdown' });
+    for (const k of EXPORT_SCALES) scaleEl.createEl('option', { value: String(k), text: `${k}x` });
+    scaleEl.value = String(this.plugin.exportScale);
+    scaleEl.onchange = () => { this.plugin.exportScale = Number(scaleEl.value); };
+    const exportBtn = row.createEl('button', { cls: 'gs-export', text: L.exportCmd });
+    exportBtn.onclick = () => this.plugin.exportPng(this.plugin.exportScale);
+    c.createEl('p', { text: L.exportScaleNote, cls: 'gs-note' });
+  }
+
   rawFromDraft(id) {
     const d = this.plugin.draft;
     return {
@@ -559,6 +695,10 @@ class StylerView extends ItemView {
 }
 
 module.exports = class GraphStyler extends Plugin {
+  // 플러그인 로더는 클래스만 쓴다. 내보내기 계산 함수는 테스트용으로 붙여 둔다.
+  static exportScaleLimit = exportScaleLimit;
+  static exportFileName = exportFileName;
+
   async onload() {
     this.settings = Object.assign({ custom: [] }, await this.loadData());
     if (!Array.isArray(this.settings.custom)) this.settings.custom = [];
@@ -568,6 +708,7 @@ module.exports = class GraphStyler extends Plugin {
     } catch (_) { /* graph.json may not exist yet */ }
     this.draft = draftFromGraph(await this.readGraphOptions());
     this.customizeOpen = false;
+    this.exportScale = 3;
     this.currentPreset = null;
 
     // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
@@ -582,6 +723,11 @@ module.exports = class GraphStyler extends Plugin {
       id: 'open-graph-styler',
       name: L.openCmd,
       callback: () => this.activateView(),
+    });
+    this.addCommand({
+      id: 'export-graph-png',
+      name: L.exportCmd,
+      callback: () => this.exportPng(this.exportScale),
     });
     for (const key of Object.keys(PRESETS)) {
       const preset = PRESETS[key];
@@ -634,6 +780,90 @@ module.exports = class GraphStyler extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       if (leaf.view && typeof leaf.view.render === 'function') leaf.view.render();
     }
+  }
+
+  // 전역 그래프를 먼저, 없으면 로컬 그래프를 찍는다.
+  async exportPng(requestedScale) {
+    const leaf = this.app.workspace.getLeavesOfType('graph')
+      .concat(this.app.workspace.getLeavesOfType('localgraph'))[0];
+    const renderer = leaf && leaf.view && leaf.view.renderer;
+    if (!renderer) {
+      new Notice(L.openGraph);
+      return;
+    }
+    try {
+      const palette = await this.activePalette();
+      const base = this.graphBaseColor(leaf.view.contentEl);
+      const filter = this.graphFilter(leaf.view.contentEl, renderer);
+      let canvas = null;
+      const paint = (source) => {
+        canvas = document.createElement('canvas');
+        canvas.width = source.width;
+        canvas.height = source.height;
+        const ctx = canvas.getContext('2d');
+        paintGraphBackground(ctx, canvas.width, canvas.height, base, palette);
+        ctx.filter = filter;
+        ctx.drawImage(source, 0, 0);
+        ctx.filter = 'none';
+      };
+      if (canRenderHighRes(renderer)) {
+        const R = renderer.px.renderer;
+        const gl = R.gl;
+        const maxTexture = gl && typeof gl.getParameter === 'function' ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : undefined;
+        const used = renderGraphAt(renderer, exportScaleLimit(maxTexture, R.width, R.height, requestedScale), paint);
+        if (used < requestedScale) new Notice(L.exportCapped(requestedScale, used));
+      } else if (typeof renderer.getTransparentScreenshot === 'function') {
+        paint(renderer.getTransparentScreenshot());
+        new Notice(L.exportLowRes);
+      } else if (typeof renderer.getBackgroundScreenshot === 'function') {
+        paint(renderer.getBackgroundScreenshot());
+        new Notice(L.exportLowRes);
+      } else {
+        throw new Error('graph renderer exposes no screenshot API');
+      }
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('canvas.toBlob returned no image');
+      const presetId = this.currentPreset ? this.currentPreset.id : await this.enabledSnippetId();
+      const name = exportFileName(presetId === LIVE_ID ? null : presetId, new Date(),
+        this.app.vault.getFiles().map((file) => file.path));
+      await this.app.vault.createBinary(name, await blob.arrayBuffer());
+      new Notice(L.exported(name, canvas.width, canvas.height));
+    } catch (e) {
+      console.error('[graph-styler] PNG export failed', e);
+      new Notice(L.exportFailed);
+    }
+  }
+
+  // 그래프 영역에 보이는 프리셋 배경. 적용 중인 스니펫이 없으면 null(테마 배경만).
+  async activePalette() {
+    if (this.currentPreset) return this.currentPreset.palette;
+    const id = await this.enabledSnippetId();
+    const preset = Object.values(PRESETS)
+      .concat((this.settings.custom || []).map((raw) => presetFromRaw(raw)))
+      .find((candidate) => candidate.id === id);
+    return preset ? preset.palette : null;
+  }
+
+  // 화면의 글로우는 그래프를 실제로 그리는 요소에 걸린 CSS filter다(1.11.7·1.14.4에서는 캔버스를 담은 iframe).
+  // 그 요소의 계산된 filter를 그대로 써야 프리셋 스니펫이 어느 요소를 겨냥하든 파일이 화면과 같다.
+  // 배경은 그 요소 밖(.view-content)에 칠해지므로 filter를 받지 않는다.
+  graphFilter(contentEl, renderer) {
+    const view = renderer.px && renderer.px.renderer && renderer.px.renderer.view;
+    const doc = view && view.ownerDocument;
+    const host = (doc && doc.defaultView && doc.defaultView.frameElement) || view
+      || (contentEl && typeof contentEl.querySelector === 'function' && contentEl.querySelector('iframe'));
+    if (!host) return 'none';
+    const filter = window.getComputedStyle(host).filter;
+    return filter && filter !== 'none' ? filter : 'none';
+  }
+
+  // 그래프 캔버스는 투명하다. 그래프 영역에서 위로 올라가며 처음 칠해진 배경색을 쓴다.
+  graphBaseColor(el) {
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      const color = window.getComputedStyle(node).backgroundColor;
+      if (color && color !== 'transparent' && !/^rgba\(.*,\s*0\)$/.test(color)) return color;
+    }
+    return '#ffffff';
   }
 
   async saveCustom(raw) {

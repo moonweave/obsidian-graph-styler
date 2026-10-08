@@ -113,7 +113,8 @@
   opacity: 0.8;
 }
 
-.graph-styler-panel .gs-row input[type="range"] {
+.graph-styler-panel .gs-row input[type="range"],
+.graph-styler-panel .gs-export {
   flex: 1;
 }
 
