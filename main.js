@@ -718,32 +718,56 @@ function hexA(hex, alpha) {
 
 // 전체를 맞추면 Obsidian은 그 확대율에서 라벨을 숨긴다. 가장 많이 이어진 노트 몇 개만 겹치지 않게 직접 쓴다.
 // 허브는 연결 수가 가장 많은 노트의 40% 이상인 것만 — 그 아래는 이름을 붙여도 의미 없는 보통 노트다.
-function drawHubLabels(ctx, r, offsetX, offsetY, k, size, color, font) {
+// 라벨은 배경색 테두리(halo)를 둘러 선·노드 위에서도 읽히게 하고, 노드 아래 자리가 다른 허브의 원에
+// 걸리면 노드 위로 옮긴다(지도 라벨의 흔한 방식).
+function drawHubLabels(ctx, r, offsetX, offsetY, k, size, color, font, halo) {
   const ranked = r.nodes.filter((node) => node && node.id && Number.isFinite(node.x))
     .sort((a, b) => (b.weight || 0) - (a.weight || 0));
   const top = ranked.length ? ranked[0].weight || 0 : 0;
   const hubs = ranked.filter((node) => top > 0 && (node.weight || 0) >= top * 0.4).slice(0, 20);
+  const circle = (node) => ({
+    x: offsetX + node.x * r.scale + r.panX,
+    y: offsetY + node.y * r.scale + r.panY,
+    radius: (typeof node.getSize === 'function' ? node.getSize() : 8) * r.nodeScale * r.scale,
+  });
+  const circles = hubs.map((node) => [node, circle(node)]);
+  const labelOf = (node) => (typeof node.getDisplayText === 'function' ? node.getDisplayText() : String(node.id).replace(/\.md$/, ''));
+  const hitsCircle = (box, c) => {
+    const dx = c.x - Math.max(box.left, Math.min(c.x, box.right));
+    const dy = c.y - Math.max(box.top, Math.min(c.y, box.bottom));
+    return dx * dx + dy * dy < c.radius * c.radius;
+  };
   const placed = [];
   ctx.font = `500 ${size}px ${font}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(2, size * 0.28);
+  ctx.strokeStyle = halo;
   ctx.fillStyle = color;
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-  ctx.shadowBlur = size * 0.35;
   for (const node of hubs) {
     if (placed.length >= 8) break;
-    const text = typeof node.getDisplayText === 'function' ? node.getDisplayText() : String(node.id).replace(/\.md$/, '');
-    const radius = (typeof node.getSize === 'function' ? node.getSize() : 8) * r.nodeScale * r.scale;
-    const x = offsetX + node.x * r.scale + r.panX;
-    const y = offsetY + node.y * r.scale + r.panY + radius + size * 0.35;
+    const text = labelOf(node);
+    const own = circle(node);
     const w = ctx.measureText(text).width;
-    const box = { left: x - w / 2 - size * 0.4, right: x + w / 2 + size * 0.4, top: y - size * 0.2, bottom: y + size * 1.3 };
+    const boxAt = (y) => ({ y, left: own.x - w / 2 - size * 0.4, right: own.x + w / 2 + size * 0.4, top: y - size * 0.2, bottom: y + size * 1.3 });
+    const below = boxAt(own.y + own.radius + size * 0.35);
+    const above = boxAt(own.y - own.radius - size * 1.45);
+    const blocked = (box) => circles.some(([other, c]) => other !== node && hitsCircle(box, c));
+    // 위 자리는 다른 허브의 원뿐 아니라 그 허브의 기본(아래) 라벨 자리도 비어 있을 때만 쓴다 — 아니면
+    // 옮긴 라벨이 이웃 허브의 이름을 밀어낸다.
+    const takesSpot = (box) => circles.some(([other, c]) => {
+      if (other === node) return false;
+      const half = ctx.measureText(labelOf(other)).width / 2 + size * 0.4;
+      const spot = { left: c.x - half, right: c.x + half, top: c.y + c.radius + size * 0.15, bottom: c.y + c.radius + size * 1.65 };
+      return box.left < spot.right && box.right > spot.left && box.top < spot.bottom && box.bottom > spot.top;
+    });
+    const box = blocked(below) && !blocked(above) && !takesSpot(above) ? above : below;
     if (placed.some((p) => box.left < p.right && box.right > p.left && box.top < p.bottom && box.bottom > p.top)) continue;
     placed.push(box);
-    ctx.fillText(text, x, y);
+    ctx.strokeText(text, own.x, box.y);
+    ctx.fillText(text, own.x, box.y);
   }
-  ctx.shadowBlur = 0;
-  ctx.shadowColor = 'transparent';
   return placed.length;
 }
 
@@ -989,6 +1013,7 @@ module.exports = class GraphStyler extends Plugin {
   static exportNoteName = exportNoteName;
   static exportLayout = exportLayout;
   static fitView = fitView;
+  static drawHubLabels = drawHubLabels;
   static sanitizeExportOptions = sanitizeExportOptions;
 
   async onload() {
@@ -1022,6 +1047,14 @@ module.exports = class GraphStyler extends Plugin {
     const workspace = this.app.workspace;
     if (workspace && typeof workspace.onLayoutReady === 'function') workspace.onLayoutReady(restoreSnippet);
     else restoreSnippet();
+
+    // 새로 연 로컬 그래프는 graph.json이 아니라 기본값에서 시작해 색 그룹이 없다(1.14.4).
+    this._seenLocalGraphs = new WeakSet();
+    if (workspace && typeof workspace.on === 'function') {
+      const colorLocals = () => this.colorNewLocalGraphs();
+      if (typeof workspace.onLayoutReady === 'function') workspace.onLayoutReady(colorLocals);
+      this.registerEvent(workspace.on('layout-change', colorLocals));
+    }
 
     this.registerView(VIEW_TYPE, (leaf) => new StylerView(leaf, this));
     this.addRibbonIcon('palette', 'Graph Styler', () => this.activateView());
@@ -1162,7 +1195,8 @@ module.exports = class GraphStyler extends Plugin {
         const textColor = palette ? palette.text : this.graphTextColor(renderer);
         const font = this.exportFont();
         if (fit && renderer.textAlpha < 0.3) {
-          drawHubLabels(ctx, renderer, gx, gy, kk, Math.round(canvas.width * 0.017), hexA(textColor, 0.92), font);
+          drawHubLabels(ctx, renderer, gx, gy, kk, Math.round(canvas.width * 0.017), hexA(textColor, 0.92), font,
+            palette ? palette.bg2 : base);
         }
         if (caption) {
           const band = L2.band * kk;
@@ -1655,6 +1689,36 @@ module.exports = class GraphStyler extends Plugin {
   // 코어 그래프 플러그인은 graph.json을 메모리에 들고 있다가 그래프 leaf를 닫거나 다시 열 때 그 값을
   // 파일에 다시 쓴다. 파일 감시가 새 값을 전하기 전에 leaf를 다시 열면(커스텀 프리셋 적용, 1.14.4 실측
   // 다시 쓰기 0.8s·감시 1.1s) 방금 쓴 색 그룹·물리가 이전 값으로 덮였다. 메모리 값도 같이 맞춘다.
+  // 프리셋이 적용 중일 때, 처음 보는 로컬 그래프에 자기 색 그룹이 없으면 전역 그래프의 색 그룹을 넣는다.
+  // 사용자가 그 로컬 그래프에 정한 그룹은 덮지 않고, 한 로컬 그래프는 한 번만 본다 — 그 뒤에 사용자가
+  // 그룹을 비워도 다시 채우지 않는다.
+  async colorNewLocalGraphs() {
+    const fresh = this.app.workspace.getLeavesOfType('localgraph').filter((leaf) => !this._seenLocalGraphs.has(leaf));
+    if (!fresh.length) return;
+    for (const leaf of fresh) this._seenLocalGraphs.add(leaf);
+    const enabled = this.app.customCss && this.app.customCss.enabledSnippets;
+    const styled = enabled && typeof enabled.has === 'function'
+      && [...enabled].some((id) => id.startsWith('graph-styler-') && id !== 'graph-styler-__none__');
+    if (!styled) return;
+    const internal = this.app.internalPlugins;
+    const core = internal && internal.plugins && internal.plugins.graph && internal.plugins.graph.instance;
+    const options = core && core.options && Array.isArray(core.options.colorGroups) ? core.options : await this.readGraphOptions();
+    const groups = Array.isArray(options.colorGroups) ? options.colorGroups : [];
+    if (!groups.length) return;
+    for (const leaf of fresh) {
+      const engine = leaf.view && (leaf.view.engine || leaf.view.dataEngine);
+      if (!engine || typeof engine.setOptions !== 'function' || typeof engine.getOptions !== 'function') continue;
+      const own = engine.getOptions().colorGroups;
+      if (Array.isArray(own) && own.length) continue;
+      try {
+        engine.setOptions({ colorGroups: groups.map((group) => Object.assign({}, group, { color: Object.assign({}, group.color) })) });
+        if (typeof engine.render === 'function') engine.render();
+      } catch (e) {
+        console.warn('[graph-styler] local graph colours skipped', e);
+      }
+    }
+  }
+
   syncCoreGraphOptions(options) {
     const internal = this.app.internalPlugins;
     const core = internal && internal.plugins && internal.plugins.graph;
