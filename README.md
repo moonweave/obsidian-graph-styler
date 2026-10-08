@@ -40,7 +40,9 @@ It writes these into Obsidian's **native graph color groups** (Settings → Grap
 3. Click any preset. Your graph changes instantly.
 4. Tweak freely afterward, or hit **↩︎ Restore** to revert — your original `graph.json` is backed up automatically.
 
-**Export as PNG.** Run **Export graph as PNG** from the command palette, or pick a scale (1x–4x, default 3x) under *Export* in the panel. The graph is redrawn once at that multiple of its on-screen resolution — labels stay sharp instead of being upscaled — and saved to the vault root as `graph-<preset>-<date>.png` with the current preset background. It captures what the graph view currently shows (same pan and zoom). This relies on Obsidian's internal graph renderer; if a future Obsidian version changes it, the export falls back to screen resolution and says so.
+**Export as PNG.** Run **Export graph as PNG** from the command palette, or pick a scale (1x–4x, default 3x) under *Export* in the panel. The graph is redrawn once at that multiple of its on-screen resolution — labels stay sharp instead of being upscaled — and saved to the vault root as `graph-<preset>-<date>.png` with the current preset background and glow. It captures what the graph view currently shows (same pan and zoom). If the chosen scale is too large for the graph view's size, it saves at the largest scale that fits and tells you. This relies on Obsidian's internal graph renderer; if a future Obsidian version changes it, the export falls back to screen resolution and says so.
+
+<p align="center"><img src="docs/export-example.png" width="480" alt="A Vaporwave export of a 391-note sample vault" /><br/><sub>A Vaporwave export of a 391-note sample vault (2x, resized to 1080px wide).</sub></p>
 
 ## Install
 **Community plugins (recommended):**
