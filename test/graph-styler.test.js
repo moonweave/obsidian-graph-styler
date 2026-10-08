@@ -359,6 +359,52 @@ async function unloadWith(enabledIds, { withoutEnabledSet = false } = {}) {
   return { saved, calls: Object.fromEntries(cssCalls) };
 }
 
+// An update or in-place reload: Obsidian calls the old instance's onunload without awaiting it and
+// loads the new instance right away. Both share data.json. The old saveData is held until the new
+// instance has read data.json and finished its first restore — the order that left the theme off.
+async function reloadRace({ watch = true } = {}) {
+  const { app, files } = makeHarness();
+  delete files['.obsidian/snippets/graph-styler-stale.css'];
+  files['.obsidian/snippets/graph-styler-neon.css'] = 'generated';
+  app.customCss.enabledSnippets = new Set(['graph-styler-neon']);
+  const dataPath = '.obsidian/plugins/graph-styler/data.json';
+  files[dataPath] = JSON.stringify({ custom: [], resumeSnippet: null });
+  const listeners = [];
+  app.vault.on = (name, callback) => {
+    if (name === 'raw' && watch) listeners.push(callback);
+    return {};
+  };
+  let layoutReady = null;
+  app.workspace.onLayoutReady = (callback) => { layoutReady = callback(); };
+  let releaseOldSave;
+  const oldSaveGate = new Promise((resolve) => { releaseOldSave = resolve; });
+  const backedBy = (plugin, gate) => {
+    plugin.manifest = { dir: '.obsidian/plugins/graph-styler' };
+    plugin.loadData = async () => JSON.parse(files[dataPath]);
+    plugin.saveData = async (settings) => {
+      await gate;
+      files[dataPath] = JSON.stringify(settings);
+      for (const listener of listeners.slice()) listener(dataPath);
+    };
+  };
+  const oldPlugin = new GraphStyler(app);
+  backedBy(oldPlugin, oldSaveGate);
+  oldPlugin.settings = { custom: [], resumeSnippet: null };
+  const newPlugin = new GraphStyler(app);
+  backedBy(newPlugin, null);
+
+  const unloading = oldPlugin.onunload();
+  await newPlugin.onload();
+  await layoutReady;
+  releaseOldSave();
+  await unloading;
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  return {
+    enabled: [...app.customCss.enabledSnippets],
+    resumeOnDisk: JSON.parse(files[dataPath]).resumeSnippet,
+  };
+}
+
 async function glowCssFor() {
   const { app, files } = makeHarness();
   const plugin = new GraphStyler(app);
@@ -734,6 +780,11 @@ async function exportWith(renderer, { filters = new Map(), iframe = null } = {})
   assert.deepStrictEqual(await loadPlugin({ data: { custom: [], resumeSnippet: null }, snippets: { neon: 1 } }).then(
     ({ enabled, saved }) => ({ enabled, saved })), { enabled: [], saved: [] });
   assert.deepStrictEqual((await loadPlugin({ data: { custom: [], resumeSnippet: 'neon' } })).enabled, []);
+
+  // Update / in-place reload: the old instance switches the snippet off and records it only after the
+  // new instance has loaded. Without watching data.json the theme stays off until Obsidian restarts.
+  assert.deepStrictEqual(await reloadRace({ watch: false }), { enabled: [], resumeOnDisk: 'neon' });
+  assert.deepStrictEqual(await reloadRace(), { enabled: ['graph-styler-neon'], resumeOnDisk: null });
 
   // A snippet written by an older version (dead .graph-view-content rules) is rewritten on load.
   const olderSnippet = '/* graph-styler :: neon (auto-generated) */\n.theme-dark .graph-view-content { background: none; }\n';
