@@ -58,6 +58,7 @@ const STRINGS = {
     saved: (n) => `💾 “${n}” saved`,
     deleted: 'Preset deleted',
     copyCode: 'Copy share code',
+    deletePreset: 'Delete preset',
     copied: (n) => `📋 Share code for “${n}” copied`,
     copyFailed: 'Could not copy the share code',
     codePh: 'Paste a share code (gs1.…)',
@@ -102,6 +103,7 @@ const STRINGS = {
     saved: (n) => `💾 “${n}” 저장됨`,
     deleted: '프리셋 삭제됨',
     copyCode: '공유 코드 복사',
+    deletePreset: '프리셋 삭제',
     copied: (n) => `📋 “${n}” 공유 코드 복사됨`,
     copyFailed: '공유 코드를 복사하지 못했어요',
     codePh: '공유 코드 붙여넣기 (gs1.…)',
@@ -588,8 +590,12 @@ class StylerView extends ItemView {
     if (this._raf) window.cancelAnimationFrame(this._raf);
   }
 
+  // 내 프리셋의 복사·삭제는 프리셋 버튼 안이 아니라 옆의 형제 버튼이다. 버튼 안 버튼은 HTML에서
+  // 허용되지 않고 포커스도 받지 못했다. 형제라서 Tab 순서가 프리셋 → 복사 → 삭제이고, Enter·Space가
+  // 프리셋 적용으로 번지지 않는다.
   presetButton(parent, preset, onDelete, onShare) {
-    const btn = parent.createEl('button', { cls: 'gs-btn' });
+    const row = onDelete || onShare ? parent.createDiv({ cls: 'gs-preset-row' }) : parent;
+    const btn = row.createEl('button', { cls: 'gs-btn' });
     const active = this.plugin.currentPreset && this.plugin.currentPreset.id === preset.id;
     btn.toggleClass('is-active', !!active);
     btn.setAttr('aria-pressed', active ? 'true' : 'false');
@@ -602,15 +608,21 @@ class StylerView extends ItemView {
     }
     btn.createSpan({ cls: 'gs-btn-label', text: `${preset.emoji}  ${preset.label}` });
     btn.onclick = () => this.plugin.applyPreset(preset);
-    if (onShare) {
-      const share = btn.createSpan({ cls: 'gs-share', text: '📋' });
-      share.setAttr('title', L.copyCode);
-      share.setAttr('aria-label', L.copyCode);
-      share.onclick = (ev) => { ev.stopPropagation(); onShare(); };
-    }
+    const action = (cls, text, label, run) => {
+      const el = row.createEl('button', { cls, text });
+      el.setAttr('type', 'button');
+      el.setAttr('title', label);
+      el.setAttr('aria-label', `${label}: ${preset.label}`);
+      el.onclick = () => run();
+    };
+    if (onShare) action('gs-share', '📋', L.copyCode, onShare);
     if (onDelete) {
-      const del = btn.createSpan({ cls: 'gs-del', text: '✕' });
-      del.onclick = (ev) => { ev.stopPropagation(); onDelete(); };
+      action('gs-del', '✕', L.deletePreset, async () => {
+        await onDelete();
+        // 지운 행은 다시 그리면서 사라지므로 포커스가 문서 맨 위로 빠진다. 남은 첫 내 프리셋, 없으면 가져오기 칸으로 옮긴다.
+        const next = this.contentEl.querySelector('.gs-preset-row .gs-btn') || this.contentEl.querySelector('.gs-code');
+        if (next) next.focus();
+      });
     }
     return btn;
   }

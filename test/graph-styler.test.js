@@ -480,6 +480,52 @@ async function backupWithoutGraphJson() {
   return { missing, backedUp: plugin._backedUp, backup: files[backupPath], original };
 }
 
+// Minimal Obsidian-style DOM for the panel's preset rows.
+class FakeEl {
+  constructor(tag, cls, text) {
+    this.tag = tag;
+    this.cls = new Set(cls ? cls.split(' ') : []);
+    this.text = text || '';
+    this.attrs = {};
+    this.children = [];
+    this.style = {};
+  }
+
+  createEl(tag, opts = {}) {
+    const el = new FakeEl(tag, opts.cls, opts.text);
+    this.children.push(el);
+    return el;
+  }
+
+  createDiv(opts = {}) { return this.createEl('div', opts); }
+  createSpan(opts = {}) { return this.createEl('span', opts); }
+  setAttr(name, value) { this.attrs[name] = value; }
+  toggleClass(name, on) { if (on) this.cls.add(name); else this.cls.delete(name); }
+  walk() { return [this].concat(...this.children.map((child) => child.walk())); }
+}
+
+async function presetRow(withActions) {
+  const { app } = makeHarness();
+  const plugin = new GraphStyler(app);
+  let factory = null;
+  plugin.registerView = (type, make) => { factory = make; };
+  plugin.settings = { custom: [] };
+  await plugin.onload();
+  const view = factory({});
+  const calls = [];
+  plugin.applyPreset = () => { calls.push('apply'); };
+  const parent = new FakeEl('div');
+  // After a delete the panel re-renders; focus goes to the first remaining row, else the import box.
+  view.contentEl = {
+    querySelector: (selector) => (selector === '.gs-code' ? { focus: () => calls.push(`focus ${selector}`) } : null),
+  };
+  const preset = { id: 'night', label: 'Night', emoji: '*', swatch: ['#112233'] };
+  view.presetButton(parent, preset,
+    withActions ? () => calls.push('delete') : undefined,
+    withActions ? () => calls.push('copy') : undefined);
+  return { parent, calls };
+}
+
 function fakeCanvas() {
   const drawn = [];
   const filters = { fill: [], draw: [] };
@@ -960,6 +1006,37 @@ async function exportWith(renderer, { filters = new Map(), iframe = null } = {})
   const groups = [{ query: 'tag:#a', color: { a: 1, rgb: 1 } }];
   const restoredWithGroups = await restoreEngineOptions(JSON.stringify({ colorGroups: groups }));
   assert.deepStrictEqual(restoredWithGroups.sent.colorGroups, groups);
+
+  // My-presets rows: copy and delete are real buttons next to the preset button, never inside it, in
+  // the tab order preset → copy → delete; activating them does not apply the preset.
+  const customRow = await presetRow(true);
+  assert.strictEqual(customRow.parent.children.length, 1);
+  const row = customRow.parent.children[0];
+  assert.ok(row.cls.has('gs-preset-row'));
+  assert.deepStrictEqual(row.children.map((el) => [el.tag, [...el.cls][0]]),
+    [['button', 'gs-btn'], ['button', 'gs-share'], ['button', 'gs-del']]);
+  for (const el of row.walk()) {
+    if (el.tag !== 'button') continue;
+    assert.ok(el.walk().slice(1).every((inner) => inner.tag !== 'button'), 'button nested in a button');
+  }
+  const [presetEl, copyEl, deleteEl] = row.children;
+  assert.deepStrictEqual([copyEl.attrs.type, deleteEl.attrs.type], ['button', 'button']);
+  assert.strictEqual(copyEl.attrs['aria-label'], 'Copy share code: Night');
+  assert.strictEqual(deleteEl.attrs['aria-label'], 'Delete preset: Night');
+  copyEl.onclick();
+  await deleteEl.onclick();
+  assert.deepStrictEqual(customRow.calls, ['copy', 'delete', 'focus .gs-code']);
+  presetEl.onclick();
+  assert.deepStrictEqual(customRow.calls, ['copy', 'delete', 'focus .gs-code', 'apply']);
+  // Built-in presets keep a single button directly in the list.
+  const builtInRow = await presetRow(false);
+  assert.deepStrictEqual(builtInRow.parent.children.map((el) => [el.tag, [...el.cls][0]]), [['button', 'gs-btn']]);
+  // Focus rings: the new buttons share the existing focus-visible rule.
+  const css = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
+  const focusRule = css.slice(0, css.indexOf('outline: 2px solid var(--interactive-accent)'));
+  for (const selector of ['.gs-btn:focus-visible', '.gs-share:focus-visible', '.gs-del:focus-visible']) {
+    assert.ok(focusRule.includes(`.graph-styler-panel ${selector}`), selector);
+  }
 
   // Share codes: one line, round-trips the sanitized preset (Korean labels included), never the id.
   const { encodeShareCode, decodeShareCode } = GraphStyler;
