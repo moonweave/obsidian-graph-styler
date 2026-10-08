@@ -56,6 +56,7 @@ const STRINGS = {
     myPresets: 'My presets',
     save: '💾 Save as preset',
     namePh: 'Preset name',
+    includeView: 'Include filters and display',
     saved: (n) => `💾 “${n}” saved`,
     deleted: 'Preset deleted',
     copyCode: 'Copy share code',
@@ -102,6 +103,7 @@ const STRINGS = {
     myPresets: '내 프리셋',
     save: '💾 내 프리셋으로 저장',
     namePh: '프리셋 이름',
+    includeView: '필터·표시 설정 포함',
     saved: (n) => `💾 “${n}” 저장됨`,
     deleted: '프리셋 삭제됨',
     copyCode: '공유 코드 복사',
@@ -235,10 +237,11 @@ function graphOptionsForPreset(preset) {
   // Built-in presets are visual-only. Their graph values are kept as
   // reference data for customisation, but must not be sent to Obsidian.
   if (!preset.applyForces) return {};
-  return CUSTOM_GRAPH_KEYS.reduce((options, key) => {
-    if (preset.graph[key] !== undefined) options[key] = preset.graph[key];
-    return options;
+  const options = CUSTOM_GRAPH_KEYS.reduce((picked, key) => {
+    if (preset.graph[key] !== undefined) picked[key] = preset.graph[key];
+    return picked;
   }, {});
+  return preset.view ? Object.assign(options, preset.view) : options;
 }
 
 // id, label, emoji, palette colors[], forces, background[3], theme colors, options
@@ -254,6 +257,7 @@ function P(id, label, emoji, colors, forces, bg, theme, options) {
     swatch: colors.length ? colors : [theme.circle, theme.fill, theme.tag, theme.line],
     applyForces: !!(options && options.applyForces),
     graph: graph(forces || {}),
+    view: options && options.view ? Object.assign({}, options.view) : null,
     palette,
   };
 }
@@ -273,7 +277,23 @@ function safePresetId(id) {
   return safe || 'custom-invalid';
 }
 
-// 사용자 커스텀 raw({id,label,colors[4],bg,glow,forces})의 hex·범위 검증.
+// 필터·표시 설정. 저장할 때 '필터·표시 설정 포함'을 고른 프리셋만 이 graph.json 키를 담는다.
+// 글자 페이드·노드 크기·선 두께는 원래부터 커스텀 프리셋의 슬라이더 값으로 들어간다.
+const VIEW_BOOL_KEYS = ['showTags', 'showAttachments', 'hideUnresolved', 'showOrphans', 'showArrow'];
+const SEARCH_MAX = 500;
+
+// 타입이 맞는 키만 남긴다. 검색어는 제어 문자를 지우고 길이를 자른다. 남는 게 없으면 null.
+function sanitizeView(view) {
+  if (!view || typeof view !== 'object' || Array.isArray(view)) return null;
+  const out = {};
+  if (typeof view.search === 'string') out.search = view.search.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, SEARCH_MAX);
+  for (const key of VIEW_BOOL_KEYS) {
+    if (typeof view[key] === 'boolean') out[key] = view[key];
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// 사용자 커스텀 raw({id,label,colors[4],bg,glow,forces,view?})의 hex·범위 검증.
 // data.json 손편집과 남이 준 공유 코드 모두 이걸 거친다.
 function sanitizeRaw(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
@@ -294,12 +314,15 @@ function sanitizeRaw(raw) {
     fade: finiteRange(sourceForces.fade, DEFAULT_CUSTOM.forces.fade, 0, 3),
   };
   const label = typeof source.label === 'string' ? source.label.trim() : '';
-  return { id: safePresetId(source.id), label: label || 'Custom', colors, bg: bgHex, glow: g, forces };
+  const clean = { id: safePresetId(source.id), label: label || 'Custom', colors, bg: bgHex, glow: g, forces };
+  const view = sanitizeView(source.view);
+  if (view) clean.view = view;
+  return clean;
 }
 
 // 사용자 커스텀 raw → 프리셋으로 재구성.
 function presetFromRaw(raw) {
-  const { id, label, colors, bg: bgHex, glow: g, forces } = sanitizeRaw(raw);
+  const { id, label, colors, bg: bgHex, glow: g, forces, view } = sanitizeRaw(raw);
   const bg = [mix(bgHex, colors[0], 0.2), mix(bgHex, colors[0], 0.08), bgHex];
   const theme = {
     circle: colors[0], fill: colors[1], tag: colors[2],
@@ -307,7 +330,7 @@ function presetFromRaw(raw) {
     unresolved: mix(bgHex, '#ffffff', 0.1),
     filter: `brightness(${(1 + g / 280).toFixed(2)}) contrast(1.06) saturate(${(1 + g / 110).toFixed(2)})`,
   };
-  return P(id, label, '🎛️', colors, forces, bg, theme, { applyForces: true });
+  return P(id, label, '🎛️', colors, forces, bg, theme, { applyForces: true, view });
 }
 
 const DEFAULT_CUSTOM = {
@@ -317,30 +340,36 @@ const DEFAULT_CUSTOM = {
   forces: { node: 2.2, repel: 17, dist: 140, center: 0.05, linkS: 0.2, line: 0.3, fade: 1.2 },
 };
 
-// 공유 코드 = 'gs1.' + base64url(JSON). 붙여넣기 쉬운 한 줄이고, 라벨의 한글도 UTF-8로 보존한다.
+// 공유 코드 = 'gs1.' 또는 'gs2.' + base64url(JSON). 붙여넣기 쉬운 한 줄이고, 라벨의 한글도 UTF-8로 보존한다.
 // id는 담지 않는다 — 가져오는 쪽 vault에서 새로 정한다.
-const SHARE_PREFIX = 'gs1.';
+// gs2.는 필터·표시 설정(view)을 담은 프리셋에만 쓴다. 나머지는 지금도 gs1.이라 0.2.0도 가져올 수 있고,
+// 0.2.0은 gs2.를 모르는 접두사로 거절한다.
+const SHARE_PREFIXES = ['gs1.', 'gs2.'];
 
 function encodeShareCode(raw) {
-  const { label, colors, bg, glow, forces } = sanitizeRaw(raw);
-  const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, label, colors, bg, glow, forces }));
+  const { label, colors, bg, glow, forces, view } = sanitizeRaw(raw);
+  const v = view ? 2 : 1;
+  const payload = view ? { v, label, colors, bg, glow, forces, view } : { v, label, colors, bg, glow, forces };
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return SHARE_PREFIX + btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return SHARE_PREFIXES[v - 1] + btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function decodeShareCode(code) {
   const text = typeof code === 'string' ? code.trim() : '';
-  if (!text.startsWith(SHARE_PREFIX)) return null;
-  const body = text.slice(SHARE_PREFIX.length);
+  const v = SHARE_PREFIXES.findIndex((prefix) => text.startsWith(prefix)) + 1;
+  if (!v) return null;
+  const body = text.slice(SHARE_PREFIXES[v - 1].length);
   if (!/^[A-Za-z0-9_-]+$/.test(body)) return null;
   try {
     const binary = atob(body.replace(/-/g, '+').replace(/_/g, '/'));
     const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
     const data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-    if (!data || data.v !== 1) return null;
-    const { label, colors, bg, glow, forces } = sanitizeRaw(data);
-    return { label, colors, bg, glow, forces };
+    if (!data || data.v !== v) return null;
+    const { label, colors, bg, glow, forces, view } = sanitizeRaw(data);
+    // gs1.에 view가 끼어 있어도 버린다 — gs1. 코드는 예전과 똑같이 가져온다.
+    return v === 2 && view ? { label, colors, bg, glow, forces, view } : { label, colors, bg, glow, forces };
   } catch (_) {
     return null;
   }
@@ -361,6 +390,7 @@ function draftFromGraph(options) {
       line: pick(o.lineSizeMultiplier, DEFAULT_CUSTOM.forces.line),
       fade: pick(o.textFadeMultiplier, DEFAULT_CUSTOM.forces.fade),
     },
+    includeView: false,
     name: '',
   };
 }
@@ -725,6 +755,12 @@ class StylerView extends ItemView {
     nameEl.placeholder = L.namePh;
     nameEl.value = draft.name;
     nameEl.oninput = () => { draft.name = nameEl.value; };
+    const viewRow = details.createEl('label', { cls: 'gs-row gs-check' });
+    const viewBox = viewRow.createEl('input');
+    viewBox.type = 'checkbox';
+    viewBox.checked = draft.includeView;
+    viewBox.onchange = () => { draft.includeView = viewBox.checked; };
+    viewRow.createSpan({ text: L.includeView });
     const saveBtn = details.createEl('button', { cls: 'gs-save', text: L.save });
     saveBtn.onclick = () => this.saveCurrent();
   }
@@ -776,7 +812,12 @@ class StylerView extends ItemView {
   }
 
   async saveCurrent() {
-    await this.plugin.saveCustom(this.rawFromDraft(`custom-${Date.now()}`));
+    const raw = this.rawFromDraft(`custom-${Date.now()}`);
+    if (this.plugin.draft.includeView) {
+      const view = await this.plugin.currentViewOptions();
+      if (view) raw.view = view;
+    }
+    await this.plugin.saveCustom(raw);
   }
 }
 
@@ -1007,6 +1048,14 @@ module.exports = class GraphStyler extends Plugin {
     await this.removeCustomSnippet(id);
     this.refreshViews();
     new Notice(L.deleted);
+  }
+
+  // 지금 그래프의 필터·표시 설정. 코어 그래프 플러그인의 메모리 값이 graph.json보다 새것일 수 있어 위에 덮는다.
+  async currentViewOptions() {
+    const internal = this.app.internalPlugins;
+    const core = internal && internal.plugins && internal.plugins.graph && internal.plugins.graph.instance;
+    const live = core && core.options && typeof core.options === 'object' ? core.options : {};
+    return sanitizeView(Object.assign({}, await this.readGraphOptions(), live));
   }
 
   async copyShareCode(raw) {
@@ -1400,12 +1449,16 @@ module.exports = class GraphStyler extends Plugin {
       if (!engineOnly) new Notice(L.openGraph);
       return false;
     }
+    // 필터·표시 설정은 전역 그래프의 것이다. 로컬 그래프는 자기 필터(깊이·링크 방향 등)를 따로 두므로 보내지 않는다.
+    const localOptions = Object.fromEntries(Object.entries(graphOptions)
+      .filter(([key]) => key !== 'search' && !VIEW_BOOL_KEYS.includes(key)));
+    const localGraphs = new Set(this.app.workspace.getLeavesOfType('localgraph'));
     for (const leaf of leaves) {
       const view = leaf.view;
       const engine = view && (view.engine || view.dataEngine);
       if (engine && typeof engine.setOptions === 'function') {
         try {
-          engine.setOptions(graphOptions);
+          engine.setOptions(localGraphs.has(leaf) ? localOptions : graphOptions);
           if (shouldRender && typeof engine.render === 'function') engine.render();
           if (syncView && !engineOnly) {
             const state = leaf.getViewState();
@@ -1496,3 +1549,4 @@ module.exports = class GraphStyler extends Plugin {
 // 플러그인 로더는 module.exports(클래스)만 쓴다. 공유 코드 함수는 테스트용으로 붙여 둔다.
 module.exports.encodeShareCode = encodeShareCode;
 module.exports.decodeShareCode = decodeShareCode;
+module.exports.presetFromRaw = presetFromRaw;
