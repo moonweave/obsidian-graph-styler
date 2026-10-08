@@ -596,6 +596,43 @@ async function exportWith(renderer, { filters = new Map(), iframe = null } = {})
   return { created, canvas: canvases[0], notices: notices.slice() };
 }
 
+// Which graph leaf the export picks. Each spec: { type, activeTime, hidden, file }.
+function graphLeaves(specs) {
+  return specs.map((spec) => ({
+    spec,
+    activeTime: spec.activeTime,
+    view: {
+      renderer: new FakeGraphRenderer(16384),
+      file: spec.file ? { basename: spec.file } : undefined,
+      getViewType: () => spec.type,
+      contentEl: { nodeType: 1, parentElement: null, clientWidth: spec.hidden ? 0 : 400, querySelector: () => null },
+    },
+  }));
+}
+
+async function exportTargetWith(specs, activeIndex) {
+  const { app } = makeHarness();
+  const leaves = graphLeaves(specs);
+  app.workspace.getLeavesOfType = (type) => leaves.filter((leaf) => leaf.spec.type === type);
+  app.workspace.activeLeaf = activeIndex === undefined ? { view: {} } : leaves[activeIndex];
+  const created = [];
+  app.vault.getFiles = () => [];
+  app.vault.createBinary = async (filePath) => { created.push(filePath); };
+  const originalCreate = global.document.createElement;
+  global.document.createElement = () => fakeCanvas();
+  global.window.getComputedStyle = () => ({ backgroundColor: 'rgb(30, 30, 30)', filter: 'none' });
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [] };
+  notices.length = 0;
+  const target = plugin.exportTarget();
+  try {
+    await plugin.exportPng(1);
+  } finally {
+    global.document.createElement = originalCreate;
+  }
+  return { picked: target ? target.spec.type : null, created, notices: notices.slice() };
+}
+
 (async () => {
   const visualOnly = await apply(false);
   assert.strictEqual(visualOnly.graph.centerStrength, 0.42);
@@ -739,6 +776,36 @@ async function exportWith(renderer, { filters = new Map(), iframe = null } = {})
   assert.strictEqual(exportFileName('neon', at, ['graph-neon-20261008-0705.png', 'graph-neon-20261008-0705-2.png']),
     'graph-neon-20261008-0705-3.png');
 
+  // Local graph exports carry the note name; characters files and links refuse become '-'.
+  const { exportNoteName } = GraphStyler;
+  assert.strictEqual(exportNoteName('Smith 2017: Fatigue/57 #a [x]'), 'Smith-2017-Fatigue-57-a-x');
+  assert.strictEqual(exportNoteName('밤하늘 노트'), '밤하늘-노트');
+  assert.strictEqual(exportNoteName('..hidden.'), 'hidden');
+  assert.strictEqual(exportNoteName(undefined), '');
+  assert.strictEqual(exportNoteName('a'.repeat(80)).length, 60);
+  assert.strictEqual(exportFileName('neon', at, [], '밤하늘 노트'), 'graph-neon-밤하늘-노트-20261008-0705.png');
+  assert.strictEqual(exportFileName(null, at, [], '???'), 'graph-graph-20261008-0705.png');
+
+  // Target: the active graph leaf (command palette), else the most recently active visible one (panel
+  // button), else the global graph first as in 0.2.0; with none, say which graph to open.
+  const globalAndLocal = (globalTime, localTime, localHidden) => [
+    { type: 'graph', activeTime: globalTime },
+    { type: 'localgraph', activeTime: localTime, hidden: localHidden, file: 'Actuator note 3' },
+  ];
+  const activeLocal = await exportTargetWith(globalAndLocal(20, 10), 1);
+  assert.strictEqual(activeLocal.picked, 'localgraph');
+  assert.ok(/^graph-graph-Actuator-note-3-\d{8}-\d{4}\.png$/.test(activeLocal.created[0]), activeLocal.created[0]);
+  assert.strictEqual((await exportTargetWith(globalAndLocal(10, 20))).picked, 'localgraph');
+  const recentGlobal = await exportTargetWith(globalAndLocal(20, 10));
+  assert.strictEqual(recentGlobal.picked, 'graph');
+  assert.ok(/^graph-graph-\d{8}-\d{4}\.png$/.test(recentGlobal.created[0]), recentGlobal.created[0]);
+  assert.strictEqual((await exportTargetWith(globalAndLocal(10, 20, true))).picked, 'graph');
+  assert.strictEqual((await exportTargetWith(globalAndLocal(undefined, undefined))).picked, 'graph');
+  assert.strictEqual((await exportTargetWith([{ type: 'localgraph', hidden: true, file: 'x' }])).picked, 'localgraph');
+  const none = await exportTargetWith([]);
+  assert.strictEqual(none.picked, null);
+  assert.deepStrictEqual(none.notices, ["Open the graph view or a note's local graph first"]);
+
   // With the private renderer API, the graph is redrawn at k× and every field is put back.
   const hiRes = new FakeGraphRenderer(16384);
   const before = rendererState(hiRes);
@@ -824,7 +891,7 @@ async function exportWith(renderer, { filters = new Map(), iframe = null } = {})
   const noApi = await exportWith({});
   assert.deepStrictEqual(noApi.created, []);
   assert.deepStrictEqual(noApi.notices, ['PNG export failed — open the console (Cmd+Opt+I) to see why']);
-  assert.deepStrictEqual((await exportWith(null)).notices, ['Open a graph view first']);
+  assert.deepStrictEqual((await exportWith(null)).notices, ["Open the graph view or a note's local graph first"]);
 
   // Only what onunload itself switched off is switched back on, once.
   assert.deepStrictEqual(await loadPlugin({ data: { custom: [], resumeSnippet: 'neon' }, snippets: { neon: 1 } }).then(
