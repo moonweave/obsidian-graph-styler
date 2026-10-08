@@ -532,10 +532,15 @@ function fakeCanvas() {
   const ctx = {
     filter: 'none',
     fillRect() { filters.fill.push(ctx.filter); },
-    drawImage(source) {
+    drawImage(source, x = 0, y = 0) {
       drawn.push(source);
       filters.draw.push(ctx.filter);
+      ctx.drawnAt.push([x, y]);
     },
+    drawnAt: [],
+    texts: [],
+    fillText(text, x, y) { ctx.texts.push({ text, x, y, font: ctx.font, fill: ctx.fillStyle }); },
+    measureText: (text) => ({ width: String(text).length * 7 }),
     createRadialGradient: () => ({ addColorStop() {} }),
   };
   return {
@@ -613,7 +618,7 @@ function rendererState(r) {
   };
 }
 
-async function exportWith(renderer, { filters = new Map(), iframe = null } = {}) {
+async function exportWith(renderer, { filters = new Map(), iframe = null, options = null, scale = 3 } = {}) {
   const { app } = makeHarness();
   const created = [];
   const canvases = [];
@@ -628,13 +633,15 @@ async function exportWith(renderer, { filters = new Map(), iframe = null } = {})
     return canvas;
   };
   global.window.getComputedStyle = (el) => ({ backgroundColor: 'rgb(30, 30, 30)', filter: filters.get(el) || 'none' });
+  global.document.body = {};
   const plugin = new GraphStyler(app);
   plugin.settings = { custom: [] };
+  if (options) plugin.exportOptions = GraphStyler.sanitizeExportOptions(options);
   notices.length = 0;
   const originalError = console.error;
   console.error = () => {};
   try {
-    await plugin.exportPng(3);
+    await plugin.exportPng(scale);
   } finally {
     console.error = originalError;
     global.document.createElement = originalCreate;
@@ -886,6 +893,76 @@ async function exportTargetWith(specs, activeIndex) {
   const fallbackGlow = await exportWith({ getTransparentScreenshot: () => ({ width: 50, height: 20 }) },
     { iframe: fallbackFrame, filters: new Map([[fallbackFrame, glow]]) });
   assert.deepStrictEqual(fallbackGlow.canvas.filters.draw, [glow]);
+
+  // Post-ready export: layout pads to the aspect without cropping, keeps a caption band, and fits all nodes.
+  const { exportLayout, fitView, sanitizeExportOptions } = GraphStyler;
+  assert.deepStrictEqual(sanitizeExportOptions(undefined),
+    { fit: false, aspect: 'original', caption: { date: false, notes: false, preset: false } });
+  assert.deepStrictEqual(sanitizeExportOptions({ fit: 'yes', aspect: '16:9', caption: { date: true, notes: 1 } }),
+    { fit: false, aspect: 'original', caption: { date: true, notes: false, preset: false } });
+  const plainOptions = sanitizeExportOptions({});
+  assert.deepStrictEqual(exportLayout(200, 100, plainOptions, false),
+    { canvasW: 200, canvasH: 100, band: 0, graphW: 200, graphH: 100, graphX: 0, graphY: 0 });
+  const pad45 = sanitizeExportOptions({ aspect: '4:5' });
+  assert.deepStrictEqual(exportLayout(200, 100, pad45, false),
+    { canvasW: 200, canvasH: 250, band: 0, graphW: 200, graphH: 100, graphX: 0, graphY: 75 });
+  assert.deepStrictEqual(exportLayout(200, 100, pad45, true),
+    { canvasW: 200, canvasH: 250, band: 14, graphW: 200, graphH: 100, graphX: 0, graphY: 68 });
+  assert.deepStrictEqual(exportLayout(100, 300, sanitizeExportOptions({ aspect: '1:1' }), false),
+    { canvasW: 300, canvasH: 300, band: 0, graphW: 100, graphH: 300, graphX: 100, graphY: 0 });
+  assert.deepStrictEqual(exportLayout(200, 100, sanitizeExportOptions({ fit: true, aspect: '4:5' }), true),
+    { canvasW: 200, canvasH: 250, graphX: 0, graphY: 0, graphW: 200, graphH: 236, band: 14 });
+  assert.deepStrictEqual(exportLayout(200, 100, sanitizeExportOptions({ fit: true }), true),
+    { canvasW: 200, canvasH: 114, graphX: 0, graphY: 0, graphW: 200, graphH: 100, band: 14 });
+  const fittedView = fitView([{ x: -10, y: -10 }, { x: 10, y: 10 }, { x: NaN }], 100, 100);
+  assert.ok(Math.abs(fittedView.scale - 4.3) < 1e-9 && fittedView.panX === 50 && fittedView.panY === 50, JSON.stringify(fittedView));
+
+  // Fit + 4:5 + caption on a fake renderer: the frame is redrawn fitted, hubs and caption are written,
+  // and the user's view comes back exactly.
+  const fitRenderer = new FakeGraphRenderer(16384);
+  fitRenderer.nodes = [
+    { x: -40, y: -20, weight: 50, id: 'Hub.md', text: { resolution: 2 }, getSize: () => 20, getDisplayText: () => 'Hub' },
+    { x: 40, y: 20, weight: 2, id: 'Leaf.md', text: { resolution: 2 }, getSize: () => 8, getDisplayText: () => 'Leaf' },
+    { x: 0, y: 30, weight: 1, id: '#tag', text: { resolution: 2 } },
+  ];
+  const fitBefore = rendererState(fitRenderer);
+  const posted = await exportWith(fitRenderer, { scale: 2,
+    options: { fit: true, aspect: '4:5', caption: { date: false, notes: true, preset: false } } });
+  assert.deepStrictEqual(rendererState(fitRenderer), fitBefore);
+  assert.deepStrictEqual([posted.canvas.width, posted.canvas.height], [400, 500]);
+  assert.deepStrictEqual([fitRenderer.during.W, fitRenderer.during.H], [400, 472]);
+  // Nodes span x −40…40 and y −20…30; the 200×236 frame with 7% margins fits them at 172/80 = 2.15,
+  // centred at (0, 5): pan = (100, 118 − 5 × 2.15), all ×2 for k.
+  assert.ok(Math.abs(fitRenderer.during.scale - 4.3) < 1e-9, fitRenderer.during.scale);
+  assert.deepStrictEqual([fitRenderer.during.panX, fitRenderer.during.panY], [200, 214.5]);
+  assert.deepStrictEqual(posted.canvas.ctx.drawnAt, [[0, 0]]);
+  assert.deepStrictEqual(posted.canvas.ctx.texts.map((t) => t.text), ['Hub', '2 notes']);
+  assert.ok(posted.created.length === 1 && posted.notices[0].includes('(400×500)'), posted.notices.join());
+  // Without fit the screen frame is padded: centred above the caption band, never scaled or cropped.
+  const padded = await exportWith(new FakeGraphRenderer(16384), { scale: 2,
+    options: { aspect: '1:1', caption: { date: true, notes: false, preset: false } } });
+  assert.deepStrictEqual([padded.canvas.width, padded.canvas.height], [400, 400]);
+  assert.deepStrictEqual(padded.canvas.ctx.drawnAt, [[0, 86]]);
+  assert.ok(/^\d{4}\.\d{2}\.\d{2}$/.test(padded.canvas.ctx.texts[0].text), padded.canvas.ctx.texts[0].text);
+  // The default (Original, no fit, no caption) draws exactly the screen frame at (0, 0), as in 0.2.0.
+  const defaultExport = await exportWith(new FakeGraphRenderer(16384), { scale: 2, options: {} });
+  assert.deepStrictEqual([defaultExport.canvas.width, defaultExport.canvas.height], [400, 200]);
+  assert.deepStrictEqual(defaultExport.canvas.ctx.drawnAt, [[0, 0]]);
+  assert.deepStrictEqual(defaultExport.canvas.ctx.texts, []);
+
+  // The last choices are remembered in settings and come back on load.
+  {
+    const { app } = makeHarness();
+    const plugin = new GraphStyler(app);
+    const saved = [];
+    plugin.loadData = async () => ({ custom: [], exportOptions: { fit: true, aspect: '4:5', caption: { date: true } } });
+    plugin.saveData = async (settings) => { saved.push(JSON.parse(JSON.stringify(settings))); };
+    await plugin.onload();
+    assert.deepStrictEqual(plugin.exportOptions, { fit: true, aspect: '4:5', caption: { date: true, notes: false, preset: false } });
+    await plugin.setExportOptions({ aspect: '1:1' });
+    assert.deepStrictEqual(saved[saved.length - 1].exportOptions,
+      { fit: true, aspect: '1:1', caption: { date: true, notes: false, preset: false } });
+  }
 
   // The GL texture limit caps the scale.
   const capped = await exportWith(new FakeGraphRenderer(400));

@@ -50,6 +50,14 @@ const STRINGS = {
     exportCapped: (req, k) => `${req}x is too large for this graph view — saved at ${k}x`,
     exportFailed: 'PNG export failed — open the console (Cmd+Opt+I) to see why',
     exportOpenGraph: 'Open the graph view or a note\'s local graph first',
+    exportFit: 'Fit whole graph',
+    exportAspect: 'Aspect',
+    exportAspectOriginal: 'Original',
+    exportCaption: 'Caption',
+    captionDate: 'Date',
+    captionNotes: 'Note count',
+    captionPreset: 'Preset',
+    captionNoteCount: (n) => (n === 1 ? '1 note' : `${n} notes`),
     customize: '🎛️ Customize',
     customizeNote: 'Customize changes graph physics live. Save it only if you want a reusable custom preset.',
     active: 'active',
@@ -96,6 +104,14 @@ const STRINGS = {
     exportCapped: (req, k) => `${req}x는 이 그래프 화면에 너무 커서 ${k}x로 저장`,
     exportFailed: 'PNG 내보내기 실패 — 콘솔(Cmd+Opt+I)에서 원인 확인',
     exportOpenGraph: '그래프 뷰나 노트의 로컬 그래프를 먼저 열어주세요',
+    exportFit: '전체 그래프 맞추기',
+    exportAspect: '비율',
+    exportAspectOriginal: '원래 비율',
+    exportCaption: '캡션',
+    captionDate: '날짜',
+    captionNotes: '노트 수',
+    captionPreset: '프리셋',
+    captionNoteCount: (n) => `노트 ${n}개`,
     customize: '🎛️ 커스터마이즈',
     customizeNote: '커스터마이즈는 그래프 물리를 실시간으로 바꿉니다. 다시 쓸 설정만 프리셋으로 저장하세요.',
     active: '현재 적용됨',
@@ -516,10 +532,12 @@ function drawingBufferFits(R) {
 }
 
 // 렌더러를 k배 크기로 한 번 다시 그리고, 그 순간의 버퍼를 draw(view)에 넘긴다. 실제로 쓴 배율을 돌려준다.
+// frame({width, height}, 1x 기기 픽셀)을 주면 그 크기로 그리면서 모든 노드가 여백 안에 들어오게 맞춘다.
+// 노드·글자 크기는 화면에서 그 확대율일 때와 같게 둔다. frame이 없으면 지금 화면 그대로다.
 // preserveDrawingBuffer가 꺼져 있어 버퍼는 같은 태스크 안에서만 읽힌다.
 // setScale은 nodeScale = sqrt(1/scale)로 노드·글자를 다시 줄이므로 원래 값으로 고정하고,
 // 선 두께와 글자 래스터 해상도만 k배 한다.
-function renderGraphAt(r, k, draw) {
+function renderGraphAt(r, k, draw, frame) {
   const R = r.px.renderer;
   const baseSetScale = r.setScale;
   const ownSetScale = Object.prototype.hasOwnProperty.call(r, 'setScale');
@@ -529,23 +547,34 @@ function renderGraphAt(r, k, draw) {
     nodeScale: r.nodeScale, textAlpha: r.textAlpha, line: r.fLineSizeMult, idleFrames: r.idleFrames,
   };
   const texts = r.nodes.filter((node) => node && node.text).map((node) => [node.text, node.text.resolution]);
+  const W = frame ? frame.width : save.W;
+  const H = frame ? frame.height : save.H;
+  const fitted = frame ? fitView(r.nodes, W, H) : null;
   try {
-    R.resize(save.W * k, save.H * k);
+    R.resize(W * k, H * k);
     while (k > 1 && !drawingBufferFits(R)) {
       k -= 1;
-      R.resize(save.W * k, save.H * k);
+      R.resize(W * k, H * k);
     }
-    r.width = save.width * k;
-    r.height = save.height * k;
+    const dpr = save.width ? save.W / save.width : 1;
+    r.width = (frame ? W / dpr : save.width) * k;
+    r.height = (frame ? H / dpr : save.height) * k;
     r.fLineSizeMult = save.line * k;
+    let pin = { nodeScale: save.nodeScale, textAlpha: save.textAlpha };
+    if (fitted) {
+      baseSetScale.call(r, fitted.scale);
+      pin = { nodeScale: r.nodeScale, textAlpha: r.textAlpha };
+    }
     r.setScale = function (scale) {
       baseSetScale.call(this, scale);
-      this.nodeScale = save.nodeScale;
-      this.textAlpha = save.textAlpha;
+      this.nodeScale = pin.nodeScale;
+      this.textAlpha = pin.textAlpha;
     };
-    r.targetScale = save.scale * k;
-    r.setScale(save.scale * k);
-    r.setPan(save.panX * k, save.panY * k);
+    const scale = (fitted ? fitted.scale : save.scale) * k;
+    r.targetScale = scale;
+    r.setScale(scale);
+    if (fitted) r.setPan(fitted.panX * k, fitted.panY * k);
+    else r.setPan(save.panX * k, save.panY * k);
     for (const [text, resolution] of texts) text.resolution = resolution * k;
     r.idleFrames = 0;
     r.renderCallback();
@@ -583,6 +612,109 @@ function paintGraphBackground(ctx, w, h, base, palette) {
   gradient.addColorStop(1, palette.bg3);
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, w, h);
+}
+
+// 모든 노드를 frame(1x 기기 픽셀) 안에 여백을 두고 넣는 확대율과 이동. 화면 좌표 = 노드 좌표 × scale + pan.
+const FIT_MARGIN = 0.07;
+
+function fitView(nodes, width, height) {
+  const placed = nodes.filter((node) => node && Number.isFinite(node.x) && Number.isFinite(node.y));
+  if (!placed.length) return { scale: 1, panX: width / 2, panY: height / 2 };
+  const xs = placed.map((node) => node.x);
+  const ys = placed.map((node) => node.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const inner = 1 - 2 * FIT_MARGIN;
+  const scale = Math.min((width * inner) / Math.max(maxX - minX, 1), (height * inner) / Math.max(maxY - minY, 1));
+  return { scale, panX: width / 2 - ((minX + maxX) / 2) * scale, panY: height / 2 - ((minY + maxY) / 2) * scale };
+}
+
+const EXPORT_ASPECTS = { original: 0, '1:1': 1, '4:5': 4 / 5 };
+const DEFAULT_EXPORT_OPTIONS = { fit: false, aspect: 'original', caption: { date: false, notes: false, preset: false } };
+
+function sanitizeExportOptions(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const c = o.caption && typeof o.caption === 'object' ? o.caption : {};
+  return {
+    fit: o.fit === true,
+    aspect: Object.prototype.hasOwnProperty.call(EXPORT_ASPECTS, o.aspect) ? o.aspect : 'original',
+    caption: { date: c.date === true, notes: c.notes === true, preset: c.preset === true },
+  };
+}
+
+function isPlainExport(options) {
+  const c = options.caption;
+  return !options.fit && options.aspect === 'original' && !c.date && !c.notes && !c.preset;
+}
+
+// 1x 기기 픽셀 기준 배치. 비율을 맞출 때는 배경으로 덧대고 노드는 자르지 않는다. 캡션 띠는 맨 아래.
+// fit이면 그래프를 띠 위 영역 크기로 다시 그리고, 아니면 화면 그대로의 그림을 가운데 둔다.
+function exportLayout(width, height, options, hasCaption) {
+  const ratio = EXPORT_ASPECTS[options.aspect] || 0;
+  const band = hasCaption ? Math.round(width * 0.07) : 0;
+  if (options.fit) {
+    const canvasH = ratio ? Math.round(width / ratio) : height + band;
+    return { canvasW: width, canvasH, graphX: 0, graphY: 0, graphW: width, graphH: canvasH - band, band };
+  }
+  let canvasW = width;
+  let canvasH = height + band;
+  if (ratio) {
+    canvasW = Math.max(width, Math.ceil(canvasH * ratio));
+    canvasH = Math.max(canvasH, Math.round(canvasW / ratio));
+  }
+  return {
+    canvasW, canvasH, band, graphW: width, graphH: height,
+    graphX: Math.round((canvasW - width) / 2), graphY: Math.round((canvasH - band - height) / 2),
+  };
+}
+
+function captionText(options, info) {
+  const parts = [];
+  if (options.caption.preset && info.preset) parts.push(info.preset);
+  if (options.caption.notes) parts.push(L.captionNoteCount(info.notes));
+  if (options.caption.date) {
+    const d = info.date;
+    parts.push(`${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`);
+  }
+  return parts.join('   ·   ');
+}
+
+function hexA(hex, alpha) {
+  const [r, g, b] = rgbOf(hex);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// 전체를 맞추면 Obsidian은 그 확대율에서 라벨을 숨긴다. 가장 많이 이어진 노트 몇 개만 겹치지 않게 직접 쓴다.
+// 허브는 연결 수가 가장 많은 노트의 40% 이상인 것만 — 그 아래는 이름을 붙여도 의미 없는 보통 노트다.
+function drawHubLabels(ctx, r, offsetX, offsetY, k, size, color, font) {
+  const ranked = r.nodes.filter((node) => node && node.id && Number.isFinite(node.x))
+    .sort((a, b) => (b.weight || 0) - (a.weight || 0));
+  const top = ranked.length ? ranked[0].weight || 0 : 0;
+  const hubs = ranked.filter((node) => top > 0 && (node.weight || 0) >= top * 0.4).slice(0, 20);
+  const placed = [];
+  ctx.font = `500 ${size}px ${font}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = color;
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+  ctx.shadowBlur = size * 0.35;
+  for (const node of hubs) {
+    if (placed.length >= 8) break;
+    const text = typeof node.getDisplayText === 'function' ? node.getDisplayText() : String(node.id).replace(/\.md$/, '');
+    const radius = (typeof node.getSize === 'function' ? node.getSize() : 8) * r.nodeScale * r.scale;
+    const x = offsetX + node.x * r.scale + r.panX;
+    const y = offsetY + node.y * r.scale + r.panY + radius + size * 0.35;
+    const w = ctx.measureText(text).width;
+    const box = { left: x - w / 2 - size * 0.4, right: x + w / 2 + size * 0.4, top: y - size * 0.2, bottom: y + size * 1.3 };
+    if (placed.some((p) => box.left < p.right && box.right > p.left && box.top < p.bottom && box.bottom > p.top)) continue;
+    placed.push(box);
+    ctx.fillText(text, x, y);
+  }
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = 'transparent';
+  return placed.length;
 }
 
 class StylerView extends ItemView {
@@ -752,6 +884,35 @@ class StylerView extends ItemView {
     const exportBtn = row.createEl('button', { cls: 'gs-export', text: L.exportCmd });
     exportBtn.onclick = () => this.plugin.exportPng(this.plugin.exportScale);
     c.createEl('p', { text: L.exportScaleNote, cls: 'gs-note' });
+
+    const options = this.plugin.exportOptions;
+    const fitRow = c.createEl('label', { cls: 'gs-row gs-export-check' });
+    const fitBox = fitRow.createEl('input');
+    fitBox.type = 'checkbox';
+    fitBox.checked = options.fit;
+    fitBox.onchange = () => this.plugin.setExportOptions({ fit: fitBox.checked });
+    fitRow.createSpan({ text: L.exportFit });
+
+    const aspectRow = c.createDiv({ cls: 'gs-row' });
+    aspectRow.createSpan({ cls: 'gs-row-label', text: L.exportAspect });
+    const aspectEl = aspectRow.createEl('select', { cls: 'dropdown' });
+    for (const key of Object.keys(EXPORT_ASPECTS)) {
+      aspectEl.createEl('option', { value: key, text: key === 'original' ? L.exportAspectOriginal : key });
+    }
+    aspectEl.value = options.aspect;
+    aspectEl.onchange = () => this.plugin.setExportOptions({ aspect: aspectEl.value });
+
+    const captionRow = c.createDiv({ cls: 'gs-row' });
+    captionRow.createSpan({ cls: 'gs-row-label', text: L.exportCaption });
+    const captionItems = captionRow.createSpan({ cls: 'gs-caption-items' });
+    for (const [key, text] of [['date', L.captionDate], ['notes', L.captionNotes], ['preset', L.captionPreset]]) {
+      const item = captionItems.createEl('label', { cls: 'gs-export-check' });
+      const box = item.createEl('input');
+      box.type = 'checkbox';
+      box.checked = options.caption[key];
+      box.onchange = () => this.plugin.setExportOptions({ caption: Object.assign({}, this.plugin.exportOptions.caption, { [key]: box.checked }) });
+      item.createSpan({ text });
+    }
   }
 
   rawFromDraft(id) {
@@ -785,6 +946,9 @@ module.exports = class GraphStyler extends Plugin {
   static exportScaleLimit = exportScaleLimit;
   static exportFileName = exportFileName;
   static exportNoteName = exportNoteName;
+  static exportLayout = exportLayout;
+  static fitView = fitView;
+  static sanitizeExportOptions = sanitizeExportOptions;
 
   async onload() {
     // 업데이트·제자리 재시작 때 Obsidian은 이전 인스턴스의 onunload를 기다리지 않고 이 onload를 부른다.
@@ -809,6 +973,7 @@ module.exports = class GraphStyler extends Plugin {
     this.customizeOpen = false;
     // 2x면 인스타그램 1080px에 충분하고, 3x는 vault에 20MB 안팎을 쓴다. 마지막으로 고른 배율을 기억한다.
     this.exportScale = EXPORT_SCALES.includes(this.settings.exportScale) ? this.settings.exportScale : 2;
+    this.exportOptions = sanitizeExportOptions(this.settings.exportOptions);
     this.currentPreset = null;
 
     // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
@@ -911,22 +1076,72 @@ module.exports = class GraphStyler extends Plugin {
       const palette = await this.activePalette();
       const base = this.graphBaseColor(leaf.view.contentEl);
       const filter = this.graphFilter(leaf.view.contentEl, renderer);
+      const options = this.exportOptions || sanitizeExportOptions(null);
+      const plain = isPlainExport(options);
+      const highRes = canRenderHighRes(renderer);
+      const fit = options.fit && highRes;
       let canvas = null;
+      let layout = null;
+      let caption = '';
+      if (!plain) {
+        caption = captionText(options, {
+          preset: palette ? this.presetLabel(palette.id) : '',
+          notes: (renderer.nodes || []).filter((node) => node && typeof node.id === 'string' && node.id.endsWith('.md')).length,
+          date: new Date(),
+        });
+        const R = renderer.px && renderer.px.renderer;
+        const size = R ? [R.width, R.height] : null;
+        layout = exportLayout(size ? size[0] : 0, size ? size[1] : 0, Object.assign({}, options, { fit }), !!caption);
+      }
       const paint = (source) => {
         canvas = document.createElement('canvas');
-        canvas.width = source.width;
-        canvas.height = source.height;
+        if (plain) {
+          canvas.width = source.width;
+          canvas.height = source.height;
+          const ctx = canvas.getContext('2d');
+          paintGraphBackground(ctx, canvas.width, canvas.height, base, palette);
+          ctx.filter = filter;
+          ctx.drawImage(source, 0, 0);
+          ctx.filter = 'none';
+          return;
+        }
+        // 저해상도 대체 경로에서도 같은 배치를 쓰도록 실제 그림 크기에서 배율을 다시 잰다.
+        const graphW = layout.graphW || source.width;
+        const kk = source.width / graphW;
+        const L2 = layout.graphW ? layout : exportLayout(source.width, source.height, options, !!caption);
+        canvas.width = Math.round(L2.canvasW * kk);
+        canvas.height = Math.round(L2.canvasH * kk);
         const ctx = canvas.getContext('2d');
         paintGraphBackground(ctx, canvas.width, canvas.height, base, palette);
+        const gx = Math.round(L2.graphX * kk);
+        const gy = Math.round(L2.graphY * kk);
         ctx.filter = filter;
-        ctx.drawImage(source, 0, 0);
+        ctx.drawImage(source, gx, gy);
         ctx.filter = 'none';
+        const textColor = palette ? palette.text : this.graphTextColor(renderer);
+        const font = this.exportFont();
+        if (fit && renderer.textAlpha < 0.3) {
+          drawHubLabels(ctx, renderer, gx, gy, kk, Math.round(canvas.width * 0.017), hexA(textColor, 0.92), font);
+        }
+        if (caption) {
+          const band = L2.band * kk;
+          const size = Math.round(band * 0.34);
+          ctx.font = `400 ${size}px ${font}`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          if ('letterSpacing' in ctx) ctx.letterSpacing = `${Math.round(size * 0.06)}px`;
+          ctx.fillStyle = hexA(textColor, 0.7);
+          ctx.fillText(caption, canvas.width / 2, canvas.height - band * 0.55);
+        }
       };
-      if (canRenderHighRes(renderer)) {
+      if (highRes) {
         const R = renderer.px.renderer;
         const gl = R.gl;
         const maxTexture = gl && typeof gl.getParameter === 'function' ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : undefined;
-        const used = renderGraphAt(renderer, exportScaleLimit(maxTexture, R.width, R.height, requestedScale), paint);
+        const frame = fit ? { width: layout.graphW, height: layout.graphH } : undefined;
+        const limitW = frame ? frame.width : R.width;
+        const limitH = frame ? frame.height : R.height;
+        const used = renderGraphAt(renderer, exportScaleLimit(maxTexture, limitW, limitH, requestedScale), paint, frame);
         if (used < requestedScale) new Notice(L.exportCapped(requestedScale, used));
       } else if (typeof renderer.getTransparentScreenshot === 'function') {
         paint(renderer.getTransparentScreenshot());
@@ -949,6 +1164,12 @@ module.exports = class GraphStyler extends Plugin {
       console.error('[graph-styler] PNG export failed', e);
       new Notice(L.exportFailed);
     }
+  }
+
+  async setExportOptions(change) {
+    this.exportOptions = sanitizeExportOptions(Object.assign({}, this.exportOptions, change));
+    this.settings.exportOptions = this.exportOptions;
+    await this.saveData(this.settings);
   }
 
   async setExportScale(scale) {
@@ -978,6 +1199,24 @@ module.exports = class GraphStyler extends Plugin {
     if (!host) return 'none';
     const filter = window.getComputedStyle(host).filter;
     return filter && filter !== 'none' ? filter : 'none';
+  }
+
+  presetLabel(id) {
+    const preset = Object.values(PRESETS)
+      .concat((this.settings.custom || []).map((raw) => presetFromRaw(raw)))
+      .find((candidate) => candidate.id === id);
+    return preset ? preset.label : '';
+  }
+
+  graphTextColor(renderer) {
+    const text = renderer.colors && renderer.colors.text;
+    return text && typeof text.rgb === 'number' ? `#${text.rgb.toString(16).padStart(6, '0')}` : '#dadada';
+  }
+
+  exportFont() {
+    const style = window.getComputedStyle(document.body);
+    const font = style && typeof style.getPropertyValue === 'function' ? style.getPropertyValue('--font-interface').trim() : '';
+    return font || 'ui-sans-serif, -apple-system, BlinkMacSystemFont, sans-serif';
   }
 
   // 그래프 캔버스는 투명하다. 그래프 영역에서 위로 올라가며 처음 칠해진 배경색을 쓴다.
