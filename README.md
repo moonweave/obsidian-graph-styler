@@ -21,7 +21,7 @@ Obsidian's graph looks amazing in screenshots — but getting there means diggin
 ## Presets
 ⚡ Neon · 🌌 Galaxy · 🌠 Aurora · 🌅 Sunset · 🌴 Vaporwave · 🌊 Ocean · 🌲 Forest · 🍬 Candy · ✨ Gold · 👾 Cyberpunk · ❄️ Nord · 🧛 Dracula · 🐈 Catppuccin · ⚪ Mono
 
-Each built-in preset applies node/group colors and a glow CSS snippet while preserving your current force and visual size settings. Custom presets can explicitly save force/size values.
+Each built-in preset applies node/group colors and a glow CSS snippet while preserving your current force and visual size settings. Custom presets can explicitly save force/size values. A note's local graph that opens without colour groups of its own picks up the active preset's colours; groups you set on a local graph are left alone.
 
 **Make your own.** Open **🎛️ Customize** in the panel — drag the force/size sliders (repel, link distance, node size…) and pick colors, watch the graph update live, then **💾 Save as preset**. Customization changes graph physics; save it only when you want a reusable custom preset. Your presets show up under *My presets* and persist. Tick **Include filters and display** before saving to also keep the graph's current search query, tags, attachments, existing-files-only, orphans and arrows; applying the preset then sets those too (on the global graph — a note's local graph keeps its own filters), and **↩︎ Restore** still brings everything back.
 
@@ -46,7 +46,7 @@ It writes these into Obsidian's **native graph color groups** (Settings → Grap
 
 <p align="center"><img src="docs/export-example.png" width="480" alt="A Vaporwave export of a 391-note sample vault" /><br/><sub>A Vaporwave export of a 391-note sample vault (2x, resized to 1080px wide).</sub></p>
 
-**Post-ready options** (off by default, remembered): *Fit whole graph* frames every node with a margin for the export only and puts your view back afterwards; *Aspect* 1:1 or 4:5 pads with the preset background (nodes are never cropped); *Caption* adds a small line with the date, note count and/or preset name in the preset's text colour. When fitting zooms out so far that Obsidian would hide labels, the most-linked notes are labelled in the image.
+**Post-ready options** (off by default, remembered): *Fit whole graph* frames every node with a margin for the export only and puts your view back afterwards; *Aspect* 1:1 or 4:5 pads with the preset background (nodes are never cropped); *Caption* adds a small line with the date, note count and/or preset name in the preset's text colour. When fitting zooms out so far that Obsidian would hide labels, the most-linked notes are labelled in the image, with a thin outline in the background colour so they stay readable over lines and nodes; a label that would cover a neighbouring hub moves above its own node.
 
 <p align="center"><img src="docs/export-post-ready.png" width="400" alt="A 4:5 fitted Vaporwave export with hub labels and a caption" /><br/><sub>Fit whole graph + 4:5 + caption (Vaporwave, 2x, resized to 1080×1350).</sub></p>
 

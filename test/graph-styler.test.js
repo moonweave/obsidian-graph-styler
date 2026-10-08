@@ -579,6 +579,8 @@ function fakeCanvas() {
     drawnAt: [],
     texts: [],
     fillText(text, x, y) { ctx.texts.push({ text, x, y, font: ctx.font, fill: ctx.fillStyle }); },
+    strokes: [],
+    strokeText(text, x, y) { ctx.strokes.push({ text, x, y, stroke: ctx.strokeStyle, width: ctx.lineWidth }); },
     measureText: (text) => ({ width: String(text).length * 7 }),
     createRadialGradient: () => ({ addColorStop() {} }),
   };
@@ -723,6 +725,31 @@ async function exportTargetWith(specs, activeIndex) {
     global.document.createElement = originalCreate;
   }
   return { picked: target ? target.spec.type : null, created, notices: notices.slice() };
+}
+
+// Local graphs open with Obsidian's defaults (no colour groups). Each spec: own colour groups or [].
+async function localGraphColours({ styled = true, globalGroups = [{ query: 'path:"a"', color: { a: 1, rgb: 7 } }] } = {}) {
+  const { app } = makeHarness();
+  const handlers = [];
+  const leaves = [];
+  const addLocal = (own) => {
+    let options = { colorGroups: own };
+    const leaf = { view: { engine: { getOptions: () => options, setOptions: (o) => { options = Object.assign({}, options, o); }, render() {} } } };
+    leaves.push(leaf);
+    return leaf;
+  };
+  app.workspace.getLeavesOfType = (type) => (type === 'localgraph' ? leaves.slice() : []);
+  app.workspace.on = (name, callback) => { handlers.push([name, callback]); return {}; };
+  app.workspace.onLayoutReady = (callback) => callback();
+  app.customCss.enabledSnippets = new Set(styled ? ['graph-styler-neon'] : ['user-snippet']);
+  app.internalPlugins = { plugins: { graph: { instance: { options: { colorGroups: globalGroups } } } } };
+  const plugin = new GraphStyler(app);
+  await plugin.onload();
+  const layoutChange = async () => {
+    for (const [name, callback] of handlers) if (name === 'layout-change') callback();
+    await plugin.colorNewLocalGraphs();
+  };
+  return { plugin, addLocal, layoutChange, groupsOf: (leaf) => leaf.view.engine.getOptions().colorGroups };
 }
 
 (async () => {
@@ -976,6 +1003,28 @@ async function exportTargetWith(specs, activeIndex) {
   assert.deepStrictEqual([fitRenderer.during.panX, fitRenderer.during.panY], [200, 214.5]);
   assert.deepStrictEqual(posted.canvas.ctx.drawnAt, [[0, 0]]);
   assert.deepStrictEqual(posted.canvas.ctx.texts.map((t) => t.text), ['Hub', '2 notes']);
+  // Hub labels carry a halo in the background colour, stroked under the fill.
+  assert.deepStrictEqual(posted.canvas.ctx.strokes.map((t) => [t.text, t.stroke]), [['Hub', 'rgb(30, 30, 30)']]);
+
+  // A label whose spot below its node would cover another hub moves above its own node.
+  const labelCtx = fakeCanvas().ctx;
+  const hubNode = (id, x, y, weight) => ({ id, x, y, weight, getSize: () => 20, getDisplayText: () => id });
+  const flat = { scale: 1, panX: 0, panY: 0, nodeScale: 1 };
+  GraphStyler.drawHubLabels(labelCtx, Object.assign({ nodes: [hubNode('A', 0, 0, 50), hubNode('B', 0, 45, 40)] }, flat),
+    0, 0, 1, 10, '#ffffff', 'sans-serif', '#000000');
+  const labelY = Object.fromEntries(labelCtx.texts.map((t) => [t.text, t.y]));
+  assert.ok(labelY.A < -20, `A should sit above its node: ${labelY.A}`);
+  assert.ok(labelY.B > 45 + 20, `B stays below its node: ${labelY.B}`);
+  // ...but not into the spot where a hub above it would put its own name.
+  const crowdCtx = fakeCanvas().ctx;
+  GraphStyler.drawHubLabels(crowdCtx, Object.assign({ nodes: [hubNode('A', 0, 0, 50), hubNode('B', 0, 45, 40), hubNode('C', 0, -60, 30)] }, flat),
+    0, 0, 1, 10, '#ffffff', 'sans-serif', '#000000');
+  const crowdY = Object.fromEntries(crowdCtx.texts.map((t) => [t.text, t.y]));
+  assert.ok(crowdY.A > 20, `A keeps its spot below: ${crowdY.A}`);
+  const aloneCtx = fakeCanvas().ctx;
+  GraphStyler.drawHubLabels(aloneCtx, Object.assign({ nodes: [hubNode('A', 0, 0, 50), hubNode('B', 200, 0, 40)] }, flat),
+    0, 0, 1, 10, '#ffffff', 'sans-serif', '#000000');
+  assert.ok(aloneCtx.texts.every((t) => t.y > 20), 'labels stay below when nothing is in the way');
   assert.ok(posted.created.length === 1 && posted.notices[0].includes('(400×500)'), posted.notices.join());
   // Without fit the screen frame is padded: centred above the caption band, never scaled or cropped.
   const padded = await exportWith(new FakeGraphRenderer(16384), { scale: 2,
@@ -988,6 +1037,28 @@ async function exportTargetWith(specs, activeIndex) {
   assert.deepStrictEqual([defaultExport.canvas.width, defaultExport.canvas.height], [400, 200]);
   assert.deepStrictEqual(defaultExport.canvas.ctx.drawnAt, [[0, 0]]);
   assert.deepStrictEqual(defaultExport.canvas.ctx.texts, []);
+
+  // A newly opened local graph without colour groups gets the global (preset) groups once; groups the user
+  // set on a local graph are never replaced; nothing happens without an active preset.
+  {
+    const lc = await localGraphColours();
+    const plainLocal = lc.addLocal([]);
+    const ownGroups = [{ query: 'tag:#mine', color: { a: 1, rgb: 99 } }];
+    const customLocal = lc.addLocal(ownGroups);
+    await lc.layoutChange();
+    assert.deepStrictEqual(lc.groupsOf(plainLocal), [{ query: 'path:"a"', color: { a: 1, rgb: 7 } }]);
+    assert.deepStrictEqual(lc.groupsOf(customLocal), ownGroups);
+    plainLocal.view.engine.setOptions({ colorGroups: [] });
+    await lc.layoutChange();
+    assert.deepStrictEqual(lc.groupsOf(plainLocal), [], 'a local graph the user cleared is not refilled');
+    const later = lc.addLocal([]);
+    await lc.layoutChange();
+    assert.strictEqual(lc.groupsOf(later).length, 1);
+    const unstyled = await localGraphColours({ styled: false });
+    const untouched = unstyled.addLocal([]);
+    await unstyled.layoutChange();
+    assert.deepStrictEqual(unstyled.groupsOf(untouched), []);
+  }
 
   // The last choices are remembered in settings and come back on load.
   {
