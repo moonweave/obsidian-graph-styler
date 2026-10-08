@@ -950,9 +950,20 @@ module.exports = class GraphStyler extends Plugin {
       const unchanged = before.exists === after.exists && before.contents === after.contents;
       if (!unchanged) continue;
       await adapter.write(this.graphPath(), JSON.stringify(merged, null, 2));
+      this.syncCoreGraphOptions(merged);
       return merged;
     }
     throw new Error('graph.json changed while applying preset');
+  }
+
+  // 코어 그래프 플러그인은 graph.json을 메모리에 들고 있다가 그래프 leaf를 닫거나 다시 열 때 그 값을
+  // 파일에 다시 쓴다. 파일 감시가 새 값을 전하기 전에 leaf를 다시 열면(커스텀 프리셋 적용, 1.14.4 실측
+  // 다시 쓰기 0.8s·감시 1.1s) 방금 쓴 색 그룹·물리가 이전 값으로 덮였다. 메모리 값도 같이 맞춘다.
+  syncCoreGraphOptions(options) {
+    const internal = this.app.internalPlugins;
+    const core = internal && internal.plugins && internal.plugins.graph;
+    const instance = core && core.instance;
+    if (instance && instance.options && typeof instance.options === 'object') Object.assign(instance.options, options);
   }
 
   async installSnippet(presetId, css) {
@@ -1065,7 +1076,9 @@ module.exports = class GraphStyler extends Plugin {
     this.currentForceOptions = forceOptionsFromGraph(originalOptions);
     this.currentPreset = null;
     // 원본에 색 그룹이 없으면 열린 그래프에 프리셋 색이 남지 않도록 비운다.
-    await this.reloadGraph(Object.assign({ colorGroups: [] }, originalOptions));
+    const restoredOptions = Object.assign({ colorGroups: [] }, originalOptions);
+    this.syncCoreGraphOptions(restoredOptions);
+    await this.reloadGraph(restoredOptions);
     this.refreshViews();
     new Notice(L.restored);
   }

@@ -371,6 +371,23 @@ async function restoreEngineOptions(backup) {
   return { sent: engineOptions[engineOptions.length - 1], graph: files['.obsidian/graph.json'] };
 }
 
+// The core graph plugin keeps graph.json in memory and writes it back when a graph leaf is reopened.
+// In Obsidian 1.14.4 that write could land before its file watcher saw the new graph.json.
+async function coreOptionsAtReopen(run) {
+  const { app, files } = makeHarness();
+  const core = { options: { colorGroups: [{ query: 'old', color: { a: 1, rgb: 2 } }], nodeSizeMultiplier: 1, search: '' } };
+  app.internalPlugins = { plugins: { graph: { instance: core } } };
+  const atReopen = [];
+  const leaves = app.workspace.getLeavesOfType;
+  app.workspace.getLeavesOfType = (type) => leaves(type).map((leaf) => Object.assign(leaf, {
+    setViewState: async () => { atReopen.push(JSON.parse(JSON.stringify(core.options))); },
+  }));
+  const plugin = new GraphStyler(app);
+  plugin.settings = { custom: [] };
+  await run(plugin, files);
+  return { atReopen, core: core.options };
+}
+
 async function backupWithoutGraphJson() {
   const { app, files } = makeHarness();
   const graphPath = '.obsidian/graph.json';
@@ -596,4 +613,26 @@ async function backupWithoutGraphJson() {
   const groups = [{ query: 'tag:#a', color: { a: 1, rgb: 1 } }];
   const restoredWithGroups = await restoreEngineOptions(JSON.stringify({ colorGroups: groups }));
   assert.deepStrictEqual(restoredWithGroups.sent.colorGroups, groups);
+
+  // Applying a custom preset reopens the graph leaf; the core plugin must already hold the new
+  // groups and forces, or it writes the previous preset back over them.
+  const reopened = await coreOptionsAtReopen((plugin) => plugin._doApply(preset(true)));
+  assert.ok(reopened.atReopen.length > 0);
+  for (const options of reopened.atReopen) {
+    assert.deepStrictEqual(options.colorGroups, [{ query: 'path:"notes"', color: { a: 1, rgb: 0x38bdf8 } }]);
+    assert.strictEqual(options.nodeSizeMultiplier, 2.1);
+    assert.strictEqual(options.search, '');
+  }
+  const restoredCore = await coreOptionsAtReopen(async (plugin, files) => {
+    files['.obsidian/graph.json.styler-bak'] = JSON.stringify({ repelStrength: 3 });
+    const originalConfirm = global.window.confirm;
+    global.window.confirm = () => true;
+    try {
+      await plugin.restore();
+    } finally {
+      global.window.confirm = originalConfirm;
+    }
+  });
+  assert.deepStrictEqual(restoredCore.core.colorGroups, []);
+  assert.strictEqual(restoredCore.core.repelStrength, 3);
 })();
