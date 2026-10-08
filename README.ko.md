@@ -46,6 +46,10 @@ Graph Styler는 하드코딩이 없습니다 — *내* vault에 맞춰 적응합
 
 <p align="center"><img src="docs/export-example.png" width="480" alt="노트 391개 예시 vault를 Vaporwave로 내보낸 PNG" /><br/><sub>노트 391개 예시 vault를 Vaporwave로 내보낸 결과(2x, 가로 1080px로 축소).</sub></p>
 
+**게시용 옵션**(기본은 꺼짐, 마지막 선택을 기억): *전체 그래프 맞추기*는 내보낼 때만 모든 노드가 여백 안에 들어오게 맞추고 끝나면 보던 화면으로 돌려놓습니다. *비율* 1:1·4:5는 프리셋 배경으로 덧대며 노드를 자르지 않습니다. *캡션*은 날짜·노트 수·프리셋 이름 중 고른 것을 프리셋 글자색의 작은 한 줄로 넣습니다. 맞추느라 너무 축소돼 Obsidian이 라벨을 숨기는 경우에는 가장 많이 이어진 노트 이름을 그림에 써 줍니다.
+
+<p align="center"><img src="docs/export-post-ready.png" width="400" alt="전체 그래프 맞추기·4:5·캡션으로 내보낸 Vaporwave" /><br/><sub>전체 그래프 맞추기 + 4:5 + 캡션(Vaporwave, 2x, 1080×1350으로 축소).</sub></p>
+
 ## 설치
 **커뮤니티 플러그인에서 설치(권장):**
 1. Obsidian에서 설정 -> 커뮤니티 플러그인 -> 탐색을 엽니다.

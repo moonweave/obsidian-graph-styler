@@ -46,6 +46,10 @@ It writes these into Obsidian's **native graph color groups** (Settings → Grap
 
 <p align="center"><img src="docs/export-example.png" width="480" alt="A Vaporwave export of a 391-note sample vault" /><br/><sub>A Vaporwave export of a 391-note sample vault (2x, resized to 1080px wide).</sub></p>
 
+**Post-ready options** (off by default, remembered): *Fit whole graph* frames every node with a margin for the export only and puts your view back afterwards; *Aspect* 1:1 or 4:5 pads with the preset background (nodes are never cropped); *Caption* adds a small line with the date, note count and/or preset name in the preset's text colour. When fitting zooms out so far that Obsidian would hide labels, the most-linked notes are labelled in the image.
+
+<p align="center"><img src="docs/export-post-ready.png" width="400" alt="A 4:5 fitted Vaporwave export with hub labels and a caption" /><br/><sub>Fit whole graph + 4:5 + caption (Vaporwave, 2x, resized to 1080×1350).</sub></p>
+
 ## Install
 **Community plugins (recommended):**
 1. In Obsidian, open Settings -> Community plugins -> Browse.

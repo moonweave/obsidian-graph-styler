@@ -156,6 +156,21 @@
   flex: 1;
 }
 
+.graph-styler-panel .gs-export-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.graph-styler-panel .gs-caption-items {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
 .graph-styler-panel .gs-colors {
   display: inline-flex;
   gap: 4px;
