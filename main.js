@@ -775,6 +775,7 @@ module.exports = class GraphStyler extends Plugin {
     try {
       const palette = await this.activePalette();
       const base = this.graphBaseColor(leaf.view.contentEl);
+      const filter = this.graphFilter(leaf.view.contentEl, renderer);
       let canvas = null;
       const paint = (source) => {
         canvas = document.createElement('canvas');
@@ -782,7 +783,9 @@ module.exports = class GraphStyler extends Plugin {
         canvas.height = source.height;
         const ctx = canvas.getContext('2d');
         paintGraphBackground(ctx, canvas.width, canvas.height, base, palette);
+        ctx.filter = filter;
         ctx.drawImage(source, 0, 0);
+        ctx.filter = 'none';
       };
       if (canRenderHighRes(renderer)) {
         const R = renderer.px.renderer;
@@ -819,6 +822,19 @@ module.exports = class GraphStyler extends Plugin {
       .concat((this.settings.custom || []).map((raw) => presetFromRaw(raw)))
       .find((candidate) => candidate.id === id);
     return preset ? preset.palette : null;
+  }
+
+  // 화면의 글로우는 그래프를 실제로 그리는 요소에 걸린 CSS filter다(1.11.7·1.14.4에서는 캔버스를 담은 iframe).
+  // 그 요소의 계산된 filter를 그대로 써야 프리셋 스니펫이 어느 요소를 겨냥하든 파일이 화면과 같다.
+  // 배경은 그 요소 밖(.view-content)에 칠해지므로 filter를 받지 않는다.
+  graphFilter(contentEl, renderer) {
+    const view = renderer.px && renderer.px.renderer && renderer.px.renderer.view;
+    const doc = view && view.ownerDocument;
+    const host = (doc && doc.defaultView && doc.defaultView.frameElement) || view
+      || (contentEl && typeof contentEl.querySelector === 'function' && contentEl.querySelector('iframe'));
+    if (!host) return 'none';
+    const filter = window.getComputedStyle(host).filter;
+    return filter && filter !== 'none' ? filter : 'none';
   }
 
   // 그래프 캔버스는 투명하다. 그래프 영역에서 위로 올라가며 처음 칠해진 배경색을 쓴다.

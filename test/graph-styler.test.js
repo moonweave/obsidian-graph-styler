@@ -389,15 +389,23 @@ async function backupWithoutGraphJson() {
 
 function fakeCanvas() {
   const drawn = [];
+  const filters = { fill: [], draw: [] };
+  const ctx = {
+    filter: 'none',
+    fillRect() { filters.fill.push(ctx.filter); },
+    drawImage(source) {
+      drawn.push(source);
+      filters.draw.push(ctx.filter);
+    },
+    createRadialGradient: () => ({ addColorStop() {} }),
+  };
   return {
     width: 0,
     height: 0,
     drawn,
-    getContext: () => ({
-      fillRect() {},
-      drawImage: (source) => drawn.push(source),
-      createRadialGradient: () => ({ addColorStop() {} }),
-    }),
+    filters,
+    ctx,
+    getContext: () => ctx,
     toBlob: (callback) => callback({ arrayBuffer: async () => new ArrayBuffer(4) }),
   };
 }
@@ -466,21 +474,21 @@ function rendererState(r) {
   };
 }
 
-async function exportWith(renderer) {
+async function exportWith(renderer, { filters = new Map(), iframe = null } = {}) {
   const { app } = makeHarness();
   const created = [];
   const canvases = [];
   app.vault.getFiles = () => [];
   app.vault.createBinary = async (filePath) => { created.push(filePath); };
   app.workspace.getLeavesOfType = (type) => (type === 'graph' && renderer
-    ? [{ view: { renderer, contentEl: { nodeType: 1, parentElement: null } } }] : []);
+    ? [{ view: { renderer, contentEl: { nodeType: 1, parentElement: null, querySelector: () => iframe } } }] : []);
   const originalCreate = global.document.createElement;
   global.document.createElement = () => {
     const canvas = fakeCanvas();
     canvases.push(canvas);
     return canvas;
   };
-  global.window.getComputedStyle = () => ({ backgroundColor: 'rgb(30, 30, 30)' });
+  global.window.getComputedStyle = (el) => ({ backgroundColor: 'rgb(30, 30, 30)', filter: filters.get(el) || 'none' });
   const plugin = new GraphStyler(app);
   plugin.settings = { custom: [] };
   notices.length = 0;
@@ -638,6 +646,25 @@ async function exportWith(renderer) {
   assert.deepStrictEqual([hiResExport.canvas.width, hiResExport.canvas.height], [600, 300]);
   assert.strictEqual(hiResExport.canvas.drawn[0], hiRes.view);
   assert.deepStrictEqual(hiResExport.notices, [`🖼️ Saved ${hiResExport.created[0]} (600×300)`]);
+
+  // The graph layer gets the filter of the element that draws it on screen (the iframe), so the
+  // glow in the file matches the screen; the background is painted without it.
+  const glow = 'brightness(1.25) contrast(1.15) saturate(1.5)';
+  const framed = new FakeGraphRenderer(16384);
+  const frame = {};
+  framed.view.ownerDocument = { defaultView: { frameElement: frame } };
+  const glowExport = await exportWith(framed, { filters: new Map([[frame, glow], [framed.view, 'blur(9px)']]) });
+  assert.deepStrictEqual(glowExport.canvas.filters.draw, [glow]);
+  assert.ok(glowExport.canvas.filters.fill.length > 0);
+  assert.ok(glowExport.canvas.filters.fill.every((f) => f === 'none'));
+  assert.strictEqual(glowExport.canvas.ctx.filter, 'none');
+  // No filter on screen (Restore, or a snippet that targets an element that does not draw) → none in the file.
+  assert.deepStrictEqual(hiResExport.canvas.filters.draw, ['none']);
+  // Fallback screenshots take the filter from the graph iframe.
+  const fallbackFrame = {};
+  const fallbackGlow = await exportWith({ getTransparentScreenshot: () => ({ width: 50, height: 20 }) },
+    { iframe: fallbackFrame, filters: new Map([[fallbackFrame, glow]]) });
+  assert.deepStrictEqual(fallbackGlow.canvas.filters.draw, [glow]);
 
   // The GL texture limit caps the scale.
   const capped = await exportWith(new FakeGraphRenderer(400));
