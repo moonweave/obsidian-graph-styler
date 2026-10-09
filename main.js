@@ -102,6 +102,9 @@ const STRINGS = {
     noWebgl3d: 'The 3D graph needs WebGL 2, which is not available here.',
     lost3d: 'Drawing paused because the graphics context was lost. It resumes when the system gives it back.',
     empty3d: 'There are no notes to show yet.',
+    effectsTitle: '✨ Effects (experimental)',
+    morphToggle: 'Smooth preset change',
+    morphHint: 'A new preset spreads out from the middle of the graph instead of switching at once. Stays instant if your system asks to reduce motion.',
     f: {
       colors: 'Group colors', bg: 'Background', glow: 'Glow',
       repel: 'Repel', dist: 'Link distance', center: 'Center', linkS: 'Link force',
@@ -184,6 +187,9 @@ const STRINGS = {
     noWebgl3d: '3D 그래프에는 WebGL 2가 필요한데, 여기서는 쓸 수 없어요.',
     lost3d: '그래픽 문맥을 잃어 그리기를 멈췄어요. 시스템이 돌려주면 다시 그려요.',
     empty3d: '아직 보여 줄 노트가 없어요.',
+    effectsTitle: '✨ 효과 (실험)',
+    morphToggle: '프리셋 부드럽게 바꾸기',
+    morphHint: '새 프리셋이 한 번에 바뀌지 않고 그래프 가운데에서 바깥으로 번지며 바뀝니다. 시스템에서 동작 줄이기를 켜 두면 바로 바뀝니다.',
     f: {
       colors: '그룹 색', bg: '배경', glow: '글로우',
       repel: '반발력', dist: '링크 거리', center: '중심력', linkS: '링크력',
@@ -843,6 +849,330 @@ function canCopyImages() {
   return typeof ClipboardItem === 'function' && !!navigator.clipboard && typeof navigator.clipboard.write === 'function';
 }
 
+// ---------------------------------------------------------------- effects (실험, 기본 꺼짐)
+// 그래프는 iframe 안의 PIXI(WebGL) 캔버스라 CSS로는 노드 하나하나를 바꿀 수 없어 렌더러의 비공개 API에 붙는다.
+// 1.14.4의 renderCallback은 매 프레임 node.render()·link.render()로 원과 선의 색을 다시 쓴 뒤 px.render()로
+// 그린다. 그래서 px.render 직전에 값을 바꾸고 그린 직후 되돌린다. 선의 색은 이전 값에서 보간하므로 되돌리지
+// 않으면 바꾼 값이 다음 프레임으로 누적된다. 렌더러는 마지막 변화 뒤 60프레임이 지나면 그리기를 멈추므로
+// (idleFrames) 프리셋이 바뀌는 동안만 그 값을 0으로 둔다 — 가만히 있을 때 드는 비용이 없다.
+// 새 모습이 가운데에서 바깥으로 0.7초에 걸쳐 번지고, 앞이 지나간 자리는 0.5초에 걸쳐 바뀐다(모두 1.2초).
+const MORPH_FRONT_MS = 700;
+const MORPH_FADE_MS = 500;
+
+function sanitizeEffects(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  return { morph: o.morph === true };
+}
+
+// 그리기 직전에 끼어드는 데 필요한 렌더러의 비공개 API(1.14.4에서 확인). 하나라도 없으면 붙지 않고,
+// 프리셋은 배경·글로우만 부드럽게 바뀐 채 노드 색은 원래대로 바뀐다.
+function canHookRenderer(r) {
+  return !!(r && r.px && typeof r.px.render === 'function' && r.px.renderer
+    && typeof r.changed === 'function' && typeof r.idleFrames === 'number'
+    && typeof r.scale === 'number' && typeof r.panX === 'number' && typeof r.panY === 'number'
+    && Array.isArray(r.nodes) && Array.isArray(r.links));
+}
+
+const easeInOut = (t) => (1 - Math.cos(Math.PI * t)) / 2;
+
+function mixRgb(a, b, t) {
+  const ch = (shift) => Math.round(((a >> shift) & 255) * (1 - t) + ((b >> shift) & 255) * t);
+  return (ch(16) << 16) | (ch(8) << 8) | ch(0);
+}
+
+// CSS 색(#rgb, #rrggbb, rgb(), rgba()) → [r, g, b, a]. 읽을 수 없으면 null.
+function parseCssColor(text) {
+  const s = String(text || '').trim();
+  let m = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (m) {
+    const hex = m[1].length === 3 ? m[1].split('').map((ch) => ch + ch).join('') : m[1];
+    return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)).concat(1);
+  }
+  m = s.match(/^rgba?\(([^)]+)\)$/i);
+  if (!m) return null;
+  const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+  return p.length >= 3 && p.every(Number.isFinite) ? [p[0], p[1], p[2], p.length > 3 ? p[3] : 1] : null;
+}
+
+// 프리셋 배경(makeGlowCss의 radial-gradient)의 세 색. 계산된 background-image 문자열에서 읽는다.
+function gradientStops(backgroundImage) {
+  const found = String(backgroundImage || '').match(/rgba?\([^)]*\)|#[0-9a-f]{3,6}\b/gi) || [];
+  const stops = found.map(parseCssColor).filter(Boolean);
+  return stops.length >= 3 ? stops.slice(0, 3) : null;
+}
+
+function cssGradient(stops) {
+  const c = (s) => `rgba(${Math.round(s[0])}, ${Math.round(s[1])}, ${Math.round(s[2])}, ${s[3].toFixed(3)})`;
+  return `radial-gradient(circle at 50% 42%, ${c(stops[0])} 0%, ${c(stops[1])} 48%, ${c(stops[2])} 100%)`;
+}
+
+const FILTER_KEYS = ['brightness', 'contrast', 'saturate'];
+
+function parseFilter(text) {
+  const out = { brightness: 1, contrast: 1, saturate: 1 };
+  for (const key of FILTER_KEYS) {
+    const m = String(text || '').match(new RegExp(`${key}\\(([\\d.]+)\\)`));
+    if (m) out[key] = Number(m[1]);
+  }
+  return out;
+}
+
+function filterText(f) {
+  return FILTER_KEYS.map((key) => `${key}(${f[key].toFixed(3)})`).join(' ');
+}
+
+class GraphEffects {
+  constructor(plugin) {
+    this.app = plugin.app;
+    this.settings = sanitizeEffects(null);
+    this.atts = new Map();
+    this.broken = new WeakSet();
+    this.morphs = [];
+    this.morphFrame = null;
+    this.reduced = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    this.onReduced = () => this.refresh();
+    if (this.reduced && typeof this.reduced.addEventListener === 'function') this.reduced.addEventListener('change', this.onReduced);
+  }
+
+  // 동작 줄이기를 켜 두면 프리셋은 원래대로 한 번에 바뀐다.
+  morphOn() {
+    return this.settings.morph && !(this.reduced && this.reduced.matches);
+  }
+
+  set(settings) {
+    this.settings = settings;
+    this.refresh();
+  }
+
+  refresh() {
+    if (!this.morphOn()) {
+      this.endMorphs();
+      this.detachAll();
+      return;
+    }
+    const workspace = this.app.workspace;
+    const live = new Set();
+    for (const leaf of workspace.getLeavesOfType('graph').concat(workspace.getLeavesOfType('localgraph'))) {
+      const r = leaf.view && leaf.view.renderer;
+      if (r) {
+        live.add(r);
+        this.attach(r);
+      }
+    }
+    for (const att of [...this.atts.values()]) if (!live.has(att.r)) this.detach(att);
+  }
+
+  attach(r) {
+    const old = this.atts.get(r);
+    if (old && old.px === r.px) return old;
+    if (old) this.detach(old);
+    if (this.broken.has(r) || !canHookRenderer(r)) return null;
+    const px = r.px;
+    const att = { r, px, undo: [], morph: null };
+    const own = Object.prototype.hasOwnProperty.call(px, 'render');
+    const base = px.render;
+    const effects = this;
+    att.wrapper = function () {
+      effects.beforeDraw(att);
+      try {
+        return base.apply(this, arguments);
+      } finally {
+        effects.afterDraw(att);
+      }
+    };
+    att.unwrap = () => {
+      if (px.render !== att.wrapper) return;
+      if (own) px.render = base;
+      else delete px.render;
+    };
+    px.render = att.wrapper;
+    this.atts.set(r, att);
+    return att;
+  }
+
+  detach(att) {
+    this.atts.delete(att.r);
+    att.unwrap();
+    this.afterDraw(att);
+    att.morph = null;
+    // 바꾼 색이 남지 않은 화면으로 한 번 다시 그린다.
+    if (att.r.px === att.px) att.r.changed();
+  }
+
+  detachAll() {
+    for (const att of [...this.atts.values()]) this.detach(att);
+  }
+
+  destroy() {
+    this.settings = sanitizeEffects(null);
+    this.endMorphs();
+    this.detachAll();
+    if (this.reduced && typeof this.reduced.removeEventListener === 'function') this.reduced.removeEventListener('change', this.onReduced);
+  }
+
+  beforeDraw(att) {
+    if (!att.morph) return;
+    try {
+      this.drawMorph(att);
+      att.r.idleFrames = 0;
+    } catch (e) {
+      // 렌더러 구조가 바뀌어 계산이 깨지면 그 그래프에서는 끼어들지 않고 원래대로 그린다.
+      console.debug('[graph-styler] smooth preset change off for this graph', e);
+      this.broken.add(att.r);
+      this.afterDraw(att);
+      this.detach(att);
+    }
+  }
+
+  afterDraw(att) {
+    const undo = att.undo;
+    for (let i = undo.length - 3; i >= 0; i -= 3) undo[i][undo[i + 1]] = undo[i + 2];
+    undo.length = 0;
+  }
+
+  put(att, obj, key, value) {
+    att.undo.push(obj, key, obj[key]);
+    obj[key] = value;
+  }
+
+  // 프리셋을 바꿀 때 새 모습이 그래프 가운데에서 바깥으로 번진다. 노드·선 색은 앞이 지나갈 때 바뀌고, 배경은 이전
+  // 그라디언트를 담은 덮개(입력 통과, 그래프 아래)에 가운데부터 구멍을 넓혀 드러낸다. 글로우(filter)는 전체가 같은 시계로.
+  // 플러그인이 새 CSS를 넣기 직전에 부른다. 원래는 배경·filter가 먼저 뚝 바뀌고 노드 색이 0.25~1.3초 뒤에 따라왔다.
+  // 목표 색은 매 프레임 노드에서 읽어 늦게 도착해도 따라간다. 시작했으면 true.
+  morphBegin(preset) {
+    if (!this.morphOn() || !preset || !preset.palette) return false;
+    const palette = preset.palette;
+    const toBg = [palette.bg1, palette.bg2, palette.bg3].map(parseCssColor);
+    if (toBg.some((c) => !c)) return false;
+    const toFilter = parseFilter(palette.filter);
+    this.endMorphs();
+    const now = performance.now();
+    const workspace = this.app.workspace;
+    for (const leaf of workspace.getLeavesOfType('graph').concat(workspace.getLeavesOfType('localgraph'))) {
+      const view = leaf.view;
+      const pane = view && view.contentEl;
+      if (!pane || typeof pane.querySelector !== 'function') continue;
+      const iframe = pane.querySelector(':scope > iframe');
+      let fromBg = gradientStops(window.getComputedStyle(pane).backgroundImage);
+      if (!fromBg) {
+        // 프리셋을 처음 고를 때는 그라디언트가 없다 — 테마 배경색에서 출발한다.
+        let el = pane;
+        let colour = null;
+        while (el && !colour) {
+          const c = parseCssColor(window.getComputedStyle(el).backgroundColor);
+          if (c && c[3] > 0) colour = c;
+          el = el.parentElement;
+        }
+        fromBg = [0, 1, 2].map(() => (colour || [30, 30, 30, 1]).slice());
+      }
+      const fromFilter = parseFilter(iframe ? window.getComputedStyle(iframe).filter : '');
+      // iframe을 다시 만들어 px가 바뀌었으면 attach가 새 px에 다시 붙는다.
+      const att = view.renderer ? this.attach(view.renderer) : null;
+      const m = {
+        pane, iframe, att, toBg, fromFilter, toFilter, t0: now, e: 0, elapsed: 0, done: false,
+        overlay: !!pane.querySelector(':scope > canvas'), tints: new Map(), lines: new Map(), cover: null,
+      };
+      if (att) {
+        for (const n of att.r.nodes) if (n.circle) m.tints.set(n, n.circle.tint);
+        for (const l of att.r.links) if (l.line) m.lines.set(l, l.line.tint);
+        att.morph = m;
+        att.r.changed();
+      }
+      // 이전 배경 덮개: 첫 자식이라 filter가 걸린 iframe(쌓임 맥락)보다 아래에 그려진다.
+      const cover = document.createElement('div');
+      cover.className = 'graph-styler-morph-cover';
+      cover.style.cssText = `position:absolute;inset:0;pointer-events:none;background:${cssGradient(fromBg)}`;
+      pane.insertBefore(cover, pane.firstChild);
+      m.cover = cover;
+      this.holdStyle(m);
+      this.morphs.push(m);
+    }
+    if (this.morphs.length && !this.morphFrame) this.morphFrame = window.requestAnimationFrame((t) => this.stepMorph(t));
+    return this.morphs.length > 0;
+  }
+
+  holdStyle(m) {
+    m.pane.style.setProperty('background', cssGradient(m.toBg), 'important');
+    const rect = m.pane.getBoundingClientRect();
+    const reach = Math.hypot(rect.width, rect.height) / 2;
+    const radius = Math.min(1, m.elapsed / MORPH_FRONT_MS) * (reach * 1.35);
+    const feather = reach * 0.35;
+    const mask = `radial-gradient(circle at 50% 50%, transparent ${Math.max(0, radius - feather).toFixed(1)}px, black ${radius.toFixed(1)}px)`;
+    m.cover.style.setProperty('-webkit-mask-image', mask);
+    m.cover.style.setProperty('mask-image', mask);
+    if (!m.iframe) return;
+    const f = {};
+    for (const key of FILTER_KEYS) f[key] = m.fromFilter[key] + (m.toFilter[key] - m.fromFilter[key]) * m.e;
+    m.iframe.style.setProperty('filter', filterText(f), 'important');
+    // filter가 있으면 iframe이 입력 오버레이 위로 올라온다(0.2.0의 확대·클릭 막힘). 프리셋 CSS와 같은 조건으로 입력을 통과시킨다.
+    if (m.overlay) m.iframe.style.setProperty('pointer-events', 'none', 'important');
+  }
+
+  stepMorph(now) {
+    this.morphFrame = null;
+    for (const m of this.morphs) {
+      m.elapsed = Math.max(0, now - m.t0);
+      const p = Math.min(1, m.elapsed / (MORPH_FRONT_MS + MORPH_FADE_MS));
+      m.e = easeInOut(p);
+      m.done = p >= 1;
+      this.holdStyle(m);
+      if (m.att && m.att.r.px === m.att.px) m.att.r.changed();
+    }
+    if (this.morphs.every((m) => m.done)) this.endMorphs();
+    else this.morphFrame = window.requestAnimationFrame((t) => this.stepMorph(t));
+  }
+
+  // 끝: 덮개와 inline style을 걷어 프리셋 CSS가 같은 값을 이어받게 하고, 노드·선의 내부 색을 목표값으로 맞춰
+  // Obsidian의 보간이 뒤늦게 다시 움직이지 않게 한다. 도중에 끝나면(끄기·비활성화) 원래 방식대로 바로 바뀐다.
+  endMorphs() {
+    if (this.morphFrame) window.cancelAnimationFrame(this.morphFrame);
+    this.morphFrame = null;
+    for (const m of this.morphs) {
+      if (m.cover) m.cover.remove();
+      m.pane.style.removeProperty('background');
+      if (m.iframe) {
+        m.iframe.style.removeProperty('filter');
+        m.iframe.style.removeProperty('pointer-events');
+      }
+      const att = m.att;
+      if (att && att.morph === m) {
+        att.morph = null;
+        if (m.done && att.r.px === att.px) {
+          for (const n of att.r.nodes) if (n.circle && typeof n.getFillColor === 'function') n.circle.tint = n.getFillColor().rgb;
+          for (const l of att.r.links) if (l.line && att.r.colors && att.r.colors.line) l.line.tint = att.r.colors.line.rgb;
+          att.r.changed();
+        }
+      }
+    }
+    this.morphs = [];
+  }
+
+  drawMorph(att) {
+    const m = att.morph;
+    const r = att.r;
+    const W = r.px.renderer.width;
+    const H = r.px.renderer.height;
+    const reach = Math.hypot(W, H) / 2;
+    // 화면 가운데에서의 거리(0..1)만큼 늦게 출발한다 — 덮개의 구멍이 지나가는 때와 맞춘다.
+    const at = (x, y) => {
+      const d = Math.min(1, Math.hypot(x * r.scale + r.panX - W / 2, y * r.scale + r.panY - H / 2) / (reach * 1.35));
+      return easeInOut(Math.max(0, Math.min(1, (m.elapsed - d * MORPH_FRONT_MS) / MORPH_FADE_MS)));
+    };
+    for (const n of r.nodes) {
+      const c = n.circle;
+      const from = m.tints.get(n);
+      if (!c || from === undefined || typeof n.getFillColor !== 'function') continue;
+      this.put(att, c, 'tint', mixRgb(from, n.getFillColor().rgb, at(n.x, n.y)));
+    }
+    const line = r.colors && r.colors.line ? r.colors.line.rgb : null;
+    if (line === null) return;
+    for (const l of r.links) {
+      const from = m.lines.get(l);
+      if (l.line && from !== undefined) this.put(att, l.line, 'tint', mixRgb(from, line, at((l.source.x + l.target.x) / 2, (l.source.y + l.target.y) / 2)));
+    }
+  }
+}
+
 class StylerView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -924,6 +1254,7 @@ class StylerView extends ItemView {
 
     this.buildCustomize(c);
     this.buildShare(c);
+    this.buildEffects(c);
     this.buildExport(c);
 
     // Restore acts on the whole vault, so it sits apart from the groups as a quiet footer action.
@@ -1009,6 +1340,22 @@ class StylerView extends ItemView {
     codeEl.placeholder = L.codePh;
     const importBtn = body.createEl('button', { cls: 'gs-import', text: L.importCode });
     importBtn.onclick = () => this.plugin.importShareCode(codeEl.value);
+  }
+
+  // 실험 효과. 서로 대신하는 것이 아니라 따로 켜고 끈다.
+  buildEffects(c) {
+    const effects = this.plugin.effectsSettings;
+    const body = this.group(c, 'effects', L.effectsTitle);
+    const toggle = (key, label, hint) => {
+      const row = body.createEl('label', { cls: 'gs-row gs-export-check' });
+      const box = row.createEl('input', { cls: `gs-effect-${key}` });
+      box.type = 'checkbox';
+      box.checked = effects[key];
+      box.onchange = () => this.plugin.setEffects({ [key]: box.checked });
+      row.createSpan({ text: label });
+      body.createEl('p', { text: hint, cls: 'gs-note gs-export-hint' });
+    };
+    toggle('morph', L.morphToggle, L.morphHint);
   }
 
   sliderRow(parent, label, min, max, step, value, onChange) {
@@ -2183,6 +2530,10 @@ module.exports = class GraphStyler extends Plugin {
   static fitView = fitView;
   static drawHubLabels = drawHubLabels;
   static sanitizeExportOptions = sanitizeExportOptions;
+  static sanitizeEffects = sanitizeEffects;
+  static gradientStops = gradientStops;
+  static parseFilter = parseFilter;
+  static GraphEffects = GraphEffects;
 
   async onload() {
     // 업데이트·제자리 재시작 때 Obsidian은 이전 인스턴스의 onunload를 기다리지 않고 이 onload를 부른다.
@@ -2213,6 +2564,9 @@ module.exports = class GraphStyler extends Plugin {
     this.exportFolder = exportFolderPath(this.settings.exportFolder);
     this.openAfterExport = this.settings.openAfterExport !== false;
     this.currentPreset = null;
+    this.effectsSettings = sanitizeEffects(this.settings.effects);
+    this.effects = new GraphEffects(this);
+    this.register(() => this.effects.destroy());
 
     // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
     const restoreSnippet = () => this.resumeSnippet().finally(resumed);
@@ -2226,6 +2580,9 @@ module.exports = class GraphStyler extends Plugin {
       const colorLocals = () => this.colorNewLocalGraphs();
       if (typeof workspace.onLayoutReady === 'function') workspace.onLayoutReady(colorLocals);
       this.registerEvent(workspace.on('layout-change', colorLocals));
+      const startEffects = () => this.effects.set(this.effectsSettings);
+      if (typeof workspace.onLayoutReady === 'function') workspace.onLayoutReady(startEffects);
+      this.registerEvent(workspace.on('layout-change', () => this.effects.refresh()));
     }
 
     // 3D 그래프는 실험 기능이다. 설정에서 켜기 전에는 명령이 팔레트에 보이지 않고, 3D 코드는 아무것도 돌지 않는다.
@@ -2540,6 +2897,13 @@ module.exports = class GraphStyler extends Plugin {
   async setExportScale(scale) {
     this.exportScale = scale;
     this.settings.exportScale = scale;
+    await this.saveData(this.settings);
+  }
+
+  async setEffects(change) {
+    this.effectsSettings = sanitizeEffects(Object.assign({}, this.effectsSettings, change));
+    this.settings.effects = this.effectsSettings;
+    this.effects.set(this.effectsSettings);
     await this.saveData(this.settings);
   }
 
@@ -2925,6 +3289,9 @@ module.exports = class GraphStyler extends Plugin {
       const css = makeGlowCss(preset.palette);
       this.ensureLiveStyle();
       const merged = await this.writeGraph(graphOptions);
+      // 부드러운 전환 중에는 색 그룹을 엔진(메모리)에 먼저 보낸다. 원래 순서대로면 스니펫 파일 처리 뒤라 노드 색이 배경보다
+      // 0.7~1.3초 늦게 바뀌어 한 번에 옮겨 갈 수 없었다. 나중의 reloadGraph는 같은 값을 다시 넣을 뿐이다.
+      if (!live && this.effects && this.effects.morphBegin(preset) && graphOptions.colorGroups) this.pushColorGroups(graphOptions.colorGroups);
       this.liveStyle.textContent = css;                  // graph.json 확정 뒤 즉시 시각 반영
       await this.installSnippet(preset.id, css);          // 리로드 영속용
       // Built-ins may update colors in the live engine, but never send force
@@ -2942,6 +3309,17 @@ module.exports = class GraphStyler extends Plugin {
     } catch (e) {
       console.error('[graph-styler] apply failed', e);
       if (!live) new Notice(L.failed);
+    }
+  }
+
+  pushColorGroups(colorGroups) {
+    for (const leaf of this.app.workspace.getLeavesOfType('graph').concat(this.app.workspace.getLeavesOfType('localgraph'))) {
+      const engine = leaf.view && (leaf.view.engine || leaf.view.dataEngine);
+      if (!engine || typeof engine.setOptions !== 'function') continue;
+      try {
+        engine.setOptions({ colorGroups });
+        if (typeof engine.render === 'function') engine.render();
+      } catch (_) { /* engine API drift — the regular reload still applies the colours */ }
     }
   }
 
