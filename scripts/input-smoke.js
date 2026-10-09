@@ -50,10 +50,17 @@ async function connect() {
 
 const LEAF = `app.workspace.getLeavesOfType('${leafType}')[0]`;
 const STATE = `(() => { const r = ${LEAF}.view.renderer; return { scale: r.scale, panX: r.panX, panY: r.panY }; })()`;
-// Puts the given node in the middle of the pane and returns its screen point and graph position.
+// Waits until the given node stops moving (nodes in a local graph are only a few pixels wide, and the
+// layout keeps settling after a drag), puts it in the middle of the pane, and returns its screen point.
 const CENTRE_ON = (id) => `(async () => { const leaf = ${LEAF}; const r = leaf.view.renderer; const rect = leaf.view.contentEl.getBoundingClientRect();
   const W = r.px.renderer.width; const H = r.px.renderer.height; const dpr = W / rect.width;
   const hub = r.nodes.find((n) => n.id === ${JSON.stringify(id)});
+  let last = [hub.x, hub.y]; let still = 0;
+  for (let i = 0; i < 50 && still < 4; i++) {
+    await new Promise((x) => setTimeout(x, 100));
+    const moved = Math.hypot(hub.x - last[0], hub.y - last[1]) * r.scale / dpr;
+    still = moved < 0.3 ? still + 1 : 0; last = [hub.x, hub.y];
+  }
   r.setPan(W / 2 - hub.x * r.scale, H / 2 - hub.y * r.scale); r.changed();
   await new Promise((x) => setTimeout(x, 500));
   return { x: rect.x + (hub.x * r.scale + r.panX) / dpr, y: rect.y + (hub.y * r.scale + r.panY) / dpr, nx: hub.x, ny: hub.y }; })()`;
@@ -91,7 +98,10 @@ const EMPTY = `(() => { const leaf = ${LEAF}; const r = leaf.view.renderer; cons
     r.setPan(r.px.renderer.width / 2, r.px.renderer.height / 2);
     r.changed();
     await new Promise((x) => setTimeout(x, 1200));
-    const hub = r.nodes.slice().sort((a, b) => b.weight - a.weight)[0];
+    // The most-linked node that is not the open note, so clicking it must change the active file
+    // (in a local graph the most-linked node is usually the note itself).
+    const active = app.workspace.getActiveFile();
+    const hub = r.nodes.filter((n) => !active || n.id !== active.path).sort((a, b) => b.weight - a.weight)[0];
     return { rect: [rect.x, rect.y, rect.width, rect.height], hub: { id: hub.id } };
   })()`);
   const [rx, ry, rw, rh] = geo.rect;
@@ -145,9 +155,13 @@ const EMPTY = `(() => { const leaf = ${LEAF}; const r = leaf.view.renderer; cons
   check('drag on the background pans', moved(s0, s1, 'panX') || moved(s0, s1, 'panY'), `pan ${Math.round(s0.panX)},${Math.round(s0.panY)} -> ${Math.round(s1.panX)},${Math.round(s1.panY)}`);
 
   const hubNow = await js(CENTRE_ON(geo.hub.id));
+  // The renderer picks up the hovered node on its next frames; poll for up to 2 s while the pointer rests on it.
   for (let i = 0; i < 6; i++) { await mouse('mouseMoved', hubNow.x - 18 + 3 * i, hubNow.y); await sleep(40); }
-  await sleep(500);
-  const hovered = await js(`(() => { const r = ${LEAF}.view.renderer; const h = r.getHighlightNode && r.getHighlightNode(); return h ? h.id : null; })()`);
+  let hovered = null;
+  for (let i = 0; i < 20 && hovered !== geo.hub.id; i++) {
+    await sleep(100);
+    hovered = await js(`(() => { const r = ${LEAF}.view.renderer; const h = r.getHighlightNode && r.getHighlightNode(); return h ? h.id : null; })()`);
+  }
   check('hovering a node highlights it', hovered === geo.hub.id, hovered);
 
   await mouse('mousePressed', hubNow.x, hubNow.y, { button: 'left', clickCount: 1 });
@@ -190,9 +204,12 @@ const EMPTY = `(() => { const leaf = ${LEAF}; const r = leaf.view.renderer; cons
   await sleep(200);
   await mouse('mousePressed', hubLast.x, hubLast.y, { button: 'left', clickCount: 1 });
   await mouse('mouseReleased', hubLast.x, hubLast.y, { button: 'left', clickCount: 1 });
-  await sleep(1500);
-  const opened = await js(`(() => { const f = app.workspace.getActiveFile(); return f ? f.path : null; })()`);
-  check('clicking a node opens the note', opened === geo.hub.id, `${before} -> ${opened}`);
+  let opened = before;
+  for (let i = 0; i < 30 && opened !== geo.hub.id; i++) {
+    await sleep(100);
+    opened = await js(`(() => { const f = app.workspace.getActiveFile(); return f ? f.path : null; })()`);
+  }
+  check('clicking a node opens the note', opened === geo.hub.id && before !== geo.hub.id, `${before} -> ${opened}`);
   // The click may open the note in the graph's own tab; put a graph view back so the script can run again.
   await js(`(async () => { if (!${LEAF}) { app.commands.executeCommandById('${leafType === 'graph' ? 'graph:open' : 'graph:open-local'}'); await new Promise((x) => setTimeout(x, 3000)); } })()`);
 
