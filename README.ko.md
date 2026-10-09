@@ -151,6 +151,9 @@ Graph Styler는 Obsidian의 색 그룹을 그대로 쓰므로, 그래프 뷰 설
 **글로우가 번지는 빛이 아니라 색이 밝아지는 것처럼 보여요.**
 글로우는 그래프가 그려지는 영역에 거는 CSS 필터(밝기, 대비, 채도)입니다. 노드와 선을 더 밝게 하고 채도를 높일 뿐, 주변에 빛 번짐을 그리지는 않습니다. 빛 번짐(bloom)은 Obsidian의 그래프 렌더러 안에서 그려야 하는데, Graph Styler는 렌더러를 바꾸지 않습니다.
 
+**프리셋을 적용하면 그래프를 확대·축소하거나 끌어 옮기거나 노드를 누를 수 없어요.**
+0.2.0–0.3.0의 버그입니다. 글로우가 걸린 층이 마우스 입력을 받는 층을 덮었습니다. 0.3.1 이상으로 업데이트하세요. 플러그인을 불러올 때 지금 켜진 프리셋이 고쳐지므로 프리셋을 다시 적용할 필요는 없습니다.
+
 **"적용 실패"나 "PNG 내보내기 실패"가 떠요.**
 개발자 콘솔(macOS는 Cmd+Opt+I, Windows·Linux는 Ctrl+Shift+I)을 열어 `[graph-styler]`로 시작하는 메시지를 확인하고 그 내용을 붙여 [이슈](https://github.com/moonweave/obsidian-graph-styler/issues)로 남겨 주세요.
 
@@ -186,6 +189,8 @@ node scripts/check-physics-contract.js
 # vault에 플러그인 복사
 ./deploy.sh /path/to/your/vault
 ```
+
+릴리스 전에는 `--remote-debugging-port`로 따로 띄운 Obsidian에 `scripts/input-smoke.js`도 돌려 주세요(사용법은 파일 맨 위에 있습니다). 그래프에 실제 마우스·트랙패드 입력을 보내, 확대·이동·마우스 올리기·노드 끌기·오른쪽 클릭·클릭 중 하나라도 안 되면 실패합니다.
 
 `deploy.sh`에는 항상 vault 경로를 넘기세요. 경로를 빼면 관리자 본인의 vault 경로가 쓰입니다. 저장소에 CI가 없으니 풀 리퀘스트를 열기 전에 두 검사를 직접 돌려 주세요. UI 문구는 `main.js` 맨 위의 `en`·`ko` 표에 있으므로 문구를 추가할 때는 두 언어를 모두 넣어 주세요. 이슈와 풀 리퀘스트는 [GitHub](https://github.com/moonweave/obsidian-graph-styler)에서 받습니다.
 

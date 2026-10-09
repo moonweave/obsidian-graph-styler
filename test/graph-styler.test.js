@@ -1151,13 +1151,43 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
   assert.ok(neonCss.includes('.view-content > canvas'));
   assert.ok(!neonCss.includes('graph-view-content'));
   // 0.1.9 put the glow only on the input overlay canvas; its enabled snippet is rewritten on load as well.
-  const snippet019 = neonCss.split('\n').filter((line) => !line.includes('> iframe')).join('\n');
+  const snippet019 = neonCss.split('\n').filter((line) => !line.includes('iframe') && !line.includes('pointer-events')).join('\n');
   const from019 = await loadPlugin({
     data: { custom: [], resumeSnippet: 'neon' },
     snippets: { neon: 1 },
     files: { '.obsidian/snippets/graph-styler-neon.css': snippet019 },
   });
   assert.strictEqual(from019.files['.obsidian/snippets/graph-styler-neon.css'], neonCss);
+  // 0.2.0–0.3.0 filtered the iframe without letting input through, which stopped wheel zoom and drag;
+  // their enabled snippet is rewritten on load so updating fixes zoom without reapplying.
+  const snippet030 = neonCss.split('\n').filter((line) => !line.includes('~ iframe')).join('\n');
+  assert.notStrictEqual(snippet030, neonCss);
+  const from030 = await loadPlugin({
+    data: { custom: [], resumeSnippet: 'neon' },
+    snippets: { neon: 1 },
+    files: { '.obsidian/snippets/graph-styler-neon.css': snippet030 },
+  });
+  assert.strictEqual(from030.files['.obsidian/snippets/graph-styler-neon.css'], neonCss);
+  // Generated snippets that are switched off are refreshed too, so turning one on later (in Graph Styler or
+  // in Obsidian's CSS snippet settings) never brings the 0.2.0–0.3.0 CSS back. Hand-made files are left alone.
+  const offSnippet030 = snippet030.replace('graph-styler :: neon', 'graph-styler :: aurora');
+  const allRefreshed = await loadPlugin({
+    data: { custom: [], resumeSnippet: 'neon' },
+    snippets: { neon: 1 },
+    files: {
+      '.obsidian/snippets/graph-styler-neon.css': snippet030,
+      '.obsidian/snippets/graph-styler-aurora.css': offSnippet030,
+      '.obsidian/snippets/graph-styler-mine.css': '/* graph-styler :: mine (auto-generated) */ hand',
+      '.obsidian/snippets/graph-styler-sunset.css': '/* tweaked by me */ .x {}',
+    },
+  });
+  const auroraNow = allRefreshed.files['.obsidian/snippets/graph-styler-aurora.css'];
+  assert.ok(auroraNow.startsWith('/* graph-styler :: aurora (auto-generated) */'));
+  assert.ok(auroraNow.includes('> canvas ~ iframe') && auroraNow.includes('pointer-events: none'));
+  assert.deepStrictEqual(allRefreshed.enabled, ['graph-styler-neon']);
+  assert.strictEqual(allRefreshed.files['.obsidian/snippets/graph-styler-neon.css'], neonCss);
+  assert.strictEqual(allRefreshed.files['.obsidian/snippets/graph-styler-mine.css'], '/* graph-styler :: mine (auto-generated) */ hand');
+  assert.strictEqual(allRefreshed.files['.obsidian/snippets/graph-styler-sunset.css'], '/* tweaked by me */ .x {}');
   // Hand-edited files (no generated header) are left alone; CRLF-only differences are not rewritten.
   const handEdited = await loadPlugin({
     data: { custom: [], resumeSnippet: 'neon' },
@@ -1226,6 +1256,34 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
   }
   assert.ok(!glowCss.includes('graph-view-content'));
   assert.ok(darkSelectors.includes('.graph-view.color-text'));
+  // A filter makes the iframe a stacking context painted above Obsidian's input overlay canvas, so the
+  // filtered iframe must let pointer input through to the overlay (wheel zoom, pinch, drag), in both
+  // graph types and both themes. It only does so while the overlay canvas is there.
+  const blocks = glowCss.split('}').filter((block) => block.includes('{')).map((block) => {
+    const [head, body] = block.split('{');
+    return { selectors: head.split(',').map((x) => x.trim()), body: body.trim() };
+  });
+  // General rule: every element inside the graph pane that gets a filter, other than Obsidian's input overlay
+  // canvas itself, must pass pointer input through while the overlay is there; the overlay never does.
+  for (const block of blocks.filter((b) => /filter:/.test(b.body))) {
+    for (const selector of block.selectors) {
+      const m = selector.match(/^(.*\.view-content) > (\S+)$/);
+      if (!m || m[2] === 'canvas') continue;
+      assert.ok(blocks.some((b) => b.selectors.includes(`${m[1]} > canvas ~ ${m[2]}`) && /pointer-events:\s*none/.test(b.body)),
+        `${selector} has a filter but still takes pointer input`);
+    }
+  }
+  assert.ok(!blocks.some((b) => /pointer-events/.test(b.body) && b.selectors.some((x) => /> canvas$/.test(x))),
+    'the input overlay canvas must keep pointer input');
+  for (const theme of ['.theme-dark', '.theme-light']) {
+    for (const type of ['graph', 'localgraph']) {
+      const pane = `${theme} .workspace-leaf-content[data-type="${type}"] .view-content`;
+      assert.ok(blocks.some((b) => b.selectors.includes(`${pane} > iframe`) && /filter:/.test(b.body)));
+      assert.ok(blocks.some((b) => b.selectors.includes(`${pane} > canvas ~ iframe`) && /pointer-events:\s*none/.test(b.body)),
+        `${pane}: filtered iframe still takes pointer input`);
+      assert.ok(!blocks.some((b) => b.selectors.includes(`${pane} > iframe`) && /pointer-events/.test(b.body)));
+    }
+  }
 
   // Applying a custom preset reopens the graph leaf; the core plugin must already hold the new
   // groups and forces, or it writes the previous preset back over them.

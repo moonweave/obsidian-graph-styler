@@ -191,6 +191,9 @@ function graphPane(suffix) {
 // 글로우 filter는 그래프를 실제로 그리는 iframe에 건다. 1.11.7·1.14.4에서 .view-content의 canvas는
 // 입력만 받는 투명 오버레이라 filter가 화면을 바꾸지 않는다(그 앞 버전이 canvas에 직접 그렸는지는
 // 확인하지 못해 선택자는 남겨 둔다).
+// filter가 걸린 요소는 쌓임 맥락이 되어 DOM 순서상 앞의 오버레이 canvas(absolute) 위로 올라온다.
+// 그러면 휠·드래그가 모두 iframe으로 가서 확대·이동이 멈췄다(0.2.0–0.3.0). 오버레이가 있을 때만
+// iframe이 입력을 통과시키게 해 filter 전과 같은 곳이 입력을 받게 한다.
 function makeGlowCss(p) {
   return `/* graph-styler :: ${p.id} (auto-generated) */
 ${graphPane('')} {
@@ -205,6 +208,7 @@ ${themed('.graph-view.color-line')} { color: ${p.line}; }
 ${themed('.graph-view.color-text')} { color: ${p.text}; }
 ${graphPane(' > iframe')},
 ${graphPane(' > canvas')} { filter: ${p.filter}; }
+${graphPane(' > canvas ~ iframe')} { pointer-events: none; }
 `;
 }
 
@@ -1467,8 +1471,15 @@ module.exports = class GraphStyler extends Plugin {
         const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
         if (await this.app.vault.adapter.exists(path)) await this.setActiveSnippet(id);
       }
-      const active = await this.enabledSnippetId();
-      if (active) await this.refreshSnippetFile(active);
+      // 켜진 것뿐 아니라 꺼진 생성 스니펫도 고친다 — 나중에 켜거나 Obsidian 설정에서 직접 켜도
+      // 예전 CSS(0.2.0–0.3.0의 확대·클릭 막힘)가 돌아오지 않게.
+      let rewritten = false;
+      for (const snippetId of await this.snippetIds()) {
+        if (await this.refreshSnippetFile(snippetId)) rewritten = true;
+      }
+      const customCss = this.app.customCss;
+      if (rewritten && customCss && typeof customCss.requestLoadSnippets === 'function') customCss.requestLoadSnippets();
+      else if (rewritten && customCss && typeof customCss.readSnippets === 'function') await customCss.readSnippets();
     } catch (e) {
       console.warn('[graph-styler] snippet restore skipped', e);
     }
@@ -1491,23 +1502,22 @@ module.exports = class GraphStyler extends Plugin {
   }
 
   // 이전 버전이 만든 스니펫 파일은 적용할 때의 CSS를 그대로 담고 있다. 생성 CSS가 바뀌었으면
-  // (0.1.9: 존재하지 않는 .graph-view-content 선택자 교체) 다시 적용하지 않아도 새 CSS를 쓴다.
+  // (0.1.9: 존재하지 않는 .graph-view-content 선택자 교체, 0.3.1: iframe 입력 통과) 다시 적용하지
+  // 않아도 새 CSS를 쓴다. 다시 썼으면 true.
   async refreshSnippetFile(id) {
     const preset = Object.values(PRESETS)
       .concat((this.settings.custom || []).map((raw) => presetFromRaw(raw)))
       .find((candidate) => candidate.id === id);
-    if (!preset) return;
+    if (!preset) return false;
     const adapter = this.app.vault.adapter;
     const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
     const css = makeGlowCss(preset.palette);
-    if (!(await adapter.exists(path))) return;
+    if (!(await adapter.exists(path))) return false;
     const current = (await adapter.read(path)).replace(/\r\n/g, '\n');
     // 사용자가 손으로 고친 파일(생성 머리말이 없음)은 건드리지 않는다.
-    if (current === css || !current.startsWith(`/* graph-styler :: ${id} (auto-generated) */`)) return;
+    if (current === css || !current.startsWith(`/* graph-styler :: ${id} (auto-generated) */`)) return false;
     await adapter.write(path, css);
-    const customCss = this.app.customCss;
-    if (customCss && typeof customCss.requestLoadSnippets === 'function') customCss.requestLoadSnippets();
-    else if (customCss && typeof customCss.readSnippets === 'function') await customCss.readSnippets();
+    return true;
   }
 
   // 0.1.7 이하는 업데이트 때 자기 onunload가 스니펫을 끄고 무엇을 껐는지 남기지 않았다.
