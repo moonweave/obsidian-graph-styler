@@ -1614,6 +1614,11 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
   for (const selector of ['.gs-btn:focus-visible', '.gs-share:focus-visible', '.gs-del:focus-visible']) {
     assert.ok(focusRule.includes(`.graph-styler-panel ${selector}`), selector);
   }
+  // The active theme is marked by more than colour: a frame inside the button, a bold name and a check.
+  for (const selector of ['.gs-btn.is-active {', '.gs-btn.is-active .gs-btn-label {', '.gs-btn.is-active::after {']) {
+    assert.ok(css.includes(`.graph-styler-panel ${selector}`), selector);
+  }
+  assert.ok(focusRule.includes('.graph-styler-panel .gs-group > summary:focus-visible'));
 
   // Full-view presets (opt-in): filters and display ride along, are sanitised, and Restore returns everything.
   const fullView = { search: 'tag:#paper', showTags: true, showAttachments: false, hideUnresolved: true, showOrphans: false, showArrow: true };

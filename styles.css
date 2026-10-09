@@ -17,6 +17,7 @@
 }
 
 .graph-styler-panel .gs-btn {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -26,9 +27,33 @@
   cursor: pointer;
 }
 
+/* Active theme: accent frame inside the button, a tint, a bold name and a check — none of it relies on colour alone.
+   The keyboard focus ring below stays outside the button with a gap, so the two read differently. */
 .graph-styler-panel .gs-btn.is-active {
-  border-color: var(--interactive-accent);
-  box-shadow: inset 3px 0 0 var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 18%, var(--interactive-normal));
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
+.graph-styler-panel .gs-btn.is-active .gs-btn-label {
+  font-weight: 600;
+}
+
+.graph-styler-panel .gs-btn.is-active::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  width: 5px;
+  height: 10px;
+  margin-top: -8px;
+  border-right: 2px solid var(--interactive-accent);
+  border-bottom: 2px solid var(--interactive-accent);
+  transform: rotate(45deg);
+}
+
+/* My presets rows: keep the check clear of the copy and delete buttons */
+.graph-styler-panel .gs-preset-row .gs-btn.is-active::after {
+  right: 72px;
 }
 
 .graph-styler-panel .gs-btn:focus-visible,
