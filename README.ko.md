@@ -4,8 +4,8 @@ Graph Styler는 Obsidian 그래프 뷰의 색과 글로우를 프리셋 하나�
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/hero-vaporwave.jpg" alt="Vaporwave 프리셋을 적용한 Obsidian 그래프 뷰와 Graph Styler 패널" /></td>
-    <td width="50%"><img src="docs/hero-sunset.jpg" alt="같은 vault에 Sunset 프리셋을 적용한 모습" /></td>
+    <td width="66%"><img src="docs/hero-panel-ko.jpg" alt="Vaporwave 프리셋을 적용한 Obsidian 그래프 뷰와 Graph Styler 패널" /></td>
+    <td width="34%"><img src="docs/export-post-ready.png" alt="같은 vault를 전체 그래프 맞추기와 캡션을 넣어 4:5 PNG로 내보낸 이미지" /></td>
   </tr>
 </table>
 
