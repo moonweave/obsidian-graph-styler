@@ -11,6 +11,11 @@
   margin: 12px 0;
 }
 
+.graph-styler-panel .gs-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .graph-styler-panel .gs-btn {
   display: flex;
   align-items: center;
@@ -27,6 +32,7 @@
 }
 
 .graph-styler-panel .gs-btn:focus-visible,
+.graph-styler-panel .gs-group > summary:focus-visible,
 .graph-styler-panel .gs-share:focus-visible,
 .graph-styler-panel .gs-del:focus-visible,
 .graph-styler-panel .gs-restore:focus-visible,
@@ -38,6 +44,24 @@
 
 .graph-styler-panel .gs-btn-label {
   flex: 1;
+}
+
+/* theme grid: swatch above the name so two columns fit a narrow sidebar */
+.graph-styler-panel .gs-grid .gs-btn {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  height: auto;
+  padding: 9px 10px;
+}
+
+.graph-styler-panel .gs-grid .gs-btn-label {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .graph-styler-panel .gs-swatch {
@@ -108,29 +132,111 @@
   opacity: 0.72;
 }
 
+.graph-styler-panel .gs-footer {
+  margin-top: 18px;
+  text-align: center;
+}
+
+/* Restore is a quiet text button: it acts on the whole vault but is rarely wanted */
 .graph-styler-panel .gs-restore {
-  width: 100%;
-  margin-top: 6px;
+  height: auto;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.graph-styler-panel .gs-restore:hover {
+  color: var(--text-normal);
+  background: transparent;
 }
 
 .graph-styler-panel .gs-restore-note {
-  margin-top: 6px;
+  margin: 2px 2px 0;
 }
 
-.graph-styler-panel .gs-custom {
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--background-modifier-border);
+/* collapsible groups: Customize, Share code, Export image (and nested "More options") */
+.graph-styler-panel .gs-group {
+  margin-top: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m, 6px);
 }
 
-.graph-styler-panel .gs-custom .gs-note {
-  margin: 8px 0 12px;
-}
-
-.graph-styler-panel .gs-custom summary {
-  padding: 4px 0;
+.graph-styler-panel .gs-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: inherit;
+  font-size: 14px;
   font-weight: 600;
+  list-style: none;
   cursor: pointer;
+}
+
+.graph-styler-panel .gs-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.graph-styler-panel .gs-group > summary::after {
+  content: "";
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin: -3px 3px 0 0;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  opacity: 0.55;
+  transform: rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.graph-styler-panel .gs-group[open] > summary::after {
+  margin-top: 3px;
+  transform: rotate(-135deg);
+}
+
+.graph-styler-panel .gs-group > summary:hover {
+  background: var(--background-modifier-hover);
+}
+
+.graph-styler-panel .gs-group-body {
+  padding: 0 12px 10px;
+}
+
+.graph-styler-panel .gs-group-body .gs-note {
+  margin-right: 0;
+  margin-left: 0;
+}
+
+.graph-styler-panel .gs-group-body > .gs-note:first-child {
+  margin-top: 0;
+}
+
+.graph-styler-panel .gs-sub {
+  margin-top: 4px;
+  border-width: 1px 0 0;
+  border-radius: 0;
+}
+
+.graph-styler-panel .gs-sub > summary {
+  padding: 8px 0;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.graph-styler-panel .gs-sub > summary:hover {
+  background: transparent;
+}
+
+.graph-styler-panel .gs-sub > .gs-group-body {
+  padding: 0 0 4px;
 }
 
 .graph-styler-panel .gs-row {
@@ -151,8 +257,7 @@
   opacity: 0.8;
 }
 
-.graph-styler-panel .gs-row input[type="range"],
-.graph-styler-panel .gs-export {
+.graph-styler-panel .gs-row input[type="range"] {
   flex: 1;
 }
 
@@ -166,7 +271,7 @@
 
 .graph-styler-panel .gs-caption-items {
   display: flex;
-  flex: 1;
+  flex: 1 1 auto;
   flex-wrap: wrap;
   gap: 4px 12px;
 }
@@ -176,7 +281,8 @@
   margin: -4px 2px 10px;
 }
 
-.graph-styler-panel .gs-folder-row {
+.graph-styler-panel .gs-folder-row,
+.graph-styler-panel .gs-caption-row {
   flex-wrap: wrap;
 }
 
@@ -185,8 +291,14 @@
   min-width: 0;
 }
 
+/* the two buttons share the row; in a narrow sidebar the second drops below instead of overflowing */
+.graph-styler-panel .gs-export-actions {
+  flex-wrap: wrap;
+}
+
+.graph-styler-panel .gs-export-actions .gs-export,
 .graph-styler-panel .gs-export-actions .gs-copy-image {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
 }
 
 .graph-styler-panel .gs-last-export {
@@ -224,11 +336,6 @@
 .graph-styler-panel .gs-import {
   width: 100%;
   margin-top: 4px;
-}
-
-/* keep the share controls apart from Restore, which acts on the whole vault */
-.graph-styler-panel .gs-import {
-  margin-bottom: 12px;
 }
 
 /* credit — small, elegant italic serif, bottom of the panel */
