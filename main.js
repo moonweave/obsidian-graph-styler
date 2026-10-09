@@ -1498,7 +1498,7 @@ uniform vec2 uView, uFog;
 uniform float uPx, uScale, uMinPx, uHover;
 out vec2 vUv;
 out vec3 vCol;
-out float vMix, vPx;
+out float vMix, vPx, vHi;
 void main() {
   vec4 c = uMvp * vec4(aPos, 1.0);
   if (c.w <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
@@ -1506,15 +1506,16 @@ void main() {
   vPx = px;
   vUv = aCorner;
   vCol = aCol;
+  vHi = aHi;
   float fog = smoothstep(uFog.x, uFog.y, c.w) * 0.4;
-  vMix = max(fog, uHover * (1.0 - aHi) * 0.85);
+  vMix = max(fog, uHover * (1.0 - aHi) * 0.7);
   gl_Position = c + vec4(aCorner * px * uScale / uView * 2.0 * c.w, 0.0, 0.0);
 }`,
   halo: `#version 300 es
 precision mediump float;
 in vec2 vUv;
 in vec3 vCol;
-in float vMix, vPx;
+in float vMix, vPx, vHi;
 uniform float uGain, uLight;
 out vec4 o;
 void main() {
@@ -1527,11 +1528,12 @@ void main() {
 precision mediump float;
 in vec2 vUv;
 in vec3 vCol;
-in float vMix, vPx;
+in float vMix, vPx, vHi;
 uniform vec3 uFogColor;
-uniform float uSheen;
+uniform float uSheen, uOnlyHi;
 out vec4 o;
 void main() {
+  if (uOnlyHi > 0.5 && vHi < 0.5) discard;
   float d = length(vUv);
   float a = 1.0 - smoothstep(1.0 - 1.5 / max(vPx, 1.0), 1.0, d);
   if (a <= 0.01) discard;
@@ -2115,7 +2117,14 @@ class Graph3DView extends ItemView {
         gl.uniform1f(P.u.uScale, 1);
         gl.uniform3fv(P.u.uFogColor, st.bg[1]);
         gl.uniform1f(P.u.uSheen, light ? 0 : 0.15);
+        gl.uniform1f(P.u.uOnlyHi, 0);
       }
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
+    }
+    // 호버 중에는 강조된 노드를 한 번 더, 깊이 검사 없이 위에 그린다. 앞을 지나는 흐린 노드가 가려 반달처럼 먹히지 않게.
+    if (hovering) {
+      gl.disable(gl.DEPTH_TEST);
+      gl.uniform1f(this.prog.core.u.uOnlyHi, 1);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
     }
     gl.bindVertexArray(null);
