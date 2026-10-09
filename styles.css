@@ -171,6 +171,36 @@
   gap: 4px 12px;
 }
 
+/* export: one short line under each option, then the buttons, then where the last image went */
+.graph-styler-panel .gs-export-hint {
+  margin: -4px 2px 10px;
+}
+
+.graph-styler-panel .gs-folder-row {
+  flex-wrap: wrap;
+}
+
+.graph-styler-panel .gs-folder {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.graph-styler-panel .gs-export-actions .gs-copy-image {
+  flex: 0 0 auto;
+}
+
+.graph-styler-panel .gs-last-export {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  opacity: 0.9;
+}
+
+.gs-notice-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
 .graph-styler-panel .gs-colors {
   display: inline-flex;
   gap: 4px;

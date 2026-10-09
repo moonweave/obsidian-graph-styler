@@ -5,7 +5,7 @@
  */
 'use strict';
 
-const { Plugin, ItemView, Notice } = require('obsidian');
+const { Plugin, ItemView, Notice, Platform } = require('obsidian');
 
 const AUTHOR = 'Moonweave';
 const AUTHOR_URL = 'https://github.com/moonweave';
@@ -42,10 +42,25 @@ const STRINGS = {
     restored: '↩︎ Restored to original',
     noBackup: 'No backup found',
     by: 'made by ',
-    exportTitle: 'Export',
+    exportTitle: 'Export as image',
+    exportOnlyNote: 'These options only change the saved picture, not your graph.',
     exportCmd: 'Export graph as PNG',
-    exportScaleNote: 'Scale is relative to the graph as it is drawn on your screen.',
+    exportScale: 'Scale',
+    exportScaleNote: 'Image size, as a multiple of the graph on your screen. 2x suits an Instagram post.',
     exported: (path, w, h) => `🖼️ Saved ${path} (${w}×${h})`,
+    exportFitNote: 'Frames every note in the image, even if you are zoomed in. Your view is not changed.',
+    exportAspectNote: 'Original keeps the current shape. 1:1 and 4:5 add background around the graph so it fits a post. Notes are never cropped.',
+    exportCaptionNote: 'Adds a small line at the bottom of the image: the date, how many notes, and/or the preset name.',
+    exportFolder: 'Save exported images to',
+    exportFolderNote: 'A folder in this vault, created when needed. Leave it empty to save at the top of the vault.',
+    exportOpenAfter: 'Open the image after exporting',
+    exportCopy: 'Copy image',
+    exportCopyUnsupported: 'This version of Obsidian cannot put images on the clipboard',
+    copiedImage: (w, h) => `📋 Image copied (${w}×${h}) — paste it anywhere`,
+    copyImageFailed: 'Could not copy the image — open the console (Cmd+Opt+I) to see why',
+    noticeOpen: 'Open',
+    noticeReveal: (mac) => (mac ? 'Show in Finder' : 'Show in folder'),
+    lastExport: 'Last export:',
     exportLowRes: 'High-resolution export unavailable — saved at screen resolution',
     exportCapped: (req, k) => `${req}x is too large for this graph view — saved at ${k}x`,
     exportFailed: 'PNG export failed — open the console (Cmd+Opt+I) to see why',
@@ -97,10 +112,25 @@ const STRINGS = {
     restored: '↩︎ 원래대로 복구함',
     noBackup: '백업이 없어요',
     by: 'made by ',
-    exportTitle: '내보내기',
+    exportTitle: '이미지로 내보내기',
+    exportOnlyNote: '아래 옵션은 저장되는 그림에만 적용되고, 그래프 자체는 바뀌지 않습니다.',
     exportCmd: '그래프를 PNG로 내보내기',
-    exportScaleNote: '배율은 지금 화면에 그려진 그래프 크기 기준입니다.',
+    exportScale: '배율',
+    exportScaleNote: '화면에 보이는 그래프의 몇 배 크기로 저장할지 정합니다. 인스타그램 게시물에는 2x면 충분합니다.',
     exported: (path, w, h) => `🖼️ ${path} 저장됨 (${w}×${h})`,
+    exportFitNote: '확대해서 보고 있어도 모든 노트가 그림에 들어가게 맞춥니다. 보고 있는 화면은 그대로입니다.',
+    exportAspectNote: '원래 비율은 지금 모양 그대로입니다. 1:1과 4:5는 게시물 비율에 맞게 그래프 둘레에 배경을 덧댑니다. 노트는 잘리지 않습니다.',
+    exportCaptionNote: '그림 아래에 날짜, 노트 수, 프리셋 이름 중 고른 것을 작은 글씨로 넣습니다.',
+    exportFolder: '이미지 저장 폴더',
+    exportFolderNote: '이 vault 안의 폴더이고, 없으면 새로 만듭니다. 비워 두면 vault 맨 위에 저장합니다.',
+    exportOpenAfter: '내보낸 뒤 이미지 열기',
+    exportCopy: '이미지 복사',
+    exportCopyUnsupported: '이 Obsidian 버전에서는 이미지를 클립보드에 복사할 수 없습니다',
+    copiedImage: (w, h) => `📋 이미지 복사됨 (${w}×${h}) — 원하는 곳에 붙여넣으세요`,
+    copyImageFailed: '이미지를 복사하지 못했어요 — 콘솔(Cmd+Opt+I)에서 원인 확인',
+    noticeOpen: '열기',
+    noticeReveal: (mac) => (mac ? 'Finder에서 보기' : '폴더에서 보기'),
+    lastExport: '마지막으로 내보낸 이미지:',
     exportLowRes: '고해상도 불가, 화면 해상도로 저장',
     exportCapped: (req, k) => `${req}x는 이 그래프 화면에 너무 커서 ${k}x로 저장`,
     exportFailed: 'PNG 내보내기 실패 — 콘솔(Cmd+Opt+I)에서 원인 확인',
@@ -535,6 +565,16 @@ function exportNoteName(name) {
     .slice(0, 60).replace(/^[-.]+|[-.]+$/g, '');
 }
 
+// 내보낸 이미지 폴더. 노트 사이에 섞여 잃어버리지 않게 기본은 전용 폴더이고, 비우면 vault 맨 위다.
+// 슬래시를 정리하고 '.'·'..' 조각은 버려 vault 밖으로 나가지 않게 한다.
+const DEFAULT_EXPORT_FOLDER = 'Graph Styler exports';
+
+function exportFolderPath(folder) {
+  if (typeof folder !== 'string') return DEFAULT_EXPORT_FOLDER;
+  return folder.replace(/\\/g, '/').split('/').map((part) => part.trim())
+    .filter((part) => part && part !== '.' && part !== '..').join('/');
+}
+
 function exportFileName(presetId, date, existing, noteName) {
   const pad = (n) => String(n).padStart(2, '0');
   const stamp = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
@@ -775,6 +815,10 @@ function drawHubLabels(ctx, r, offsetX, offsetY, k, size, color, font, halo) {
   return placed.length;
 }
 
+function canCopyImages() {
+  return typeof ClipboardItem === 'function' && !!navigator.clipboard && typeof navigator.clipboard.write === 'function';
+}
+
 class StylerView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -938,16 +982,20 @@ class StylerView extends ItemView {
     return input;
   }
 
+  // 처음 쓰는 사람이 '이 체크박스가 그래프를 바꾸나?', '어디에 저장됐지?'를 패널만 보고 알 수 있게
+  // 옵션마다 한 줄 설명을 붙이고, 고른 뒤 누르는 순서(옵션 → 버튼 → 마지막 결과)로 놓는다.
   buildExport(c) {
     c.createEl('div', { cls: 'gs-section', text: L.exportTitle });
-    const row = c.createDiv({ cls: 'gs-row' });
-    const scaleEl = row.createEl('select', { cls: 'dropdown' });
+    c.createEl('p', { text: L.exportOnlyNote, cls: 'gs-note' });
+    const hint = (text) => c.createEl('p', { text, cls: 'gs-note gs-export-hint' });
+
+    const scaleRow = c.createDiv({ cls: 'gs-row' });
+    scaleRow.createSpan({ cls: 'gs-row-label', text: L.exportScale });
+    const scaleEl = scaleRow.createEl('select', { cls: 'dropdown' });
     for (const k of EXPORT_SCALES) scaleEl.createEl('option', { value: String(k), text: `${k}x` });
     scaleEl.value = String(this.plugin.exportScale);
     scaleEl.onchange = () => this.plugin.setExportScale(Number(scaleEl.value));
-    const exportBtn = row.createEl('button', { cls: 'gs-export', text: L.exportCmd });
-    exportBtn.onclick = () => this.plugin.exportPng(this.plugin.exportScale);
-    c.createEl('p', { text: L.exportScaleNote, cls: 'gs-note' });
+    hint(L.exportScaleNote);
 
     const options = this.plugin.exportOptions;
     const fitRow = c.createEl('label', { cls: 'gs-row gs-export-check' });
@@ -956,6 +1004,7 @@ class StylerView extends ItemView {
     fitBox.checked = options.fit;
     fitBox.onchange = () => this.plugin.setExportOptions({ fit: fitBox.checked });
     fitRow.createSpan({ text: L.exportFit });
+    hint(L.exportFitNote);
 
     const aspectRow = c.createDiv({ cls: 'gs-row' });
     aspectRow.createSpan({ cls: 'gs-row-label', text: L.exportAspect });
@@ -965,6 +1014,7 @@ class StylerView extends ItemView {
     }
     aspectEl.value = options.aspect;
     aspectEl.onchange = () => this.plugin.setExportOptions({ aspect: aspectEl.value });
+    hint(L.exportAspectNote);
 
     const captionRow = c.createDiv({ cls: 'gs-row' });
     captionRow.createSpan({ cls: 'gs-row-label', text: L.exportCaption });
@@ -976,6 +1026,41 @@ class StylerView extends ItemView {
       box.checked = options.caption[key];
       box.onchange = () => this.plugin.setExportOptions({ caption: Object.assign({}, this.plugin.exportOptions.caption, { [key]: box.checked }) });
       item.createSpan({ text });
+    }
+    hint(L.exportCaptionNote);
+
+    const folderRow = c.createDiv({ cls: 'gs-row gs-folder-row' });
+    folderRow.createSpan({ cls: 'gs-row-label', text: L.exportFolder });
+    const folderEl = folderRow.createEl('input', { cls: 'gs-folder' });
+    folderEl.type = 'text';
+    folderEl.placeholder = DEFAULT_EXPORT_FOLDER;
+    folderEl.value = this.plugin.exportFolder;
+    folderEl.onchange = () => this.plugin.setExportFolder(folderEl.value);
+    hint(L.exportFolderNote);
+
+    const openRow = c.createEl('label', { cls: 'gs-row gs-export-check' });
+    const openBox = openRow.createEl('input');
+    openBox.type = 'checkbox';
+    openBox.checked = this.plugin.openAfterExport;
+    openBox.onchange = () => this.plugin.setOpenAfterExport(openBox.checked);
+    openRow.createSpan({ text: L.exportOpenAfter });
+
+    const actions = c.createDiv({ cls: 'gs-row gs-export-actions' });
+    const exportBtn = actions.createEl('button', { cls: 'gs-export mod-cta', text: L.exportCmd });
+    exportBtn.onclick = () => this.plugin.exportPng(this.plugin.exportScale);
+    const copyBtn = actions.createEl('button', { cls: 'gs-copy-image', text: L.exportCopy });
+    if (canCopyImages()) copyBtn.onclick = () => this.plugin.copyPng(this.plugin.exportScale);
+    else {
+      copyBtn.disabled = true;
+      copyBtn.setAttr('title', L.exportCopyUnsupported);
+    }
+
+    const last = this.plugin.lastExportFile();
+    if (last) {
+      const lastRow = c.createEl('p', { cls: 'gs-note gs-last-export' });
+      lastRow.createSpan({ text: `${L.lastExport} ` });
+      const link = lastRow.createEl('a', { text: last.path, href: '#' });
+      link.onclick = (ev) => { ev.preventDefault(); this.plugin.openExport(last); };
     }
   }
 
@@ -1015,6 +1100,7 @@ module.exports = class GraphStyler extends Plugin {
   static exportScaleLimit = exportScaleLimit;
   static exportFileName = exportFileName;
   static exportNoteName = exportNoteName;
+  static exportFolderPath = exportFolderPath;
   static exportLayout = exportLayout;
   static fitView = fitView;
   static drawHubLabels = drawHubLabels;
@@ -1044,6 +1130,8 @@ module.exports = class GraphStyler extends Plugin {
     // 2x면 인스타그램 1080px에 충분하고, 3x는 vault에 20MB 안팎을 쓴다. 마지막으로 고른 배율을 기억한다.
     this.exportScale = EXPORT_SCALES.includes(this.settings.exportScale) ? this.settings.exportScale : 2;
     this.exportOptions = sanitizeExportOptions(this.settings.exportOptions);
+    this.exportFolder = exportFolderPath(this.settings.exportFolder);
+    this.openAfterExport = this.settings.openAfterExport !== false;
     this.currentPreset = null;
 
     // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
@@ -1143,106 +1231,190 @@ module.exports = class GraphStyler extends Plugin {
     return candidates.reduce((best, leaf) => (best === null || time(leaf) > time(best) ? leaf : best), null);
   }
 
-  async exportPng(requestedScale) {
+  // 그래프를 PNG로 그려 { blob, width, height, leaf }를 돌려준다. 그래프가 없으면 null.
+  async renderPng(requestedScale) {
     const leaf = this.exportTarget();
     const renderer = leaf && leaf.view.renderer;
     if (!renderer) {
       new Notice(L.exportOpenGraph);
-      return;
+      return null;
     }
-    try {
-      const palette = await this.activePalette();
-      const base = this.graphBaseColor(leaf.view.contentEl);
-      const filter = this.graphFilter(leaf.view.contentEl, renderer);
-      const options = this.exportOptions || sanitizeExportOptions(null);
-      const plain = isPlainExport(options);
-      const highRes = canRenderHighRes(renderer);
-      const fit = options.fit && highRes;
-      let canvas = null;
-      let layout = null;
-      let caption = '';
-      if (!plain) {
-        caption = captionText(options, {
-          preset: palette ? this.presetLabel(palette.id) : '',
-          notes: (renderer.nodes || []).filter((node) => node && typeof node.id === 'string' && node.id.endsWith('.md')).length,
-          date: new Date(),
-        });
-        const R = renderer.px && renderer.px.renderer;
-        const size = R ? [R.width, R.height] : null;
-        layout = exportLayout(size ? size[0] : 0, size ? size[1] : 0, Object.assign({}, options, { fit }), !!caption);
-      }
-      const paint = (source) => {
-        canvas = document.createElement('canvas');
-        if (plain) {
-          canvas.width = source.width;
-          canvas.height = source.height;
-          const ctx = canvas.getContext('2d');
-          paintGraphBackground(ctx, canvas.width, canvas.height, base, palette);
-          ctx.filter = filter;
-          ctx.drawImage(source, 0, 0);
-          ctx.filter = 'none';
-          return;
-        }
-        // 저해상도 대체 경로에서도 같은 배치를 쓰도록 실제 그림 크기에서 배율을 다시 잰다.
-        const graphW = layout.graphW || source.width;
-        const kk = source.width / graphW;
-        const L2 = layout.graphW ? layout : exportLayout(source.width, source.height, options, !!caption);
-        canvas.width = Math.round(L2.canvasW * kk);
-        canvas.height = Math.round(L2.canvasH * kk);
+    const palette = await this.activePalette();
+    const base = this.graphBaseColor(leaf.view.contentEl);
+    const filter = this.graphFilter(leaf.view.contentEl, renderer);
+    const options = this.exportOptions || sanitizeExportOptions(null);
+    const plain = isPlainExport(options);
+    const highRes = canRenderHighRes(renderer);
+    const fit = options.fit && highRes;
+    let canvas = null;
+    let layout = null;
+    let caption = '';
+    if (!plain) {
+      caption = captionText(options, {
+        preset: palette ? this.presetLabel(palette.id) : '',
+        notes: (renderer.nodes || []).filter((node) => node && typeof node.id === 'string' && node.id.endsWith('.md')).length,
+        date: new Date(),
+      });
+      const R = renderer.px && renderer.px.renderer;
+      const size = R ? [R.width, R.height] : null;
+      layout = exportLayout(size ? size[0] : 0, size ? size[1] : 0, Object.assign({}, options, { fit }), !!caption);
+    }
+    const paint = (source) => {
+      canvas = document.createElement('canvas');
+      if (plain) {
+        canvas.width = source.width;
+        canvas.height = source.height;
         const ctx = canvas.getContext('2d');
         paintGraphBackground(ctx, canvas.width, canvas.height, base, palette);
-        const gx = Math.round(L2.graphX * kk);
-        const gy = Math.round(L2.graphY * kk);
         ctx.filter = filter;
-        ctx.drawImage(source, gx, gy);
+        ctx.drawImage(source, 0, 0);
         ctx.filter = 'none';
-        const textColor = palette ? palette.text : this.graphTextColor(renderer);
-        const font = this.exportFont();
-        if (fit && renderer.textAlpha < 0.3) {
-          drawHubLabels(ctx, renderer, gx, gy, kk, Math.round(canvas.width * 0.017), hexA(textColor, 0.92), font,
-            palette ? palette.bg2 : base);
-        }
-        if (caption) {
-          const band = L2.band * kk;
-          const size = Math.round(band * 0.34);
-          ctx.font = `400 ${size}px ${font}`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          if ('letterSpacing' in ctx) ctx.letterSpacing = `${Math.round(size * 0.06)}px`;
-          ctx.fillStyle = hexA(textColor, 0.7);
-          ctx.fillText(caption, canvas.width / 2, canvas.height - band * 0.55);
-        }
-      };
-      if (highRes) {
-        const R = renderer.px.renderer;
-        const gl = R.gl;
-        const maxTexture = gl && typeof gl.getParameter === 'function' ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : undefined;
-        const frame = fit ? { width: layout.graphW, height: layout.graphH } : undefined;
-        const limitW = frame ? frame.width : R.width;
-        const limitH = frame ? frame.height : R.height;
-        const used = renderGraphAt(renderer, exportScaleLimit(maxTexture, limitW, limitH, requestedScale), paint, frame);
-        if (used < requestedScale) new Notice(L.exportCapped(requestedScale, used));
-      } else if (typeof renderer.getTransparentScreenshot === 'function') {
-        paint(renderer.getTransparentScreenshot());
-        new Notice(L.exportLowRes);
-      } else if (typeof renderer.getBackgroundScreenshot === 'function') {
-        paint(renderer.getBackgroundScreenshot());
-        new Notice(L.exportLowRes);
-      } else {
-        throw new Error('graph renderer exposes no screenshot API');
+        return;
       }
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
-      if (!blob) throw new Error('canvas.toBlob returned no image');
+      // 저해상도 대체 경로에서도 같은 배치를 쓰도록 실제 그림 크기에서 배율을 다시 잰다.
+      const graphW = layout.graphW || source.width;
+      const kk = source.width / graphW;
+      const L2 = layout.graphW ? layout : exportLayout(source.width, source.height, options, !!caption);
+      canvas.width = Math.round(L2.canvasW * kk);
+      canvas.height = Math.round(L2.canvasH * kk);
+      const ctx = canvas.getContext('2d');
+      paintGraphBackground(ctx, canvas.width, canvas.height, base, palette);
+      const gx = Math.round(L2.graphX * kk);
+      const gy = Math.round(L2.graphY * kk);
+      ctx.filter = filter;
+      ctx.drawImage(source, gx, gy);
+      ctx.filter = 'none';
+      const textColor = palette ? palette.text : this.graphTextColor(renderer);
+      const font = this.exportFont();
+      if (fit && renderer.textAlpha < 0.3) {
+        drawHubLabels(ctx, renderer, gx, gy, kk, Math.round(canvas.width * 0.017), hexA(textColor, 0.92), font,
+          palette ? palette.bg2 : base);
+      }
+      if (caption) {
+        const band = L2.band * kk;
+        const size = Math.round(band * 0.34);
+        ctx.font = `400 ${size}px ${font}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        if ('letterSpacing' in ctx) ctx.letterSpacing = `${Math.round(size * 0.06)}px`;
+        ctx.fillStyle = hexA(textColor, 0.7);
+        ctx.fillText(caption, canvas.width / 2, canvas.height - band * 0.55);
+      }
+    };
+    if (highRes) {
+      const R = renderer.px.renderer;
+      const gl = R.gl;
+      const maxTexture = gl && typeof gl.getParameter === 'function' ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : undefined;
+      const frame = fit ? { width: layout.graphW, height: layout.graphH } : undefined;
+      const limitW = frame ? frame.width : R.width;
+      const limitH = frame ? frame.height : R.height;
+      const used = renderGraphAt(renderer, exportScaleLimit(maxTexture, limitW, limitH, requestedScale), paint, frame);
+      if (used < requestedScale) new Notice(L.exportCapped(requestedScale, used));
+    } else if (typeof renderer.getTransparentScreenshot === 'function') {
+      paint(renderer.getTransparentScreenshot());
+      new Notice(L.exportLowRes);
+    } else if (typeof renderer.getBackgroundScreenshot === 'function') {
+      paint(renderer.getBackgroundScreenshot());
+      new Notice(L.exportLowRes);
+    } else {
+      throw new Error('graph renderer exposes no screenshot API');
+    }
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('canvas.toBlob returned no image');
+    return { blob, width: canvas.width, height: canvas.height, leaf };
+  }
+
+  async exportPng(requestedScale) {
+    try {
+      const png = await this.renderPng(requestedScale);
+      if (!png) return;
       const presetId = this.currentPreset ? this.currentPreset.id : await this.enabledSnippetId();
-      const localFile = leaf.view.getViewType && leaf.view.getViewType() === 'localgraph' ? leaf.view.file : null;
-      const name = exportFileName(presetId === LIVE_ID ? null : presetId, new Date(),
-        this.app.vault.getFiles().map((file) => file.path), localFile && localFile.basename);
-      await this.app.vault.createBinary(name, await blob.arrayBuffer());
-      new Notice(L.exported(name, canvas.width, canvas.height));
+      const localFile = png.leaf.view.getViewType && png.leaf.view.getViewType() === 'localgraph' ? png.leaf.view.file : null;
+      const folder = this.exportFolder;
+      await this.ensureFolder(folder);
+      const prefix = folder ? `${folder}/` : '';
+      const taken = this.app.vault.getFiles().map((file) => file.path)
+        .filter((path) => path.startsWith(prefix)).map((path) => path.slice(prefix.length));
+      const name = exportFileName(presetId === LIVE_ID ? null : presetId, new Date(), taken, localFile && localFile.basename);
+      const file = await this.app.vault.createBinary(prefix + name, await png.blob.arrayBuffer());
+      this.settings.lastExport = file.path;
+      await this.saveData(this.settings);
+      this.refreshViews();
+      this.exportedNotice(file, png.width, png.height);
+      if (this.openAfterExport) await this.openExport(file, true);
     } catch (e) {
       console.error('[graph-styler] PNG export failed', e);
       new Notice(L.exportFailed);
     }
+  }
+
+  // 클립보드로 바로 보낸다 — 인스타그램 웹 작성 창, 채팅, 문서에 그대로 붙여넣을 수 있다. 파일은 만들지 않는다.
+  async copyPng(requestedScale) {
+    try {
+      const png = await this.renderPng(requestedScale);
+      if (!png) return;
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png.blob })]);
+      new Notice(L.copiedImage(png.width, png.height));
+    } catch (e) {
+      console.error('[graph-styler] image copy failed', e);
+      new Notice(L.copyImageFailed);
+    }
+  }
+
+  async ensureFolder(folder) {
+    if (!folder) return;
+    let path = '';
+    for (const part of folder.split('/')) {
+      path = path ? `${path}/${part}` : part;
+      if (!this.app.vault.getAbstractFileByPath(path)) await this.app.vault.createFolder(path);
+    }
+  }
+
+  // 알림은 금방 사라지므로 길게(12초) 띄우고, 경로와 함께 '열기'·'Finder에서 보기'를 단다.
+  exportedNotice(file, width, height) {
+    const content = createFragment((frag) => {
+      frag.createDiv({ text: L.exported(file.path, width, height) });
+      const buttons = frag.createDiv({ cls: 'gs-notice-actions' });
+      const open = buttons.createEl('button', { text: L.noticeOpen });
+      open.onclick = () => this.openExport(file);
+      if (typeof this.app.showInFolder === 'function') {
+        const reveal = buttons.createEl('button', { text: L.noticeReveal(Platform.isMacOS) });
+        reveal.onclick = () => this.app.showInFolder(file.path);
+      }
+    });
+    new Notice(content, 12000);
+  }
+
+  // 그래프 옆 분할 창에 연다(새 탭이면 그래프가 가려진다). 같은 창을 다시 쓰고, 파일 탐색기에서도 보여 준다.
+  async openExport(file, reveal) {
+    const workspace = this.app.workspace;
+    let leaf = this._exportLeaf;
+    if (!leaf || !leaf.view || !workspace.getLeavesOfType(leaf.view.getViewType()).includes(leaf)) {
+      leaf = workspace.getLeaf('split', 'vertical');
+      this._exportLeaf = leaf;
+    }
+    await leaf.openFile(file);
+    if (reveal) {
+      const explorer = workspace.getLeavesOfType('file-explorer')[0];
+      if (explorer && explorer.view && typeof explorer.view.revealInFolder === 'function') explorer.view.revealInFolder(file);
+    }
+  }
+
+  lastExportFile() {
+    const path = this.settings.lastExport;
+    return typeof path === 'string' && path ? this.app.vault.getAbstractFileByPath(path) : null;
+  }
+
+  async setExportFolder(folder) {
+    this.exportFolder = exportFolderPath(folder);
+    this.settings.exportFolder = this.exportFolder;
+    await this.saveData(this.settings);
+  }
+
+  async setOpenAfterExport(on) {
+    this.openAfterExport = !!on;
+    this.settings.openAfterExport = this.openAfterExport;
+    await this.saveData(this.settings);
   }
 
   async setExportOptions(change) {

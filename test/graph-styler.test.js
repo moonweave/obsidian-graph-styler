@@ -28,9 +28,22 @@ class Plugin {
 class ItemView {}
 
 const notices = [];
+// Notices built from a fragment (the export notice with its buttons) are recorded by their first line;
+// the fragment itself and the duration are kept for the button checks.
+const noticeLog = [];
 const originalLoad = Module._load;
 Module._load = function load(request, parent, isMain) {
-  if (request === 'obsidian') return { Plugin, ItemView, Notice: class Notice { constructor(message) { notices.push(message); } } };
+  if (request === 'obsidian') {
+    return {
+      Plugin, ItemView, Platform: { isMacOS: true },
+      Notice: class Notice {
+        constructor(message, duration) {
+          notices.push(typeof message === 'string' ? message : message.children[0].text);
+          noticeLog.push({ message, duration });
+        }
+      },
+    };
+  }
   return originalLoad.call(this, request, parent, isMain);
 };
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
@@ -543,6 +556,12 @@ class FakeEl {
   walk() { return [this].concat(...this.children.map((child) => child.walk())); }
 }
 
+global.createFragment = (build) => {
+  const fragment = new FakeEl('fragment');
+  build(fragment);
+  return fragment;
+};
+
 async function presetRow(withActions) {
   const { app } = makeHarness();
   const plugin = new GraphStyler(app);
@@ -659,14 +678,29 @@ function rendererState(r) {
   };
 }
 
-async function exportWith(renderer, { filters = new Map(), iframe = null, options = null, scale = 3 } = {}) {
+async function exportWith(renderer, { filters = new Map(), iframe = null, options = null, scale = 3, folder = '', openAfter = false,
+  existing = [], showInFolder = true } = {}) {
   const { app } = makeHarness();
   const created = [];
   const canvases = [];
-  app.vault.getFiles = () => [];
-  app.vault.createBinary = async (filePath) => { created.push(filePath); };
-  app.workspace.getLeavesOfType = (type) => (type === 'graph' && renderer
-    ? [{ view: { renderer, contentEl: { nodeType: 1, parentElement: null, querySelector: () => iframe } } }] : []);
+  const vaultPaths = new Set(existing);
+  const foldersMade = [];
+  const opened = [];
+  const revealed = [];
+  const shown = [];
+  app.vault.getFiles = () => [...vaultPaths].map((filePath) => ({ path: filePath }));
+  app.vault.getAbstractFileByPath = (filePath) => (vaultPaths.has(filePath) ? { path: filePath } : null);
+  app.vault.createFolder = async (filePath) => { foldersMade.push(filePath); vaultPaths.add(filePath); };
+  app.vault.createBinary = async (filePath) => { created.push(filePath); vaultPaths.add(filePath); return { path: filePath }; };
+  app.workspace.getLeaf = (kind, direction) => ({ view: { getViewType: () => 'image' }, kind, direction,
+    openFile: async (file) => { opened.push([kind, direction, file.path]); } });
+  if (showInFolder) app.showInFolder = (filePath) => { shown.push(filePath); };
+  const explorer = { view: { getViewType: () => 'file-explorer', revealInFolder: (file) => revealed.push(file.path) } };
+  app.workspace.getLeavesOfType = (type) => {
+    if (type === 'file-explorer') return [explorer];
+    return type === 'graph' && renderer
+      ? [{ view: { renderer, contentEl: { nodeType: 1, parentElement: null, querySelector: () => iframe } } }] : [];
+  };
   const originalCreate = global.document.createElement;
   global.document.createElement = () => {
     const canvas = fakeCanvas();
@@ -677,8 +711,11 @@ async function exportWith(renderer, { filters = new Map(), iframe = null, option
   global.document.body = {};
   const plugin = new GraphStyler(app);
   plugin.settings = { custom: [] };
+  plugin.exportFolder = folder;
+  plugin.openAfterExport = openAfter;
   if (options) plugin.exportOptions = GraphStyler.sanitizeExportOptions(options);
   notices.length = 0;
+  noticeLog.length = 0;
   const originalError = console.error;
   console.error = () => {};
   try {
@@ -687,7 +724,7 @@ async function exportWith(renderer, { filters = new Map(), iframe = null, option
     console.error = originalError;
     global.document.createElement = originalCreate;
   }
-  return { created, canvas: canvases[0], notices: notices.slice() };
+  return { created, canvas: canvases[0], notices: notices.slice(), log: noticeLog.slice(), plugin, foldersMade, opened, revealed, shown };
 }
 
 // Which graph leaf the export picks. Each spec: { type, activeTime, hidden, file }.
@@ -711,7 +748,7 @@ async function exportTargetWith(specs, activeIndex) {
   app.workspace.activeLeaf = activeIndex === undefined ? { view: {} } : leaves[activeIndex];
   const created = [];
   app.vault.getFiles = () => [];
-  app.vault.createBinary = async (filePath) => { created.push(filePath); };
+  app.vault.createBinary = async (filePath) => { created.push(filePath); return { path: filePath }; };
   const originalCreate = global.document.createElement;
   global.document.createElement = () => fakeCanvas();
   global.window.getComputedStyle = () => ({ backgroundColor: 'rgb(30, 30, 30)', filter: 'none' });
@@ -1072,6 +1109,131 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     await plugin.setExportOptions({ aspect: '1:1' });
     assert.deepStrictEqual(saved[saved.length - 1].exportOptions,
       { fit: true, aspect: '1:1', caption: { date: true, notes: false, preset: false } });
+  }
+
+  // Exports go to a folder (created on demand, nested parts in order), never escape the vault, collide to -2,
+  // and the result is hard to miss: a 12 s notice with Open / Show in Finder, the image opened beside the
+  // graph and revealed in the file explorer, and the path kept for the panel's "Last export" link.
+  const { exportFolderPath } = GraphStyler;
+  assert.strictEqual(exportFolderPath(undefined), 'Graph Styler exports');
+  assert.strictEqual(exportFolderPath(''), '');
+  assert.strictEqual(exportFolderPath('  Posts / Graphs/ '), 'Posts/Graphs');
+  assert.strictEqual(exportFolderPath('../out/./x'), 'out/x');
+  assert.strictEqual(exportFolderPath('a\\b'), 'a/b');
+  const stampName = GraphStyler.exportFileName(null, new Date(), []);
+  const saved = await exportWith(new FakeGraphRenderer(16384), { scale: 1, folder: 'Graph Styler exports', openAfter: true,
+    existing: [`Graph Styler exports/${stampName}`] });
+  const savedPath = `Graph Styler exports/${stampName.replace(/\.png$/, '-2.png')}`;
+  assert.deepStrictEqual(saved.foldersMade, ['Graph Styler exports']);
+  assert.deepStrictEqual(saved.created, [savedPath]);
+  assert.strictEqual(saved.plugin.settings.lastExport, savedPath);
+  assert.deepStrictEqual(saved.opened, [['split', 'vertical', savedPath]]);
+  assert.deepStrictEqual(saved.revealed, [savedPath]);
+  const exportNotice = saved.log.find((n) => typeof n.message !== 'string');
+  assert.strictEqual(exportNotice.duration, 12000);
+  assert.strictEqual(saved.notices[0], `🖼️ Saved ${savedPath} (200×100)`);
+  const buttons = exportNotice.message.children[1].children;
+  assert.deepStrictEqual(buttons.map((b) => b.text), ['Open', 'Show in Finder']);
+  buttons[1].onclick();
+  assert.deepStrictEqual(saved.shown, [savedPath]);
+  await buttons[0].onclick();
+  assert.strictEqual(saved.opened.length, 2);
+  // Nested folders are created part by part; an existing folder is reused; empty means the vault root.
+  const nested = await exportWith(new FakeGraphRenderer(16384), { scale: 1, folder: 'Posts/Graphs', existing: ['Posts'] });
+  assert.deepStrictEqual(nested.foldersMade, ['Posts/Graphs']);
+  assert.ok(nested.created[0].startsWith('Posts/Graphs/graph-graph-'), nested.created[0]);
+  const atRoot = await exportWith(new FakeGraphRenderer(16384), { scale: 1, folder: '' });
+  assert.deepStrictEqual(atRoot.foldersMade, []);
+  assert.ok(/^graph-graph-\d{8}-\d{4}\.png$/.test(atRoot.created[0]), atRoot.created[0]);
+  // "Open the image after exporting" off: nothing opens; without app.showInFolder the notice only offers Open.
+  const quiet = await exportWith(new FakeGraphRenderer(16384), { scale: 1, folder: 'x', openAfter: false, showInFolder: false });
+  assert.deepStrictEqual(quiet.opened, []);
+  assert.deepStrictEqual(quiet.revealed, []);
+  assert.deepStrictEqual(quiet.log.find((n) => typeof n.message !== 'string').message.children[1].children.map((b) => b.text), ['Open']);
+  // Settings: defaults on load, persisted changes, and a last export that no longer exists is not shown.
+  {
+    const { app } = makeHarness();
+    app.vault.getAbstractFileByPath = (filePath) => (filePath === 'kept.png' ? { path: filePath } : null);
+    const plugin = new GraphStyler(app);
+    const savedSettings = [];
+    plugin.loadData = async () => ({ custom: [], lastExport: 'gone.png' });
+    plugin.saveData = async (settings) => { savedSettings.push(JSON.parse(JSON.stringify(settings))); };
+    await plugin.onload();
+    assert.strictEqual(plugin.exportFolder, 'Graph Styler exports');
+    assert.strictEqual(plugin.openAfterExport, true);
+    assert.strictEqual(plugin.lastExportFile(), null);
+    plugin.settings.lastExport = 'kept.png';
+    assert.deepStrictEqual(plugin.lastExportFile(), { path: 'kept.png' });
+    await plugin.setExportFolder(' My/Exports/ ');
+    await plugin.setOpenAfterExport(false);
+    const last = savedSettings[savedSettings.length - 1];
+    assert.deepStrictEqual([last.exportFolder, last.openAfterExport], ['My/Exports', false]);
+  }
+
+  // Copy image: the same PNG goes to the clipboard as image/png and no file is written.
+  {
+    const written = [];
+    global.ClipboardItem = class ClipboardItem { constructor(items) { this.items = items; } };
+    Object.defineProperty(global, 'navigator', {
+      value: { language: 'en', clipboard: { write: async (items) => { written.push(items); } } }, configurable: true });
+    const { app } = makeHarness();
+    const created = [];
+    app.vault.createBinary = async (filePath) => { created.push(filePath); return { path: filePath }; };
+    const renderer = new FakeGraphRenderer(16384);
+    app.workspace.getLeavesOfType = (type) => (type === 'graph'
+      ? [{ view: { renderer, contentEl: { nodeType: 1, parentElement: null, querySelector: () => null } } }] : []);
+    const originalCreate = global.document.createElement;
+    global.document.createElement = () => fakeCanvas();
+    const plugin = new GraphStyler(app);
+    plugin.settings = { custom: [] };
+    notices.length = 0;
+    try {
+      await plugin.copyPng(1);
+      assert.strictEqual(written.length, 1);
+      assert.deepStrictEqual(Object.keys(written[0][0].items), ['image/png']);
+      assert.deepStrictEqual(created, []);
+      assert.deepStrictEqual(notices, ['📋 Image copied (200×100) — paste it anywhere']);
+      global.navigator.clipboard.write = async () => { throw new Error('denied'); };
+      notices.length = 0;
+      const originalError = console.error;
+      console.error = () => {};
+      await plugin.copyPng(1);
+      console.error = originalError;
+      assert.deepStrictEqual(notices, ['Could not copy the image — open the console (Cmd+Opt+I) to see why']);
+    } finally {
+      global.document.createElement = originalCreate;
+      delete global.ClipboardItem;
+    }
+  }
+
+  // The panel explains every export option in one line, keeps choose → act → result order, links the
+  // last export, and disables Copy image where the clipboard cannot take images.
+  {
+    const { app } = makeHarness();
+    app.vault.getAbstractFileByPath = (filePath) => (filePath === 'Graph Styler exports/g.png' ? { path: filePath } : null);
+    const plugin = new GraphStyler(app);
+    let factory = null;
+    plugin.registerView = (type, make) => { factory = make; };
+    plugin.loadData = async () => ({ custom: [], lastExport: 'Graph Styler exports/g.png' });
+    await plugin.onload();
+    const view = factory({});
+    const panel = new FakeEl('div');
+    view.buildExport(panel);
+    const texts = panel.walk().map((el) => el.text).filter(Boolean);
+    for (const line of ['Export as image', 'These options only change the saved picture, not your graph.',
+      'Image size, as a multiple of the graph on your screen. 2x suits an Instagram post.',
+      'Frames every note in the image, even if you are zoomed in. Your view is not changed.',
+      'Original keeps the current shape. 1:1 and 4:5 add background around the graph so it fits a post. Notes are never cropped.',
+      'Adds a small line at the bottom of the image: the date, how many notes, and/or the preset name.',
+      'Save exported images to', 'Open the image after exporting', 'Export graph as PNG', 'Copy image',
+      'Last export: ', 'Graph Styler exports/g.png']) {
+      assert.ok(texts.includes(line), `missing panel text: ${line}`);
+    }
+    assert.ok(texts.indexOf('Copy image') > texts.indexOf('Open the image after exporting'));
+    assert.ok(texts.indexOf('Graph Styler exports/g.png') > texts.indexOf('Export graph as PNG'));
+    const copyButton = panel.walk().find((el) => el.text === 'Copy image');
+    assert.strictEqual(copyButton.disabled, true);
+    assert.strictEqual(copyButton.attrs.title, 'This version of Obsidian cannot put images on the clipboard');
   }
 
   // The GL texture limit caps the scale.
