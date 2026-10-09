@@ -184,15 +184,22 @@ const EMPTY = `(() => { const leaf = ${LEAF}; const r = leaf.view.renderer; cons
 
   await js(`app.workspace.revealLeaf(${LEAF})`);
   await sleep(500);
-  const hubLast = await js(CENTRE_ON(geo.hub.id));
+  // In a local graph the most-linked node is usually the open note, so a click that does nothing would still
+  // "open" it. Click the most-linked note that is not already open, and require that exact note to open.
   const before = await js(`(() => { const f = app.workspace.getActiveFile(); return f ? f.path : null; })()`);
-  await mouse('mouseMoved', hubLast.x, hubLast.y);
+  const target = await js(`(() => { const view = ${LEAF}.view; const open = [${JSON.stringify(before)}, view.file && view.file.path];
+    const note = view.renderer.nodes.slice().sort((a, b) => b.weight - a.weight).find((n) => {
+      const f = app.vault.getAbstractFileByPath(n.id); return f && f.extension === 'md' && !open.includes(n.id); });
+    return note ? note.id : null; })()`);
+  if (!target) throw new Error(`no note other than ${before} in the ${leafType} to click`);
+  const targetNow = await js(CENTRE_ON(target));
+  await mouse('mouseMoved', targetNow.x, targetNow.y);
   await sleep(200);
-  await mouse('mousePressed', hubLast.x, hubLast.y, { button: 'left', clickCount: 1 });
-  await mouse('mouseReleased', hubLast.x, hubLast.y, { button: 'left', clickCount: 1 });
+  await mouse('mousePressed', targetNow.x, targetNow.y, { button: 'left', clickCount: 1 });
+  await mouse('mouseReleased', targetNow.x, targetNow.y, { button: 'left', clickCount: 1 });
   await sleep(1500);
   const opened = await js(`(() => { const f = app.workspace.getActiveFile(); return f ? f.path : null; })()`);
-  check('clicking a node opens the note', opened === geo.hub.id, `${before} -> ${opened}`);
+  check('clicking a node opens the note', opened === target && before !== target, `clicked ${target}: ${before} -> ${opened}`);
   // The click may open the note in the graph's own tab; put a graph view back so the script can run again.
   await js(`(async () => { if (!${LEAF}) { app.commands.executeCommandById('${leafType === 'graph' ? 'graph:open' : 'graph:open-local'}'); await new Promise((x) => setTimeout(x, 3000)); } })()`);
 
