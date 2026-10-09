@@ -107,6 +107,22 @@ In *My presets*, Tab moves from a preset to its 📋 (copy share code) and ✕ (
 
 <img src="docs/keyboard.png" width="288" alt="The copy button of a preset with a keyboard focus ring" />
 
+### 3D graph (experimental)
+
+> **Experimental.** Off by default. It may change or be removed in a later version.
+
+Turn it on in **Settings → Graph Styler → Experimental → 3D graph view**, then run **Graph Styler: Open 3D graph** from the command palette. A new tab shows your notes and links in 3D, in the colours, background and glow of the current preset (any built-in or custom preset; your theme's graph colours when no preset is applied).
+
+<img src="docs/3d-setting.png" width="480" alt="Settings, Experimental: the 3D graph view toggle" />
+
+![A 1,627-note vault in Neon in the 3D graph tab](docs/3d-graph.jpg)
+
+- Drag to turn it, scroll or pinch to zoom, Shift-drag or right-drag to move it. When you let go, it starts turning slowly again after a few seconds.
+- Hover a note to light up its links and see its name; click to open it in a note tab (Cmd/Ctrl-click for a new tab).
+- The layout is computed in the background, so Obsidian stays responsive while it settles: about 2 s for 1,600 notes and 7 s for 5,000 on an M1 Pro.
+- It shows the vault as it was when the tab opened. Tags and attachments as nodes, filters, search and the local graph are not in this version; reopen the tab to see new notes and links.
+- Turning the setting off closes open 3D tabs. While it is off, none of the 3D code runs.
+
 ## How colours map to your vault
 
 Graph Styler writes Obsidian's own colour groups, so you can see and edit them under **Groups** in the graph view's settings.
@@ -172,13 +188,14 @@ Open the developer console (Cmd+Opt+I on macOS, Ctrl+Shift+I on Windows and Linu
 - Filters and display from a preset apply to the global graph only.
 - If `graph.json` did not exist yet when you first applied a preset, Restore has nothing to return physics to: settings from your own presets can remain afterwards.
 - Exports at 2x are often 8–12 MB and are saved inside the vault, so they are synced along with your notes.
+- The 3D graph needs WebGL 2; without it the tab says so instead of drawing. While its tab is visible it keeps turning and redraws 60 times a second, which took about 30 % of one CPU core on an M1 Pro (1,600–5,000 notes). A hidden tab does not draw.
 
 ## For AI assistants
 
 - Plugin id: `graph-styler`. Desktop only, `minAppVersion` 1.4.0.
-- Commands: `graph-styler:open-graph-styler`, `graph-styler:export-graph-png`, and `graph-styler:apply-<id>` for the preset ids `neon`, `galaxy`, `aurora`, `sunset`, `vapor`, `ocean`, `forest`, `candy`, `gold`, `cyber`, `nord`, `dracula`, `catppuccin`, `mono`.
+- Commands: `graph-styler:open-graph-styler`, `graph-styler:export-graph-png`, `graph-styler:open-3d-graph` (listed only while `experimental3d` is on), and `graph-styler:apply-<id>` for the preset ids `neon`, `galaxy`, `aurora`, `sunset`, `vapor`, `ocean`, `forest`, `candy`, `gold`, `cyber`, `nord`, `dracula`, `catppuccin`, `mono`.
 - Files written: `.obsidian/graph.json`, `.obsidian/graph.json.styler-bak` (first-change backup, never overwritten), `.obsidian/snippets/graph-styler-<id>.css`, `.obsidian/appearance.json` (enabled snippets), `.obsidian/plugins/graph-styler/data.json`, and exported `graph-<preset>[-<note>]-<YYYYMMDD-HHmm>[-<n>].png` in the export folder (`exportFolder`, default `Graph Styler exports`; empty = vault root). Notes are never written.
-- Settings (`data.json`): `custom` (saved presets), `exportFolder`, `openAfterExport`, `lastExport` (path of the last saved image), `exportScale` (1–4), `exportOptions` (`fit`, `aspect`: `original` \| `1:1` \| `4:5`, `caption`: `date`, `notes`, `preset`), `resumeSnippet` (internal).
+- Settings (`data.json`): `custom` (saved presets), `exportFolder`, `openAfterExport`, `lastExport` (path of the last saved image), `exportScale` (1–4), `exportOptions` (`fit`, `aspect`: `original` \| `1:1` \| `4:5`, `caption`: `date`, `notes`, `preset`), `experimental3d` (3D graph on/off, default off), `resumeSnippet` (internal).
 - Share codes: `gs1.` + base64url(JSON `{v:1, label, colors[4], bg, glow, forces}`), where `forces` holds `node`, `repel`, `dist`, `center`, `linkS`, `line`, `fade`. `gs2.` is the same with `v:2` and a `view` object holding `search`, `showTags`, `showAttachments`, `hideUnresolved`, `showOrphans`, `showArrow`. Codes never contain an id; values are clamped on import.
 - Network: none.
 
@@ -189,6 +206,7 @@ The plugin is a single CommonJS file with no build step: `main.js`, `manifest.js
 ```sh
 # Unit tests (silent on success)
 node test/graph-styler.test.js
+node test/graph3d.test.js
 # Presets keep graph physics
 node scripts/check-physics-contract.js
 # Copy the plugin into a vault
