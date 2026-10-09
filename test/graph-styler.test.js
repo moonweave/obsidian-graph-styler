@@ -1168,6 +1168,26 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     files: { '.obsidian/snippets/graph-styler-neon.css': snippet030 },
   });
   assert.strictEqual(from030.files['.obsidian/snippets/graph-styler-neon.css'], neonCss);
+  // Generated snippets that are switched off are refreshed too, so turning one on later (in Graph Styler or
+  // in Obsidian's CSS snippet settings) never brings the 0.2.0–0.3.0 CSS back. Hand-made files are left alone.
+  const offSnippet030 = snippet030.replace('graph-styler :: neon', 'graph-styler :: aurora');
+  const allRefreshed = await loadPlugin({
+    data: { custom: [], resumeSnippet: 'neon' },
+    snippets: { neon: 1 },
+    files: {
+      '.obsidian/snippets/graph-styler-neon.css': snippet030,
+      '.obsidian/snippets/graph-styler-aurora.css': offSnippet030,
+      '.obsidian/snippets/graph-styler-mine.css': '/* graph-styler :: mine (auto-generated) */ hand',
+      '.obsidian/snippets/graph-styler-sunset.css': '/* tweaked by me */ .x {}',
+    },
+  });
+  const auroraNow = allRefreshed.files['.obsidian/snippets/graph-styler-aurora.css'];
+  assert.ok(auroraNow.startsWith('/* graph-styler :: aurora (auto-generated) */'));
+  assert.ok(auroraNow.includes('> canvas ~ iframe') && auroraNow.includes('pointer-events: none'));
+  assert.deepStrictEqual(allRefreshed.enabled, ['graph-styler-neon']);
+  assert.strictEqual(allRefreshed.files['.obsidian/snippets/graph-styler-neon.css'], neonCss);
+  assert.strictEqual(allRefreshed.files['.obsidian/snippets/graph-styler-mine.css'], '/* graph-styler :: mine (auto-generated) */ hand');
+  assert.strictEqual(allRefreshed.files['.obsidian/snippets/graph-styler-sunset.css'], '/* tweaked by me */ .x {}');
   // Hand-edited files (no generated header) are left alone; CRLF-only differences are not rewritten.
   const handEdited = await loadPlugin({
     data: { custom: [], resumeSnippet: 'neon' },
@@ -1243,6 +1263,18 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     const [head, body] = block.split('{');
     return { selectors: head.split(',').map((x) => x.trim()), body: body.trim() };
   });
+  // General rule: every element inside the graph pane that gets a filter, other than Obsidian's input overlay
+  // canvas itself, must pass pointer input through while the overlay is there; the overlay never does.
+  for (const block of blocks.filter((b) => /filter:/.test(b.body))) {
+    for (const selector of block.selectors) {
+      const m = selector.match(/^(.*\.view-content) > (\S+)$/);
+      if (!m || m[2] === 'canvas') continue;
+      assert.ok(blocks.some((b) => b.selectors.includes(`${m[1]} > canvas ~ ${m[2]}`) && /pointer-events:\s*none/.test(b.body)),
+        `${selector} has a filter but still takes pointer input`);
+    }
+  }
+  assert.ok(!blocks.some((b) => /pointer-events/.test(b.body) && b.selectors.some((x) => /> canvas$/.test(x))),
+    'the input overlay canvas must keep pointer input');
   for (const theme of ['.theme-dark', '.theme-light']) {
     for (const type of ['graph', 'localgraph']) {
       const pane = `${theme} .workspace-leaf-content[data-type="${type}"] .view-content`;

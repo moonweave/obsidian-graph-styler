@@ -190,6 +190,8 @@ node scripts/check-physics-contract.js
 ./deploy.sh /path/to/your/vault
 ```
 
+릴리스 전에는 `--remote-debugging-port`로 따로 띄운 Obsidian에 `scripts/input-smoke.js`도 돌려 주세요(사용법은 파일 맨 위에 있습니다). 그래프에 실제 마우스·트랙패드 입력을 보내, 확대·이동·마우스 올리기·노드 끌기·오른쪽 클릭·클릭 중 하나라도 안 되면 실패합니다.
+
 `deploy.sh`에는 항상 vault 경로를 넘기세요. 경로를 빼면 관리자 본인의 vault 경로가 쓰입니다. 저장소에 CI가 없으니 풀 리퀘스트를 열기 전에 두 검사를 직접 돌려 주세요. UI 문구는 `main.js` 맨 위의 `en`·`ko` 표에 있으므로 문구를 추가할 때는 두 언어를 모두 넣어 주세요. 이슈와 풀 리퀘스트는 [GitHub](https://github.com/moonweave/obsidian-graph-styler)에서 받습니다.
 
 ## 라이선스

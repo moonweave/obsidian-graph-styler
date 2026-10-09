@@ -1471,8 +1471,15 @@ module.exports = class GraphStyler extends Plugin {
         const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
         if (await this.app.vault.adapter.exists(path)) await this.setActiveSnippet(id);
       }
-      const active = await this.enabledSnippetId();
-      if (active) await this.refreshSnippetFile(active);
+      // 켜진 것뿐 아니라 꺼진 생성 스니펫도 고친다 — 나중에 켜거나 Obsidian 설정에서 직접 켜도
+      // 예전 CSS(0.2.0–0.3.0의 확대·클릭 막힘)가 돌아오지 않게.
+      let rewritten = false;
+      for (const snippetId of await this.snippetIds()) {
+        if (await this.refreshSnippetFile(snippetId)) rewritten = true;
+      }
+      const customCss = this.app.customCss;
+      if (rewritten && customCss && typeof customCss.requestLoadSnippets === 'function') customCss.requestLoadSnippets();
+      else if (rewritten && customCss && typeof customCss.readSnippets === 'function') await customCss.readSnippets();
     } catch (e) {
       console.warn('[graph-styler] snippet restore skipped', e);
     }
@@ -1495,23 +1502,22 @@ module.exports = class GraphStyler extends Plugin {
   }
 
   // 이전 버전이 만든 스니펫 파일은 적용할 때의 CSS를 그대로 담고 있다. 생성 CSS가 바뀌었으면
-  // (0.1.9: 존재하지 않는 .graph-view-content 선택자 교체) 다시 적용하지 않아도 새 CSS를 쓴다.
+  // (0.1.9: 존재하지 않는 .graph-view-content 선택자 교체, 0.3.1: iframe 입력 통과) 다시 적용하지
+  // 않아도 새 CSS를 쓴다. 다시 썼으면 true.
   async refreshSnippetFile(id) {
     const preset = Object.values(PRESETS)
       .concat((this.settings.custom || []).map((raw) => presetFromRaw(raw)))
       .find((candidate) => candidate.id === id);
-    if (!preset) return;
+    if (!preset) return false;
     const adapter = this.app.vault.adapter;
     const path = `${this.app.vault.configDir}/snippets/graph-styler-${id}.css`;
     const css = makeGlowCss(preset.palette);
-    if (!(await adapter.exists(path))) return;
+    if (!(await adapter.exists(path))) return false;
     const current = (await adapter.read(path)).replace(/\r\n/g, '\n');
     // 사용자가 손으로 고친 파일(생성 머리말이 없음)은 건드리지 않는다.
-    if (current === css || !current.startsWith(`/* graph-styler :: ${id} (auto-generated) */`)) return;
+    if (current === css || !current.startsWith(`/* graph-styler :: ${id} (auto-generated) */`)) return false;
     await adapter.write(path, css);
-    const customCss = this.app.customCss;
-    if (customCss && typeof customCss.requestLoadSnippets === 'function') customCss.requestLoadSnippets();
-    else if (customCss && typeof customCss.readSnippets === 'function') await customCss.readSnippets();
+    return true;
   }
 
   // 0.1.7 이하는 업데이트 때 자기 onunload가 스니펫을 끄고 무엇을 껐는지 남기지 않았다.
