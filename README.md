@@ -186,9 +186,11 @@ node test/graph-styler.test.js
 node scripts/check-physics-contract.js
 # Copy the plugin into a vault
 ./deploy.sh /path/to/your/vault
+# Real pointer input against a running Obsidian (see the script header)
+node scripts/input-smoke.js --port 9222 --vault <vault> --preset aurora
 ```
 
-Before a release, also run `scripts/input-smoke.js` against a separate Obsidian started with `--remote-debugging-port` (instructions at the top of the file). It sends real mouse and trackpad input to the graph and fails if zoom, pan, hover, node drag, right-click or click stop working.
+Any change to the graph pane's CSS, DOM or renderer must pass `scripts/input-smoke.js` on the global and a local graph (`--leaf localgraph`) before it is ready, run against a separate Obsidian started with `--remote-debugging-port` (instructions at the top of the file); a screenshot that looks right is not enough. It sends real mouse and trackpad input to the graph and fails if zoom, pan, hover, node drag, right-click or click stop working.
 
 Always pass a vault path to `deploy.sh`; without one it uses the maintainer's own vault. The repository has no CI, so run both checks locally before opening a pull request. UI text lives in the `en` and `ko` tables at the top of `main.js`; add both when you add a string. Issues and pull requests are welcome on [GitHub](https://github.com/moonweave/obsidian-graph-styler).
 
