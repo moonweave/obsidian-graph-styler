@@ -57,6 +57,24 @@ const CENTRE_ON = (id) => `(async () => { const leaf = ${LEAF}; const r = leaf.v
   r.setPan(W / 2 - hub.x * r.scale, H / 2 - hub.y * r.scale); r.changed();
   await new Promise((x) => setTimeout(x, 500));
   return { x: rect.x + (hub.x * r.scale + r.panX) / dpr, y: rect.y + (hub.y * r.scale + r.panY) / dpr, nx: hub.x, ny: hub.y }; })()`;
+// Waits until no node has moved more than 0.3 px on screen for three 150 ms samples in a row, up to 15 s. A freshly
+// opened local graph, and any graph after the node-drag check below, keeps moving for seconds at ~1,600 notes; a
+// click aimed at where a note was 0.5 s earlier then lands beside it (the click check failed 14 of 30 local-graph runs
+// on a 1,600-note vault before this wait, 0 of 60 after).
+const SETTLE = `(async () => { const leaf = ${LEAF}; const r = leaf.view.renderer;
+  const dpr = r.px.renderer.width / leaf.view.contentEl.getBoundingClientRect().width;
+  const snap = () => r.nodes.map((n) => [n.x, n.y]);
+  let prev = snap(); let still = 0; const t0 = performance.now();
+  while (performance.now() - t0 < 15000) {
+    await new Promise((x) => setTimeout(x, 150));
+    const now = snap(); let moved = now.length === prev.length ? 0 : Infinity;
+    for (let i = 0; i < Math.min(now.length, prev.length); i++) moved = Math.max(moved, Math.hypot(now[i][0] - prev[i][0], now[i][1] - prev[i][1]));
+    prev = now;
+    still = moved * r.scale / dpr < 0.3 ? still + 1 : 0;
+    if (still >= 3) return Math.round(performance.now() - t0);
+  }
+  return null; })()`;
+
 // A point in the pane at least 40 px from every node.
 const EMPTY = `(() => { const leaf = ${LEAF}; const r = leaf.view.renderer; const rect = leaf.view.contentEl.getBoundingClientRect();
   const dpr = r.px.renderer.width / rect.width;
@@ -72,6 +90,10 @@ const EMPTY = `(() => { const leaf = ${LEAF}; const r = leaf.view.renderer; cons
   const results = [];
   const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail }); };
   const mouse = (type, x, y, extra = {}) => call('Input.dispatchMouseEvent', { type, x, y, ...extra });
+  // A graph that never stops moving fails loudly here instead of turning into a misleading click failure.
+  const settle = async (what) => {
+    if ((await js(SETTLE)) === null) check(`graph stops moving before ${what}`, false, 'nodes still moving after 15 s');
+  };
 
   await call('Emulation.setFocusEmulationEnabled', { enabled: true });
   await js(`require('electron').remote.getCurrentWindow().webContents.setBackgroundThrottling(false)`);
@@ -169,6 +191,8 @@ const EMPTY = `(() => { const leaf = ${LEAF}; const r = leaf.view.renderer; cons
   await mouse('mousePressed', spot.x, spot.y, { button: 'left', clickCount: 2 });
   await mouse('mouseReleased', spot.x, spot.y, { button: 'left', clickCount: 2 });
   await sleep(400);
+  // The node drag above sets the layout moving again; wait for it to stop so the clicks below hit what they aim at.
+  await settle('the right-click');
   const hubAgain = await js(CENTRE_ON(geo.hub.id));
   await mouse('mouseMoved', hubAgain.x, hubAgain.y);
   await sleep(200);
@@ -192,6 +216,7 @@ const EMPTY = `(() => { const leaf = ${LEAF}; const r = leaf.view.renderer; cons
       const f = app.vault.getAbstractFileByPath(n.id); return f && f.extension === 'md' && !open.includes(n.id); });
     return note ? note.id : null; })()`);
   if (!target) throw new Error(`no note other than ${before} in the ${leafType} to click`);
+  await settle('the click');
   const targetNow = await js(CENTRE_ON(target));
   await mouse('mouseMoved', targetNow.x, targetNow.y);
   await sleep(200);
