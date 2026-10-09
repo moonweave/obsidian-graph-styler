@@ -23,10 +23,12 @@ class Plugin {
 }
 
 class ItemView {}
+class PluginSettingTab {}
+class Setting {}
 
 const originalLoad = Module._load;
 Module._load = function load(request, parent, isMain) {
-  if (request === 'obsidian') return { Plugin, ItemView, Notice: class Notice {} };
+  if (request === 'obsidian') return { Plugin, ItemView, PluginSettingTab, Setting, Notice: class Notice {} };
   return originalLoad.call(this, request, parent, isMain);
 };
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));

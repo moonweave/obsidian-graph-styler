@@ -22,10 +22,13 @@ class Plugin {
   registerView() {}
   addRibbonIcon() {}
   addCommand() {}
+  addSettingTab() {}
   registerEvent() {}
 }
 
 class ItemView {}
+class PluginSettingTab {}
+class Setting {}
 
 const notices = [];
 // Notices built from a fragment (the export notice with its buttons) are recorded by their first line;
@@ -35,7 +38,7 @@ const originalLoad = Module._load;
 Module._load = function load(request, parent, isMain) {
   if (request === 'obsidian') {
     return {
-      Plugin, ItemView, Platform: { isMacOS: true },
+      Plugin, ItemView, PluginSettingTab, Setting, Platform: { isMacOS: true },
       Notice: class Notice {
         constructor(message, duration) {
           notices.push(typeof message === 'string' ? message : message.children[0].text);
