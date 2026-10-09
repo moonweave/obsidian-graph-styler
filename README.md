@@ -4,8 +4,8 @@ Graph Styler restyles the Obsidian graph view in one click. Its built-in colour 
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/hero-vaporwave.jpg" alt="Obsidian graph view with the Vaporwave preset and the Graph Styler panel" /></td>
-    <td width="50%"><img src="docs/hero-sunset.jpg" alt="The same vault with the Sunset preset" /></td>
+    <td width="66%"><img src="docs/hero-panel.jpg" alt="Obsidian graph view with the Vaporwave preset applied, next to the Graph Styler panel" /></td>
+    <td width="34%"><img src="docs/export-post-ready.png" alt="The same vault exported as a 4:5 PNG with Fit whole graph and a caption" /></td>
   </tr>
 </table>
 
