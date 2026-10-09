@@ -149,6 +149,9 @@ Yes. Presets paint their own background in the graph pane in light and dark them
 **Why does the glow look like brighter colours rather than a bloom?**
 The glow is a CSS filter (brightness, contrast and saturation) on the layer that draws the graph. It makes nodes and lines brighter and more saturated; it does not draw a halo around them. A bloom would have to be drawn inside Obsidian's graph renderer, which Graph Styler does not change.
 
+**After applying a preset I can't zoom, pan or click nodes in the graph.**
+That was a bug in 0.2.0–0.3.0: the glow layer covered the part of the graph that receives the mouse. Update to 0.3.1 or later. The active preset is fixed when the plugin loads, so you don't need to apply it again.
+
 **I see "Apply failed" or "PNG export failed".**
 Open the developer console (Cmd+Opt+I on macOS, Ctrl+Shift+I on Windows and Linux) and look for messages starting with `[graph-styler]`, then [open an issue](https://github.com/moonweave/obsidian-graph-styler/issues) with them.
 

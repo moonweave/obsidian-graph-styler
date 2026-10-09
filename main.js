@@ -191,6 +191,9 @@ function graphPane(suffix) {
 // 글로우 filter는 그래프를 실제로 그리는 iframe에 건다. 1.11.7·1.14.4에서 .view-content의 canvas는
 // 입력만 받는 투명 오버레이라 filter가 화면을 바꾸지 않는다(그 앞 버전이 canvas에 직접 그렸는지는
 // 확인하지 못해 선택자는 남겨 둔다).
+// filter가 걸린 요소는 쌓임 맥락이 되어 DOM 순서상 앞의 오버레이 canvas(absolute) 위로 올라온다.
+// 그러면 휠·드래그가 모두 iframe으로 가서 확대·이동이 멈췄다(0.2.0–0.3.0). 오버레이가 있을 때만
+// iframe이 입력을 통과시키게 해 filter 전과 같은 곳이 입력을 받게 한다.
 function makeGlowCss(p) {
   return `/* graph-styler :: ${p.id} (auto-generated) */
 ${graphPane('')} {
@@ -205,6 +208,7 @@ ${themed('.graph-view.color-line')} { color: ${p.line}; }
 ${themed('.graph-view.color-text')} { color: ${p.text}; }
 ${graphPane(' > iframe')},
 ${graphPane(' > canvas')} { filter: ${p.filter}; }
+${graphPane(' > canvas ~ iframe')} { pointer-events: none; }
 `;
 }
 
