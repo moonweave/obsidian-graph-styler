@@ -16,7 +16,7 @@ Graph Styler는 Obsidian 그래프 뷰의 색과 글로우를 프리셋 하나�
 <!-- 좁은 화면에서 첫 열 글자가 한 자씩 꺾이지 않도록 너비를 준 HTML 표 -->
 <table>
 <tr><th width="24%">항목</th><th>내용</th></tr>
-<tr><td>바꾸는 파일</td><td><code>.obsidian/</code> 안의 <code>graph.json</code>(색 그룹, 물리 설정은 내 프리셋을 적용할 때만), 백업 <code>graph.json.styler-bak</code>, CSS 스니펫 <code>snippets/graph-styler-&lt;프리셋&gt;.css</code>, <code>appearance.json</code>의 켜진 스니펫 목록, 플러그인 설정 <code>plugins/graph-styler/data.json</code>. vault 최상위에는 내보낸 PNG.</td></tr>
+<tr><td>바꾸는 파일</td><td><code>.obsidian/</code> 안의 <code>graph.json</code>(색 그룹, 물리 설정은 내 프리셋을 적용할 때만), 백업 <code>graph.json.styler-bak</code>, CSS 스니펫 <code>snippets/graph-styler-&lt;프리셋&gt;.css</code>, <code>appearance.json</code>의 켜진 스니펫 목록, 플러그인 설정 <code>plugins/graph-styler/data.json</code>. vault 안에는 내보낸 PNG(다른 폴더를 고르지 않으면 <code>Graph Styler exports/</code>).</td></tr>
 <tr><td>건드리지 않는 것</td><td>노트. 노트는 만들거나 고치거나 옮기거나 지우지 않습니다.</td></tr>
 <tr><td>네트워크</td><td>쓰지 않습니다. 패널의 "made by Moonweave" 링크는 누를 때만 브라우저에서 열립니다.</td></tr>
 <tr><td>요구 사항</td><td>Obsidian 1.4.0 이상, 데스크톱 전용</td></tr>
@@ -74,20 +74,24 @@ Obsidian에서 **설정 → 커뮤니티 플러그인 → 탐색**을 열고 "Gr
 
 ### 그래프를 PNG로 내보내기
 
-명령어 팔레트에서 **Graph Styler: 그래프를 PNG로 내보내기**를 실행하거나 패널의 **그래프를 PNG로 내보내기**를 누르세요. PNG는 vault 최상위에 `graph-<프리셋>-<날짜>.png`로 저장되며 알림에 파일 이름과 크기가 나옵니다.
+명령어 팔레트에서 **Graph Styler: 그래프를 PNG로 내보내기**를 실행하거나 패널의 **그래프를 PNG로 내보내기**를 누르세요. PNG는 `Graph Styler exports/graph-<프리셋>-<날짜>.png`로 저장됩니다. 저장한 이미지는 그래프 옆에 바로 열리고 파일 탐색기에서도 표시됩니다. 알림에 경로와 **열기**·**Finder에서 보기** 버튼이 나오고, 패널 아래에는 **마지막으로 내보낸 이미지** 링크가 남습니다. 파일로 저장하지 않고 게시물이나 채팅에 바로 붙여넣으려면 **이미지 복사**를 누르세요.
+
+패널의 옵션마다 아래에 한 줄 설명이 있습니다. 이 옵션들은 저장되는 그림에만 적용되고 그래프 자체는 바뀌지 않습니다.
 
 - **배율**(1x–4x, 기본 2x)은 지금 화면에 그려진 그래프 크기에 곱해집니다. 그래프가 보통 크기로 열려 있다면 2x로도 1080px 게시물에 충분합니다.
 - **전체 그래프 맞추기**를 켜면 모든 노트가 들어오게 맞춰 내보내고 끝나면 보던 화면으로 돌려놓습니다.
 - **비율**을 1:1이나 4:5로 고르면 프리셋 배경으로 여백을 채웁니다. 노트는 잘리지 않습니다.
 - **캡션**은 날짜, 노트 수, 프리셋 이름 중 고른 것을 작은 한 줄로 넣습니다.
+- **이미지 저장 폴더**에서 저장할 폴더를 정합니다(없으면 새로 만듦). 비워 두면 vault 맨 위에 저장합니다.
+- 자주 내보낸다면 **내보낸 뒤 이미지 열기**를 끌 수 있습니다.
 
-<img src="docs/export-options-ko.png" width="288" alt="배율, 전체 그래프 맞추기, 비율 4:5, 날짜와 노트 수 캡션을 고른 내보내기 옵션" />
+<img src="docs/export-options-ko.png" width="288" alt="배율 2x, 전체 그래프 맞추기, 비율 4:5, 날짜와 노트 수 캡션을 고른 내보내기 옵션과 옵션마다 붙은 한 줄 설명, 이미지 저장 폴더, 내보낸 뒤 이미지 열기, 내보내기와 이미지 복사 버튼, 마지막으로 내보낸 이미지 링크" />
 
 인스타그램에 올릴 거라면 **전체 그래프 맞추기**를 켜고 **비율**을 4:5로, 캡션 항목을 고른 뒤 2x로 내보내세요. 전체를 맞추느라 Obsidian이 라벨을 숨길 만큼 작아지면 연결이 가장 많은 노트의 이름을 그림에 대신 써 줍니다.
 
 <img src="docs/export-post-ready.png" width="400" alt="노트 391개 vault를 Vaporwave로, 허브 라벨과 캡션을 넣어 4:5로 내보낸 이미지" />
 
-내보내기 옵션은 기본으로 모두 꺼져 있으며 마지막으로 고른 값을 기억합니다.
+전체 그래프 맞추기, 비율, 캡션은 기본으로 꺼져 있으며 마지막으로 고른 값을 기억합니다.
 
 ### 노트의 로컬 그래프 내보내기
 
@@ -142,6 +146,9 @@ Graph Styler는 Obsidian의 색 그룹을 그대로 쓰므로, 그래프 뷰 설
 **내보낸 이미지가 생각보다 작아요.**
 배율은 화면에 그려진 그래프 크기에 곱해지므로, 그래프가 차지한 영역이 좁으면 이미지도 작게 나옵니다. Obsidian 창을 키우거나 그래프 영역을 넓혀 보세요. 그래픽 카드가 감당하지 못하는 배율이면 들어가는 가장 큰 배율로 저장하고 "4x는 이 그래프 화면에 너무 커서 3x로 저장"처럼 알려 줍니다.
 
+**내보낸 그림이 어디에 저장됐나요?**
+vault 안의 `Graph Styler exports` 폴더(또는 **이미지 저장 폴더**에 정한 폴더)에 있습니다. 내보내면 이미지가 그래프 옆에 바로 열리고, 파일 탐색기에서 표시되며, 알림에 **열기**·**Finder에서 보기** 버튼이 나옵니다. 나중에는 패널 맨 아래의 **마지막으로 내보낸 이미지** 링크를 누르세요. Graph Styler 0.3.1까지는 vault 맨 위에 저장했습니다.
+
 **플러그인을 업데이트해도 테마가 유지되나요?**
 네, 0.2.0부터 유지됩니다. 플러그인을 불러올 때 지금 켜진 프리셋의 스니펫 파일이 예전 버전이 만든 것이면 새 내용으로 다시 씁니다. 직접 고친 스니펫은 건드리지 않습니다.
 
@@ -166,14 +173,14 @@ Graph Styler는 Obsidian의 색 그룹을 그대로 쓰므로, 그래프 뷰 설
 - Obsidian이 시작할 때 복원한 로컬 그래프에 색 그룹이 비어 있으면, 예전 세션에서 일부러 비운 것이라도 프리셋 색이 들어갑니다.
 - 프리셋에 담은 필터·표시 설정은 전체 그래프에만 적용됩니다.
 - 처음 프리셋을 적용할 때 `graph.json`이 아직 없었다면 되돌아갈 물리 설정이 없어서, 되돌린 뒤에도 내 프리셋의 물리 설정이 남을 수 있습니다.
-- 2x로 내보낸 파일은 보통 8–12MB이고 vault 최상위에 저장되므로 노트와 함께 동기화됩니다.
+- 2x로 내보낸 파일은 보통 8–12MB이고 vault 안에 저장되므로 노트와 함께 동기화됩니다.
 
 ## AI 어시스턴트를 위한 정보
 
 - 플러그인 id: `graph-styler`. 데스크톱 전용, `minAppVersion` 1.4.0.
 - 명령: `graph-styler:open-graph-styler`, `graph-styler:export-graph-png`, 그리고 프리셋 id별 `graph-styler:apply-<id>`(`neon`, `galaxy`, `aurora`, `sunset`, `vapor`, `ocean`, `forest`, `candy`, `gold`, `cyber`, `nord`, `dracula`, `catppuccin`, `mono`).
-- 쓰는 파일: `.obsidian/graph.json`, `.obsidian/graph.json.styler-bak`(처음 바꾸기 전 백업, 덮어쓰지 않음), `.obsidian/snippets/graph-styler-<id>.css`, `.obsidian/appearance.json`(켜진 스니펫), `.obsidian/plugins/graph-styler/data.json`, vault 최상위의 `graph-<프리셋>[-<노트>]-<YYYYMMDD-HHmm>[-<n>].png`. 노트는 쓰지 않습니다.
-- 설정(`data.json`): `custom`(저장한 프리셋), `exportScale`(1–4), `exportOptions`(`fit`, `aspect`: `original` \| `1:1` \| `4:5`, `caption`: `date`, `notes`, `preset`), `resumeSnippet`(내부용).
+- 쓰는 파일: `.obsidian/graph.json`, `.obsidian/graph.json.styler-bak`(처음 바꾸기 전 백업, 덮어쓰지 않음), `.obsidian/snippets/graph-styler-<id>.css`, `.obsidian/appearance.json`(켜진 스니펫), `.obsidian/plugins/graph-styler/data.json`, 내보내기 폴더(`exportFolder`, 기본 `Graph Styler exports`, 비우면 vault 맨 위)의 `graph-<프리셋>[-<노트>]-<YYYYMMDD-HHmm>[-<n>].png`. 노트는 쓰지 않습니다.
+- 설정(`data.json`): `custom`(저장한 프리셋), `exportFolder`, `openAfterExport`, `lastExport`(마지막으로 저장한 이미지 경로), `exportScale`(1–4), `exportOptions`(`fit`, `aspect`: `original` \| `1:1` \| `4:5`, `caption`: `date`, `notes`, `preset`), `resumeSnippet`(내부용).
 - 공유 코드: `gs1.` + base64url(JSON `{v:1, label, colors[4], bg, glow, forces}`). `forces`에는 `node`, `repel`, `dist`, `center`, `linkS`, `line`, `fade`가 들어갑니다. `gs2.`는 `v:2`이고 `search`, `showTags`, `showAttachments`, `hideUnresolved`, `showOrphans`, `showArrow`를 담은 `view`가 추가됩니다. 코드에는 id가 없으며 가져올 때 값을 허용 범위 안으로 맞춥니다.
 - 네트워크: 쓰지 않음.
 
