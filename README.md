@@ -72,6 +72,14 @@ To save a view such as "only papers, with tags and arrows", set it up in the gra
 
 Presets saved this way share as codes starting with `gs2.`. Graph Styler 0.2 rejects `gs2.` codes with "That share code is not valid" and saves nothing; `gs1.` codes work in 0.2 and later.
 
+### Effects (experimental)
+
+Optional effects live under **✨ Effects (experimental)**. Each is off until you tick it.
+
+**Smooth preset change**: picking a preset no longer swaps the look at once. The new colours and background spread out from the middle of the graph over about a second. It only works while a preset changes, so a graph you are just looking at costs nothing extra, and it stays instant when your system is set to reduce motion.
+
+<img src="docs/effects.png" width="288" alt="The expanded Effects group with Smooth preset change ticked and its one-line explanation" />
+
 ### Export your graph as a PNG
 
 Run **Graph Styler: Export graph as PNG** from the command palette, or expand **🖼️ Export image** in the panel and use **Export graph as PNG**. The PNG is saved as `Graph Styler exports/graph-<preset>-<date>.png`. The image opens next to your graph and is highlighted in the file explorer. A notice shows the path, with **Open** and **Show in Finder** buttons, and the **Export image** group keeps a **Last export** link to it. Use **Copy image** to put the picture on the clipboard instead of saving a file, for example to paste it into a post or a chat.
@@ -108,7 +116,7 @@ A local graph that opens without colour groups of its own takes the active prese
 
 ### Use the panel from the keyboard
 
-Tab walks through the presets, then the group headers (**Customize**, **Share code**, **Export image**, and **More options** when its group is open). Enter or Space on a header opens or closes the group. In *My presets*, Tab moves from a preset to its 📋 (copy share code) and ✕ (delete) buttons, and Enter or Space runs them without applying the preset. Focused buttons and headers show a focus ring.
+Tab walks through the presets, then the group headers (**Customize**, **Share code**, **Effects**, **Export image**, and **More options** when its group is open). Enter or Space on a header opens or closes the group. In *My presets*, Tab moves from a preset to its 📋 (copy share code) and ✕ (delete) buttons, and Enter or Space runs them without applying the preset. Focused buttons and headers show a focus ring.
 
 <img src="docs/keyboard.png" width="288" alt="The copy button of a preset with a keyboard focus ring, above the closed Customize and Share code groups" />
 
@@ -194,13 +202,14 @@ Open the developer console (Cmd+Opt+I on macOS, Ctrl+Shift+I on Windows and Linu
 - If `graph.json` did not exist yet when you first applied a preset, Restore has nothing to return physics to: settings from your own presets can remain afterwards.
 - Exports at 2x are often 8–12 MB and are saved inside the vault, so they are synced along with your notes.
 - The 3D graph needs WebGL 2; without it the tab says so instead of drawing. While its tab is visible it keeps turning and redraws 60 times a second, which took about 30 % of one CPU core on an M1 Pro (1,600–5,000 notes). A hidden tab does not draw.
+- The effects use internal parts of Obsidian's graph renderer. If an update changes them, an effect quietly stops on that graph instead of breaking it, and presets still apply.
 
 ## For AI assistants
 
 - Plugin id: `graph-styler`. Desktop only, `minAppVersion` 1.4.0.
 - Commands: `graph-styler:open-graph-styler`, `graph-styler:export-graph-png`, `graph-styler:open-3d-graph` (listed only while `experimental3d` is on), and `graph-styler:apply-<id>` for the preset ids `neon`, `galaxy`, `aurora`, `sunset`, `vapor`, `ocean`, `forest`, `candy`, `gold`, `cyber`, `nord`, `dracula`, `catppuccin`, `mono`.
 - Files written: `.obsidian/graph.json`, `.obsidian/graph.json.styler-bak` (first-change backup, never overwritten), `.obsidian/snippets/graph-styler-<id>.css`, `.obsidian/appearance.json` (enabled snippets), `.obsidian/plugins/graph-styler/data.json`, and exported `graph-<preset>[-<note>]-<YYYYMMDD-HHmm>[-<n>].png` in the export folder (`exportFolder`, default `Graph Styler exports`; empty = vault root). Notes are never written.
-- Settings (`data.json`): `custom` (saved presets), `exportFolder`, `openAfterExport`, `lastExport` (path of the last saved image), `exportScale` (1–4), `exportOptions` (`fit`, `aspect`: `original` \| `1:1` \| `4:5`, `caption`: `date`, `notes`, `preset`), `experimental3d` (3D graph on/off, default off), `resumeSnippet` (internal).
+- Settings (`data.json`): `custom` (saved presets), `exportFolder`, `openAfterExport`, `lastExport` (path of the last saved image), `exportScale` (1–4), `exportOptions` (`fit`, `aspect`: `original` \| `1:1` \| `4:5`, `caption`: `date`, `notes`, `preset`), `experimental3d` (3D graph on/off, default off), `effects` (`morph`: boolean, default false), `resumeSnippet` (internal).
 - Share codes: `gs1.` + base64url(JSON `{v:1, label, colors[4], bg, glow, forces}`), where `forces` holds `node`, `repel`, `dist`, `center`, `linkS`, `line`, `fade`. `gs2.` is the same with `v:2` and a `view` object holding `search`, `showTags`, `showAttachments`, `hideUnresolved`, `showOrphans`, `showArrow`. Codes never contain an id; values are clamped on import.
 - Network: none.
 
