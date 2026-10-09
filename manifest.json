@@ -1,7 +1,7 @@
 {
   "id": "graph-styler",
   "name": "Graph Styler",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "minAppVersion": "1.4.0",
   "description": "Style your graph view in one click — curated color and glow themes that preserve your current physics. No manual CSS needed.",
   "author": "Moonweave",
