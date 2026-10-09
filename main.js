@@ -104,7 +104,7 @@ const STRINGS = {
     empty3d: 'There are no notes to show yet.',
     effectsTitle: '✨ Effects (experimental)',
     morphToggle: 'Smooth preset change',
-    morphHint: 'A new preset spreads out from the middle of the graph instead of switching at once. Stays instant if your system asks to reduce motion.',
+    morphHint: 'New presets spread out from the middle of the graph instead of switching at once.',
     f: {
       colors: 'Group colors', bg: 'Background', glow: 'Glow',
       repel: 'Repel', dist: 'Link distance', center: 'Center', linkS: 'Link force',
@@ -189,7 +189,7 @@ const STRINGS = {
     empty3d: '아직 보여 줄 노트가 없어요.',
     effectsTitle: '✨ 효과 (실험)',
     morphToggle: '프리셋 부드럽게 바꾸기',
-    morphHint: '새 프리셋이 한 번에 바뀌지 않고 그래프 가운데에서 바깥으로 번지며 바뀝니다. 시스템에서 동작 줄이기를 켜 두면 바로 바뀝니다.',
+    morphHint: '새 프리셋이 한 번에 바뀌지 않고 가운데에서 바깥으로 번지며 바뀝니다.',
     f: {
       colors: '그룹 색', bg: '배경', glow: '글로우',
       repel: '반발력', dist: '링크 거리', center: '중심력', linkS: '링크력',
