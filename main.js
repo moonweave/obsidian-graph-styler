@@ -2402,6 +2402,8 @@ module.exports = class GraphStyler extends Plugin {
     // 켤 때는 이미 열린(복원된) 3D 탭을 닫지 않는다. 닫는 것은 끌 때뿐이다.
     if (on && notice) new Notice(L.exp3dOn);
     if (!on) for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_3D)) leaf.detach();
+    // 꺼져 있을 때 복원된 탭은 '꺼져 있음' 안내만 띄운 채라, 켜면 그 자리에서 다시 열어 그리게 한다.
+    else for (const view of this.views3d()) if (!view.canvas) view.onOpen();
     this.refreshViews();
   }
 

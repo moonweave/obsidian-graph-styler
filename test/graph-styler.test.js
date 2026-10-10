@@ -676,12 +676,18 @@ async function plugin3d() {
   const panel = factories['graph-styler-panel']({});
   panel.contentEl = new FakeEl('div');
   const leaves3d = [];
-  const counts = { detached: 0, revealed: 0 };
-  // a new tab gets its view a tick later, as setViewState is async in Obsidian
+  const counts = { detached: 0, revealed: 0, opened: 0 };
+  // A new tab gets its view a tick later, as setViewState is async in Obsidian. There is no DOM or WebGL here, so
+  // onOpen (which builds the canvas) only records that it ran.
   const newLeaf = () => {
     const leaf = {
       detach() { counts.detached += 1; leaves3d.splice(leaves3d.indexOf(leaf), 1); },
-      async setViewState(state) { await Promise.resolve(); leaf.view = factories[state.type](leaf); leaves3d.push(leaf); },
+      async setViewState(state) {
+        await Promise.resolve();
+        leaf.view = factories[state.type](leaf);
+        leaf.view.onOpen = async () => { counts.opened += 1; };
+        leaves3d.push(leaf);
+      },
     };
     return leaf;
   };
@@ -1549,6 +1555,18 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.deepStrictEqual([t.counts.detached, t.leaves3d.length, notices], [0, 1, ['Open it from the command palette: “Graph Styler: Open 3D graph”']]);
     await t.plugin.setExperimental3d(false);
     assert.deepStrictEqual([t.counts.detached, t.leaves3d.length], [1, 0]);
+
+    // A tab restored while 3D was off only shows "turned off"; switching on reopens it in place so it draws.
+    // A tab that already draws (has its canvas) is left alone.
+    await t.newLeaf().setViewState({ type: 'graph-styler-3d' });
+    await t.newLeaf().setViewState({ type: 'graph-styler-3d' });
+    const [restored, drawing] = t.leaves3d.map((leaf) => leaf.view);
+    drawing.canvas = {};
+    const reopened = [];
+    restored.onOpen = async () => { reopened.push('restored'); };
+    drawing.onOpen = async () => { reopened.push('drawing'); };
+    await t.plugin.setExperimental3d(true, false);
+    assert.deepStrictEqual([reopened, t.leaves3d.length, t.counts.detached], [['restored'], 2, 1]);
   }
 
   // Open (button or command) keeps one 3D tab: a double click opens one, a later click brings it to the front.
