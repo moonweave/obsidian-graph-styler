@@ -1686,10 +1686,12 @@ class Graph3DView extends ItemView {
       this.showMessage(L.lost3d);
     });
     this.registerDomEvent(this.canvas, 'webglcontextrestored', () => this.restoreGL());
-    this.registerDomEvent(document, 'visibilitychange', () => this.kick());
+    // 팝아웃 창에 열리면 캔버스는 그 창의 문서에 있다. 화면 갱신·가시성·DPR은 메인 창이 아니라 이 뷰가 있는 창을 따른다.
+    // 메인 창 것을 쓰면 메인 창이 최소화됐을 때 팝아웃의 그래프가 멈추고, 다른 모니터에서는 해상도가 틀린다.
+    this.registerDomEvent(el.doc, 'visibilitychange', () => this.kick());
     this.registerEvent(this.app.workspace.on('css-change', () => this.applyStyle()));
     this.bindInput();
-    this.resizeObserver = new ResizeObserver(() => {
+    this.resizeObserver = new el.win.ResizeObserver(() => {
       if (!this.userMoved && this.fit) this.cam.dist = this.shownDist = this.fitDistance();
       this.kick();
     });
@@ -1700,7 +1702,7 @@ class Graph3DView extends ItemView {
   async onClose() {
     this.disposed = true;
     this.stopLoop();
-    window.clearTimeout(this.resumeTimer);
+    this.contentEl.win.clearTimeout(this.resumeTimer);
     this.stopLayout();
     if (this.resizeObserver) this.resizeObserver.disconnect();
     this.resizeObserver = null;
@@ -2003,8 +2005,9 @@ class Graph3DView extends ItemView {
   touch() {
     this.userMoved = true;
     this.lastInput = performance.now();
-    window.clearTimeout(this.resumeTimer);
-    this.resumeTimer = window.setTimeout(() => this.kick(), IDLE_3D_MS + 50);
+    const win = this.contentEl.win;
+    win.clearTimeout(this.resumeTimer);
+    this.resumeTimer = win.setTimeout(() => this.kick(), IDLE_3D_MS + 50);
   }
 
   rotationSpeed(t) {
@@ -2120,11 +2123,11 @@ class Graph3DView extends ItemView {
   // input=true: 입력에 대한 응답이라 프레임 상한 없이 바로 그린다.
   kick(input) {
     if (input) this.inputPending = true;
-    if (!this.raf && this.gl && this.prog && !this.disposed) this.raf = window.requestAnimationFrame((t) => this.frame(t));
+    if (!this.raf && this.gl && this.prog && !this.disposed) this.raf = this.contentEl.win.requestAnimationFrame((t) => this.frame(t));
   }
 
   stopLoop() {
-    if (this.raf) window.cancelAnimationFrame(this.raf);
+    if (this.raf) this.contentEl.win.cancelAnimationFrame(this.raf);
     this.raf = 0;
   }
 
@@ -2132,7 +2135,7 @@ class Graph3DView extends ItemView {
     this.raf = 0;
     const c = this.canvas;
     const gl = this.gl;
-    if (!c || !gl || gl.isContextLost() || document.hidden || c.clientWidth === 0) return;
+    if (!c || !gl || gl.isContextLost() || this.contentEl.doc.hidden || c.clientWidth === 0) return;
     const gap = this.lastFrame ? t - this.lastFrame : 0;
     if (gap > 0 && gap < 50) this.frameGap = this.frameGap ? this.frameGap * 0.9 + gap * 0.1 : gap;
     this.lastFrame = t;
@@ -2148,7 +2151,7 @@ class Graph3DView extends ItemView {
     const dt = this.lastDraw ? Math.min(0.1, (t - this.lastDraw) / 1000) : 0;
     this.lastDraw = t;
     this.inputPending = false;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = this.contentEl.win.devicePixelRatio || 1;
     const w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
     const speed = this.rotationSpeed(t);

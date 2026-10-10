@@ -24,6 +24,11 @@ const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT
 
 // A Graph3DView with just enough of Obsidian and the DOM stubbed to drive its pointer handlers and frame().
 // draw() and pick() are replaced by recorders; the handlers come from bindInput() through registerDomEvent.
+// The view runs in whatever window holds its tab (a popout has its own), so the stub window is only reachable
+// through contentEl.win / contentEl.doc; the main-window globals throw if the view touches them.
+const mainWindowUse = () => { throw new Error('the 3D view used the main window instead of its own'); };
+Object.assign(global.window, { requestAnimationFrame: mainWindowUse, cancelAnimationFrame: mainWindowUse,
+  setTimeout: mainWindowUse, clearTimeout: mainWindowUse });
 function stubView() {
   const rafs = [];
   const win = {
@@ -33,10 +38,12 @@ function stubView() {
     setTimeout: () => 1,
     clearTimeout() {},
   };
-  Object.assign(global.window, win);
+  const doc = { hidden: false };
   const view = new Graph3DView({}, { settings: { experimental3d: true }, rotate3d: true, rotate3dSpeed: 0.12 });
+  view.contentEl = { win, doc };
   const handlers = {};
-  view.registerDomEvent = (el, type, cb) => { handlers[type] = cb; };
+  const targets = {};
+  view.registerDomEvent = (el, type, cb) => { handlers[type] = cb; targets[type] = el; };
   view.canvas = { width: 800, height: 600, clientWidth: 400, clientHeight: 300,
     setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {} };
   view.gl = { isContextLost: () => false };
@@ -52,7 +59,7 @@ function stubView() {
   const pointer = (type, x, y, extra = {}) => handlers[type](Object.assign({
     clientX: x, clientY: y, offsetX: x, offsetY: y, button: 0, pointerId: 1, shiftKey: false,
   }, extra));
-  return { view, handlers, calls, rafs, win, pointer };
+  return { view, handlers, targets, calls, rafs, win, doc, pointer };
 }
 
 // ---------------------------------------------------------------- hover during a drag
@@ -186,6 +193,46 @@ function stubView() {
   assert.deepStrictEqual(seen, { prog: null, buf: null, vao: null, hover: -1, lit: 0 });
   assert.strictEqual(labelShown, false);
   assert.ok(view.inputPending, 'redrawn at once, so the hover is picked again under the cursor');
+}
+
+// ---------------------------------------------------------------- the view's own window (popouts)
+// In a popout the canvas lives in another document. Frames, timers, visibility and pixel ratio must come from that
+// window: with the main window's, a minimised main window stopped the popout's graph and DPR was wrong on another display.
+{
+  const { view, calls, rafs, win, doc } = stubView();
+  win.devicePixelRatio = 3;
+  view.kick();
+  assert.strictEqual(rafs.length, 1, 'frames are requested from the view window');
+  view.frame(1000);
+  assert.deepStrictEqual([view.canvas.width, view.canvas.height], [1200, 900], 'canvas follows the view window pixel ratio');
+  doc.hidden = true;
+  const draws = calls.draw;
+  view.frame(1100);
+  assert.strictEqual(calls.draw, draws, 'a hidden view document does not draw');
+  view.touch();
+  view.stopLoop();
+}
+{
+  // onOpen wires its listeners and the resize observer to the view's own document and window
+  const { view, handlers, targets, win, doc } = stubView();
+  const observed = [];
+  win.ResizeObserver = class { constructor(cb) { this.cb = cb; } observe(el) { observed.push(el); } disconnect() {} };
+  const el = (tag) => ({ tag, remove() {}, getContext: () => ({}) });
+  Object.assign(view.contentEl, { empty() {}, addClass() {}, createEl: (tag) => el(tag), createDiv: () => el('div') });
+  view.app = { workspace: { on: () => ({}) } };
+  view.registerEvent = () => {};
+  let built = 0;
+  view.build = async () => { built += 1; };
+  let restored = 0;
+  view.restoreGL = () => { restored += 1; };
+  view.onOpen().then(() => {
+    assert.strictEqual(targets.visibilitychange, doc, 'visibilitychange is watched on the view document');
+    assert.deepStrictEqual([observed.length, observed[0] === view.canvas, built], [1, true, 1]);
+    // the canvas's restore event goes to restoreGL()
+    assert.strictEqual(targets.webglcontextrestored, view.canvas);
+    handlers.webglcontextrestored();
+    assert.strictEqual(restored, 1);
+  });
 }
 
 // ---------------------------------------------------------------- data extraction
