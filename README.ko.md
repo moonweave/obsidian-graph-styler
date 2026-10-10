@@ -74,6 +74,14 @@ Obsidian에서 **설정 → 커뮤니티 플러그인 → 탐색**을 열고 "Gr
 
 이렇게 저장한 프리셋은 `gs2.`로 시작하는 코드로 공유됩니다. Graph Styler 0.2는 `gs2.` 코드를 "유효하지 않은 공유 코드입니다"라며 거절하고 아무것도 저장하지 않습니다. `gs1.` 코드는 0.2 이후 모든 버전에서 가져올 수 있습니다.
 
+### 효과 (실험)
+
+**✨ 효과 (실험)** 아래에 골라 쓰는 효과가 있습니다. 직접 켜기 전에는 모두 꺼져 있습니다.
+
+**프리셋 부드럽게 바꾸기**: 프리셋을 고르면 모습이 한 번에 바뀌지 않고, 새 색과 배경이 그래프 가운데에서 바깥으로 1초쯤에 걸쳐 번집니다. 프리셋이 바뀌는 동안에만 일하므로 그래프를 보고만 있을 때는 추가 부담이 없고, 시스템에서 동작 줄이기를 켜 두면 바로 바뀝니다.
+
+<img src="docs/effects-ko.png" width="288" alt="프리셋 부드럽게 바꾸기를 켜고 한 줄 설명이 보이는 펼쳐진 효과 그룹" />
+
 ### 그래프를 PNG로 내보내기
 
 명령어 팔레트에서 **Graph Styler: 그래프를 PNG로 내보내기**를 실행하거나 패널의 **🖼️ 이미지 내보내기**를 펼쳐 **그래프를 PNG로 내보내기**를 누르세요. PNG는 `Graph Styler exports/graph-<프리셋>-<날짜>.png`로 저장됩니다. 저장한 이미지는 그래프 옆에 바로 열리고 파일 탐색기에서도 표시됩니다. 알림에 경로와 **열기**·**Finder에서 보기** 버튼이 나오고, **이미지 내보내기** 그룹에는 **마지막으로 내보낸 이미지** 링크가 남습니다. 파일로 저장하지 않고 게시물이나 채팅에 바로 붙여넣으려면 **이미지 복사**를 누르세요.
@@ -110,7 +118,7 @@ Obsidian에서 **설정 → 커뮤니티 플러그인 → 탐색**을 열고 "Gr
 
 ### 키보드로 패널 쓰기
 
-Tab을 누르면 프리셋을 차례로 지난 뒤 그룹 머리글(**커스터마이즈**, **공유 코드**, **이미지 내보내기**, 그룹이 열려 있으면 **옵션 더 보기**)로 포커스가 옮겨 갑니다. 머리글에서 Enter나 Space를 누르면 그룹이 열리고 닫힙니다. *내 프리셋*에서는 프리셋, 📋(공유 코드 복사), ✕(프리셋 삭제) 순서로 포커스가 가고, 📋나 ✕에서 Enter나 Space를 누르면 프리셋은 적용되지 않고 그 버튼만 실행됩니다. 포커스가 간 버튼과 머리글에는 테두리가 표시됩니다.
+Tab을 누르면 프리셋을 차례로 지난 뒤 그룹 머리글(**커스터마이즈**, **공유 코드**, **효과**, **이미지 내보내기**, 그룹이 열려 있으면 **옵션 더 보기**)로 포커스가 옮겨 갑니다. 머리글에서 Enter나 Space를 누르면 그룹이 열리고 닫힙니다. *내 프리셋*에서는 프리셋, 📋(공유 코드 복사), ✕(프리셋 삭제) 순서로 포커스가 가고, 📋나 ✕에서 Enter나 Space를 누르면 프리셋은 적용되지 않고 그 버튼만 실행됩니다. 포커스가 간 버튼과 머리글에는 테두리가 표시됩니다.
 
 <img src="docs/keyboard-ko.png" width="288" alt="키보드 포커스 테두리가 표시된 프리셋의 복사 버튼과 그 아래의 닫힌 커스터마이즈·공유 코드 그룹" />
 
@@ -196,13 +204,14 @@ vault 안의 `Graph Styler exports` 폴더(또는 **이미지 저장 폴더**에
 - 처음 프리셋을 적용할 때 `graph.json`이 아직 없었다면 되돌아갈 물리 설정이 없어서, 되돌린 뒤에도 내 프리셋의 물리 설정이 남을 수 있습니다.
 - 2x로 내보낸 파일은 보통 8–12MB이고 vault 안에 저장되므로 노트와 함께 동기화됩니다.
 - 3D 그래프에는 WebGL 2가 필요하고, 없으면 그리지 않고 탭에 그렇다고 알려 줍니다. 탭이 보이는 동안에는 계속 돌면서 초당 60번 다시 그리며, M1 Pro에서 CPU 코어 하나의 약 30%를 썼습니다(노트 1,600–5,000개). 가려진 탭은 그리지 않습니다.
+- 효과는 Obsidian 그래프 렌더러의 내부 기능을 씁니다. 업데이트로 이 부분이 바뀌면 그래프를 망가뜨리지 않고 그 그래프에서 효과만 조용히 멈추며, 프리셋은 그대로 적용됩니다.
 
 ## AI 어시스턴트를 위한 정보
 
 - 플러그인 id: `graph-styler`. 데스크톱 전용, `minAppVersion` 1.4.0.
 - 명령: `graph-styler:open-graph-styler`, `graph-styler:export-graph-png`, `graph-styler:open-3d-graph`(`experimental3d`가 켜져 있을 때만 보임), 그리고 프리셋 id별 `graph-styler:apply-<id>`(`neon`, `galaxy`, `aurora`, `sunset`, `vapor`, `ocean`, `forest`, `candy`, `gold`, `cyber`, `nord`, `dracula`, `catppuccin`, `mono`).
 - 쓰는 파일: `.obsidian/graph.json`, `.obsidian/graph.json.styler-bak`(처음 바꾸기 전 백업, 덮어쓰지 않음), `.obsidian/snippets/graph-styler-<id>.css`, `.obsidian/appearance.json`(켜진 스니펫), `.obsidian/plugins/graph-styler/data.json`, 내보내기 폴더(`exportFolder`, 기본 `Graph Styler exports`, 비우면 vault 맨 위)의 `graph-<프리셋>[-<노트>]-<YYYYMMDD-HHmm>[-<n>].png`. 노트는 쓰지 않습니다.
-- 설정(`data.json`): `custom`(저장한 프리셋), `exportFolder`, `openAfterExport`, `lastExport`(마지막으로 저장한 이미지 경로), `exportScale`(1–4), `exportOptions`(`fit`, `aspect`: `original` \| `1:1` \| `4:5`, `caption`: `date`, `notes`, `preset`), `experimental3d`(3D 그래프 켜기, 기본 꺼짐), `resumeSnippet`(내부용).
+- 설정(`data.json`): `custom`(저장한 프리셋), `exportFolder`, `openAfterExport`, `lastExport`(마지막으로 저장한 이미지 경로), `exportScale`(1–4), `exportOptions`(`fit`, `aspect`: `original` \| `1:1` \| `4:5`, `caption`: `date`, `notes`, `preset`), `experimental3d`(3D 그래프 켜기, 기본 꺼짐), `effects`(`morph`: 참/거짓, 기본 거짓), `resumeSnippet`(내부용).
 - 공유 코드: `gs1.` + base64url(JSON `{v:1, label, colors[4], bg, glow, forces}`). `forces`에는 `node`, `repel`, `dist`, `center`, `linkS`, `line`, `fade`가 들어갑니다. `gs2.`는 `v:2`이고 `search`, `showTags`, `showAttachments`, `hideUnresolved`, `showOrphans`, `showArrow`를 담은 `view`가 추가됩니다. 코드에는 id가 없으며 가져올 때 값을 허용 범위 안으로 맞춥니다.
 - 네트워크: 쓰지 않음.
 

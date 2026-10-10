@@ -1304,7 +1304,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.strictEqual(copyButton.attrs.title, 'This version of Obsidian cannot put images on the clipboard');
   }
 
-  // The whole panel: Look (themes grid, My presets) stays open, then three folded groups, then Restore as a
+  // The whole panel: Look (themes grid, My presets) stays open, then four folded groups, then Restore as a
   // quiet footer above the credit. A group's open state survives the re-render a theme apply triggers.
   {
     const renderPanel = async (Plugin, custom = []) => {
@@ -1324,10 +1324,10 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     const top = empty.panel.children.map((el) => [el.tag, [...el.cls].join(' ')]);
     assert.deepStrictEqual(top.map(([, cls]) => cls), [
       '', 'setting-item-description', 'gs-section', 'gs-note', 'gs-list gs-grid',
-      'gs-group', 'gs-group', 'gs-group', 'gs-footer', 'gs-credit']);
+      'gs-group', 'gs-group', 'gs-group', 'gs-group', 'gs-footer', 'gs-credit']);
     assert.strictEqual(empty.panel.children[4].children.length, 14);
     assert.deepStrictEqual(empty.panel.children.filter((el) => el.tag === 'details')
-      .map((el) => el.children[0].text), ['🎛️ Customize', '📋 Share code', '🖼️ Export image']);
+      .map((el) => el.children[0].text), ['🎛️ Customize', '📋 Share code', '✨ Effects (experimental)', '🖼️ Export image']);
     assert.ok(empty.panel.children.filter((el) => el.tag === 'details').every((el) => !el.open), 'groups start closed');
     // My presets only shows a heading when there is something under it.
     assert.ok(!empty.panel.walk().some((el) => el.text === 'My presets'));
@@ -1335,7 +1335,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.ok(withMine.panel.walk().some((el) => el.text === 'My presets'));
     assert.ok(withMine.panel.children.some((el) => el.cls.has('gs-list') && !el.cls.has('gs-grid') && el.children[0].cls.has('gs-preset-row')));
     // Restore is the last action before the credit and still runs plugin.restore.
-    const footer = empty.panel.children[8];
+    const footer = empty.panel.children[9];
     const restoreButton = footer.children[0];
     assert.deepStrictEqual([restoreButton.tag, restoreButton.text], ['button', '↩︎ Restore original']);
     let restored = 0;
@@ -1350,7 +1350,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     share.walk().find((el) => el.cls.has('gs-import')).onclick();
     assert.deepStrictEqual(imports, ['gs1.abc']);
     // Open state is kept by group id: opening records it, the re-render restores it, closing forgets it.
-    const exportGroup = empty.panel.children[7];
+    const exportGroup = empty.panel.children[8];
     exportGroup.open = true;
     exportGroup.listeners.toggle();
     const nested = exportGroup.walk().find((el) => el.cls.has('gs-sub'));
@@ -1359,11 +1359,23 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.deepStrictEqual([...empty.plugin.openGroups].sort(), ['export', 'exportMore']);
     empty.view.render();
     const again = empty.panel.children.filter((el) => el.tag === 'details');
-    assert.deepStrictEqual(again.map((el) => !!el.open), [false, false, true]);
-    assert.strictEqual(again[2].walk().find((el) => el.cls.has('gs-sub')).open, true);
-    again[2].open = false;
-    again[2].listeners.toggle();
+    assert.deepStrictEqual(again.map((el) => !!el.open), [false, false, false, true]);
+    assert.strictEqual(again[3].walk().find((el) => el.cls.has('gs-sub')).open, true);
+    again[3].open = false;
+    again[3].listeners.toggle();
     assert.deepStrictEqual([...empty.plugin.openGroups], ['exportMore']);
+    // Effects: the smooth preset change is an independent checkbox, off by default; ticking it saves it.
+    const effectsGroup = () => empty.panel.children[7];
+    const morphBox = effectsGroup().walk().find((el) => el.cls.has('gs-effect-morph'));
+    assert.deepStrictEqual([morphBox.type, !!morphBox.checked], ['checkbox', false]);
+    const savedEffects = [];
+    empty.plugin.saveData = async (data) => { savedEffects.push(JSON.parse(JSON.stringify(data.effects))); };
+    morphBox.checked = true;
+    await morphBox.onchange();
+    assert.deepStrictEqual(savedEffects, [{ morph: true }]);
+    empty.view.render();
+    assert.strictEqual(!!effectsGroup().walk().find((el) => el.cls.has('gs-effect-morph')).checked, true);
+    assert.ok(!effectsGroup().walk().some((el) => el.tag === 'input' && el.type === 'range'), 'no sliders for the smooth preset change');
 
     // Korean: same structure, no string left empty.
     const ko = await renderPanel(loadGraphStylerIn('ko'), mine);
@@ -1373,7 +1385,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
       .filter(([en, koNode]) => en.text && !koNode.text);
     assert.deepStrictEqual(blank.map(([en]) => en.text), []);
     assert.deepStrictEqual(ko.panel.children.filter((el) => el.tag === 'details').map((el) => el.children[0].text),
-      ['🎛️ 커스터마이즈', '📋 공유 코드', '🖼️ 이미지 내보내기']);
+      ['🎛️ 커스터마이즈', '📋 공유 코드', '✨ 효과 (실험)', '🖼️ 이미지 내보내기']);
     assert.ok(ko.panel.walk().some((el) => el.text === '옵션 더 보기'));
   }
 
@@ -1799,4 +1811,45 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
   assert.strictEqual(rejected.raw, null);
   assert.deepStrictEqual(rejected.saved, []);
   assert.deepStrictEqual(rejected.custom, [{ id: 'keep' }]);
+})();
+
+// Effects (experimental): settings shape, the CSS readers the smooth preset change relies on, and that the renderer hook
+// is installed only while an effect needs it and is fully removed again.
+(async () => {
+  const { sanitizeEffects, gradientStops, parseFilter, GraphEffects } = GraphStyler;
+  assert.deepStrictEqual(sanitizeEffects(undefined), { morph: false });
+  assert.deepStrictEqual(sanitizeEffects({ morph: 'yes' }), { morph: false });
+  assert.deepStrictEqual(sanitizeEffects({ morph: true, mode: 'spin' }), { morph: true });
+
+  const stops = gradientStops('radial-gradient(circle at 50% 42%, rgba(37, 67, 92, 0.9) 0%, rgba(18, 38, 58, 0.96) 48%, rgb(11, 22, 36) 100%)');
+  assert.deepStrictEqual(stops, [[37, 67, 92, 0.9], [18, 38, 58, 0.96], [11, 22, 36, 1]]);
+  assert.strictEqual(gradientStops('none'), null);
+  assert.deepStrictEqual(parseFilter('brightness(1.3) contrast(1.12) saturate(1.5)'), { brightness: 1.3, contrast: 1.12, saturate: 1.5 });
+  assert.deepStrictEqual(parseFilter('none'), { brightness: 1, contrast: 1, saturate: 1 });
+
+  const draws = [];
+  const makeRenderer = () => ({
+    // render lives on the prototype, as on PIXI's Application; the hook adds an own property.
+    px: Object.assign(Object.create({ render() { draws.push('draw'); } }), { renderer: { width: 100, height: 100 } }),
+    changed() {}, idleFrames: 61, scale: 1, panX: 0, panY: 0, nodes: [], links: [],
+  });
+  const renderer = makeRenderer();
+  const leaves = [{ view: { renderer } }];
+  const effects = new GraphEffects({ app: { workspace: { getLeavesOfType: (type) => (type === 'graph' ? leaves : []) } } });
+  const own = () => Object.prototype.hasOwnProperty.call(renderer.px, 'render');
+  effects.set({ morph: false });
+  assert.strictEqual(own(), false, 'off: the renderer is left alone');
+  effects.set({ morph: true });
+  assert.strictEqual(own(), true, 'on: px.render is wrapped');
+  renderer.px.render();
+  assert.deepStrictEqual(draws, ['draw'], 'the wrapper still draws');
+  effects.set({ morph: false });
+  assert.strictEqual(own(), false, 'off again: the wrapper is removed');
+  effects.set({ morph: true });
+  effects.destroy();
+  assert.strictEqual(own(), false, 'unload removes the wrapper');
+  // A renderer without the private API is skipped without an error.
+  leaves[0].view.renderer = { px: {} };
+  effects.set({ morph: true });
+  assert.strictEqual(effects.atts.size, 0);
 })();
