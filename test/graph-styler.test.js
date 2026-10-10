@@ -659,6 +659,36 @@ async function presetRow(withActions) {
   return { parent, calls };
 }
 
+// A plugin with the panel open and a workspace whose 3D tabs hold real Graph3DView instances.
+async function plugin3d() {
+  const { app } = makeHarness();
+  const plugin = new GraphStyler(app);
+  const factories = {};
+  plugin.registerView = (type, make) => { factories[type] = make; };
+  let settingTab = null;
+  plugin.addSettingTab = (t) => { settingTab = t; };
+  plugin.loadData = async () => ({ custom: [] });
+  plugin.saveData = async () => {};
+  await plugin.onload();
+  const panel = factories['graph-styler-panel']({});
+  panel.contentEl = new FakeEl('div');
+  const leaves3d = [];
+  const counts = { detached: 0, revealed: 0 };
+  // a new tab gets its view a tick later, as setViewState is async in Obsidian
+  const newLeaf = () => {
+    const leaf = {
+      detach() { counts.detached += 1; leaves3d.splice(leaves3d.indexOf(leaf), 1); },
+      async setViewState(state) { await Promise.resolve(); leaf.view = factories[state.type](leaf); leaves3d.push(leaf); },
+    };
+    return leaf;
+  };
+  app.workspace.getLeavesOfType = (type) => (type === 'graph-styler-panel' ? [{ view: panel }]
+    : type === 'graph-styler-3d' ? leaves3d.slice() : []);
+  app.workspace.getLeaf = () => newLeaf();
+  app.workspace.revealLeaf = () => { counts.revealed += 1; };
+  return { plugin, panel, leaves3d, counts, newLeaf, settingTab: () => settingTab };
+}
+
 function fakeCanvas() {
   const drawn = [];
   const filters = { fill: [], draw: [] };
@@ -1502,6 +1532,20 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     const ko = await render3d(loadGraphStylerIn('ko'), { experimental3d: true });
     const koTexts = ko.group().walk().map((el) => el.text).filter(Boolean);
     for (const text of ['🧊 3D (실험)', '3D 그래프 보기', '3D 그래프 열기', '자동 회전', '회전 속도']) assert.ok(koTexts.includes(text), `missing ko text: ${text}`);
+  }
+
+  // Switching 3D on never closes an open (restored) 3D tab, from the panel (no notice) or from the Settings tab
+  // (notice); switching it off does.
+  {
+    const t = await plugin3d();
+    await t.newLeaf().setViewState({ type: 'graph-styler-3d' });
+    notices.length = 0;
+    await t.plugin.setExperimental3d(true, false);
+    assert.deepStrictEqual([t.counts.detached, t.leaves3d.length, notices.length], [0, 1, 0]);
+    await t.plugin.setExperimental3d(true);
+    assert.deepStrictEqual([t.counts.detached, t.leaves3d.length, notices], [0, 1, ['Open it from the command palette: “Graph Styler: Open 3D graph”']]);
+    await t.plugin.setExperimental3d(false);
+    assert.deepStrictEqual([t.counts.detached, t.leaves3d.length], [1, 0]);
   }
 
   // The GL texture limit caps the scale.

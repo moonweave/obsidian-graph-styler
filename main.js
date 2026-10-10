@@ -2378,8 +2378,9 @@ module.exports = class GraphStyler extends Plugin {
   async setExperimental3d(on, notice = true) {
     this.settings.experimental3d = on;
     await this.saveData(this.settings);
+    // 켤 때는 이미 열린(복원된) 3D 탭을 닫지 않는다. 닫는 것은 끌 때뿐이다.
     if (on && notice) new Notice(L.exp3dOn);
-    else for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_3D)) leaf.detach();
+    if (!on) for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_3D)) leaf.detach();
     this.refreshViews();
   }
 
