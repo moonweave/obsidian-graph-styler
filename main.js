@@ -849,6 +849,7 @@ class StylerView extends ItemView {
     btn.toggleClass('is-active', !!active);
     btn.setAttr('aria-pressed', active ? 'true' : 'false');
     btn.setAttr('aria-label', `${preset.label}${active ? ` (${L.active})` : ''}`);
+    btn.setAttr('title', preset.label);
     const swatch = btn.createSpan({ cls: 'gs-swatch' });
     for (const color of preset.swatch) {
       const dot = swatch.createSpan({ cls: 'gs-dot' });

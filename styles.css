@@ -20,6 +20,7 @@
   position: relative;
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 10px;
   width: 100%;
   padding: 11px 12px;
@@ -67,8 +68,13 @@
   outline-offset: 2px;
 }
 
+/* a long name shrinks to an ellipsis (the full name is the button's title) instead of pushing the swatch out of the button */
 .graph-styler-panel .gs-btn-label {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* theme grid: swatch above the name so two columns fit a narrow sidebar */
@@ -84,9 +90,6 @@
 .graph-styler-panel .gs-grid .gs-btn-label {
   flex: none;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .graph-styler-panel .gs-swatch {
@@ -108,8 +111,9 @@
   align-items: center;
 }
 
+/* the name ends left of the active check (right: 72px, about 13px wide once rotated) and the copy and delete buttons */
 .graph-styler-panel .gs-preset-row .gs-btn {
-  padding-right: 64px;
+  padding-right: 92px;
 }
 
 .graph-styler-panel .gs-share,

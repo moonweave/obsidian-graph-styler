@@ -1598,6 +1598,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
   }
   const [presetEl, copyEl, deleteEl] = row.children;
   assert.deepStrictEqual([copyEl.attrs.type, deleteEl.attrs.type], ['button', 'button']);
+  assert.strictEqual(presetEl.attrs.title, 'Night');
   assert.strictEqual(copyEl.attrs['aria-label'], 'Copy share code: Night');
   assert.strictEqual(deleteEl.attrs['aria-label'], 'Delete preset: Night');
   copyEl.onclick();
@@ -1619,6 +1620,17 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.ok(css.includes(`.graph-styler-panel ${selector}`), selector);
   }
   assert.ok(focusRule.includes('.graph-styler-panel .gs-group > summary:focus-visible'));
+  // A long preset name shrinks to an ellipsis instead of pushing the swatch out of the button or running under the
+  // check, copy and delete buttons: the label may shrink, the swatch may not, and the row reserves room past the check.
+  const rule = (selector) => css.slice(css.indexOf(`.graph-styler-panel ${selector} {`)).split('}')[0];
+  for (const declaration of ['min-width: 0', 'overflow: hidden', 'text-overflow: ellipsis', 'white-space: nowrap']) {
+    assert.ok(rule('.gs-btn-label').includes(declaration), `.gs-btn-label ${declaration}`);
+  }
+  assert.ok(rule('.gs-swatch').includes('flex-shrink: 0'));
+  assert.ok(rule('.gs-btn').includes('justify-content: flex-start'));
+  const reserved = Number(/padding-right: (\d+)px/.exec(rule('.gs-preset-row .gs-btn'))[1]);
+  const checkRight = Number(/right: (\d+)px/.exec(rule('.gs-preset-row .gs-btn.is-active::after'))[1]);
+  assert.ok(reserved >= checkRight + 14, `row reserves ${reserved}px, the check sits ${checkRight}px from the right`);
 
   // Full-view presets (opt-in): filters and display ride along, are sanitised, and Restore returns everything.
   const fullView = { search: 'tag:#paper', showTags: true, showAttachments: false, hideUnresolved: true, showOrphans: false, showArrow: true };
