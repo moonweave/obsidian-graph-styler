@@ -1905,6 +1905,7 @@ class Graph3DView extends ItemView {
     const c = this.canvas;
     this.registerDomEvent(c, 'pointerdown', (e) => {
       c.setPointerCapture(e.pointerId);
+      this.mouse = [e.offsetX, e.offsetY];
       this.drag = { x: e.clientX, y: e.clientY, moved: 0, pan: e.button === 2 || e.shiftKey, button: e.button };
       this.touch();
     });
@@ -1924,13 +1925,24 @@ class Graph3DView extends ItemView {
       this.mouse = [e.offsetX, e.offsetY];
       this.kick(true);
     });
-    this.registerDomEvent(c, 'pointerup', (e) => {
+    // 손을 뗀 것(pointerup)만 클릭이 될 수 있다. 시스템이 끊은 포인터(pointercancel, 캡처를 잃음)는 드래그만 끝낸다.
+    // 그러지 않으면 drag가 남아 자동 회전이 영영 멈추고, 버튼을 놓은 뒤에도 마우스를 따라 돌았다.
+    const endDrag = (e, click) => {
       const d = this.drag;
+      if (!d) return;
       this.drag = null;
       if (c.hasPointerCapture(e.pointerId)) c.releasePointerCapture(e.pointerId);
-      if (d && d.moved < 5 && d.button === 0 && this.hover >= 0) this.openNode(this.hover, e);
+      if (click && d.moved < 5 && d.button === 0) {
+        // 터치 탭에는 앞선 pointermove가 없어 호버가 없다. 뗀 자리에서 바로 골라 연다.
+        this.mouse = [e.offsetX, e.offsetY];
+        this.pick();
+        if (this.hover >= 0) this.openNode(this.hover, e);
+      }
       this.kick(true);
-    });
+    };
+    this.registerDomEvent(c, 'pointerup', (e) => endDrag(e, true));
+    this.registerDomEvent(c, 'pointercancel', (e) => endDrag(e, false));
+    this.registerDomEvent(c, 'lostpointercapture', (e) => endDrag(e, false));
     this.registerDomEvent(c, 'pointerleave', () => {
       if (this.drag) return;
       this.mouse = null;

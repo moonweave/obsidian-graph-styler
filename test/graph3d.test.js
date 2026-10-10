@@ -73,6 +73,31 @@ function stubView() {
   assert.strictEqual(calls.pick, before + 1, 'picking resumes when the drag ends');
 }
 
+// ---------------------------------------------------------------- cancelled pointers and touch taps
+// A pointer the system cancels (touch gesture, lost capture) ends the drag without opening a note; otherwise the
+// drag stayed set, Auto-rotate never resumed and the graph kept turning with no button held. A tap opens the note
+// under it even with no pointermove before it.
+{
+  for (const type of ['pointercancel', 'lostpointercapture']) {
+    const { view, calls, pointer } = stubView();
+    view.hover = 3;
+    pointer('pointerdown', 50, 50);
+    pointer('pointermove', 52, 50);
+    pointer(type, 52, 50);
+    assert.strictEqual(view.drag, null, `${type} ends the drag`);
+    pointer('pointerup', 52, 50);
+    assert.deepStrictEqual(calls.opened, [], `${type} never opens a note`);
+    view.lastInput = performance.now() - 10000;
+    assert.ok(view.rotationSpeed(performance.now()) > 0, `rotation resumes after ${type}`);
+  }
+  const { view, calls, pointer } = stubView();
+  view.pick = () => { calls.pick += 1; view.hover = view.mouse[0] === 70 ? 7 : -1; };
+  pointer('pointerdown', 70, 40, { pointerType: 'touch' });
+  assert.deepStrictEqual(view.mouse, [70, 40], 'pointerdown records the point (touch has no hover move)');
+  pointer('pointerup', 70, 40, { pointerType: 'touch' });
+  assert.deepStrictEqual(calls.opened, [7], 'a tap picks where it lands and opens that note');
+}
+
 // ---------------------------------------------------------------- data extraction
 {
   const paths = ['A.md', 'B.md', 'C.md', 'D.md'];
