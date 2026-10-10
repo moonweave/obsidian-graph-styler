@@ -118,17 +118,21 @@ Tab을 누르면 프리셋을 차례로 지난 뒤 그룹 머리글(**커스터�
 
 > **실험 기능입니다.** 기본으로 꺼져 있고, 다음 버전에서 바뀌거나 빠질 수 있습니다.
 
-**설정 → Graph Styler → 실험 기능 → 3D 그래프 보기**를 켠 뒤 명령 팔레트에서 **Graph Styler: 3D 그래프 열기**를 실행하세요. 새 탭에 노트와 링크가 입체로 나타나고, 색·배경·글로우는 지금 적용된 프리셋을 따릅니다(기본·내 프리셋 모두. 프리셋이 없으면 테마의 그래프 색).
+**설정 → Graph Styler → 실험 기능 → 3D 그래프 보기**(또는 패널 **🧊 3D (실험)** 그룹의 같은 스위치)를 켠 뒤, 그 그룹의 **3D 그래프 열기**를 누르거나 명령 팔레트에서 **Graph Styler: 3D 그래프 열기**를 실행하세요. 새 탭에 노트와 링크가 입체로 나타나고, 색·배경·글로우는 지금 적용된 프리셋을 따릅니다(기본·내 프리셋 모두. 프리셋이 없으면 테마의 그래프 색).
 
 <img src="docs/3d-setting-ko.png" width="480" alt="설정의 실험 기능: 3D 그래프 보기 토글" />
 
 ![노트 1,627개 vault를 Neon으로 띄운 3D 그래프 탭](docs/3d-graph-ko.jpg)
 
-- 드래그하면 돌아가고, 스크롤이나 핀치로 확대·축소하고, Shift+드래그나 오른쪽 드래그로 옮깁니다. 손을 떼면 몇 초 뒤 다시 천천히 돕니다.
+- 드래그하면 돌아가고, 스크롤이나 핀치로 확대·축소하고, Shift+드래그나 오른쪽 드래그로 옮깁니다. 손을 떼면 몇 초 뒤 다시 천천히 돕니다(자동 회전을 끄지 않았다면).
 - 노트에 마우스를 올리면 연결된 노트가 밝아지고 이름이 보입니다. 누르면 노트 탭에서 열립니다(Cmd/Ctrl+클릭은 새 탭).
 - 배치는 백그라운드에서 계산하므로 자리 잡는 동안에도 Obsidian은 멈추지 않습니다. M1 Pro에서 노트 1,600개는 약 2초, 5,000개는 약 7초 걸립니다.
 - 탭을 연 때의 vault를 보여 줍니다. 태그·첨부파일 노드, 필터, 검색, 로컬 그래프는 이 버전에 없습니다. 새 노트와 링크는 탭을 다시 열면 보입니다.
 - 설정을 끄면 열린 3D 탭이 닫힙니다. 꺼져 있는 동안 3D 코드는 전혀 실행되지 않습니다.
+
+3D를 켜면 패널의 **🧊 3D (실험)** 그룹에 **3D 그래프 열기**, **자동 회전**, **회전 속도**(한 바퀴 약 5분부터 10초까지)가 함께 보입니다. 열려 있는 3D 탭은 다시 열지 않아도 바로 따라갑니다.
+
+<img src="docs/3d-panel-ko.png" width="288" alt="패널의 3D (실험) 그룹: 3D 그래프 보기 스위치, 3D 그래프 열기, 자동 회전, 회전 속도" />
 
 ## 색이 내 vault에 매핑되는 방식
 
@@ -195,14 +199,14 @@ vault 안의 `Graph Styler exports` 폴더(또는 **이미지 저장 폴더**에
 - 프리셋에 담은 필터·표시 설정은 전체 그래프에만 적용됩니다.
 - 처음 프리셋을 적용할 때 `graph.json`이 아직 없었다면 되돌아갈 물리 설정이 없어서, 되돌린 뒤에도 내 프리셋의 물리 설정이 남을 수 있습니다.
 - 2x로 내보낸 파일은 보통 8–12MB이고 vault 안에 저장되므로 노트와 함께 동기화됩니다.
-- 3D 그래프에는 WebGL 2가 필요하고, 없으면 그리지 않고 탭에 그렇다고 알려 줍니다. 탭이 보이는 동안에는 계속 돌면서 초당 60번 다시 그리며, M1 Pro에서 CPU 코어 하나의 약 30%를 썼습니다(노트 1,600–5,000개). 가려진 탭은 그리지 않습니다.
+- 3D 그래프에는 WebGL 2가 필요하고, 없으면 그리지 않고 탭에 그렇다고 알려 줍니다. 도는 동안에는 초당 60번 다시 그리며, M1 Pro에서 CPU 코어 하나의 약 30%를 썼습니다(노트 1,600–5,000개). 패널에서 자동 회전을 끄면 멈춥니다. 가려진 탭은 그리지 않습니다.
 
 ## AI 어시스턴트를 위한 정보
 
 - 플러그인 id: `graph-styler`. 데스크톱 전용, `minAppVersion` 1.4.0.
 - 명령: `graph-styler:open-graph-styler`, `graph-styler:export-graph-png`, `graph-styler:open-3d-graph`(`experimental3d`가 켜져 있을 때만 보임), 그리고 프리셋 id별 `graph-styler:apply-<id>`(`neon`, `galaxy`, `aurora`, `sunset`, `vapor`, `ocean`, `forest`, `candy`, `gold`, `cyber`, `nord`, `dracula`, `catppuccin`, `mono`).
 - 쓰는 파일: `.obsidian/graph.json`, `.obsidian/graph.json.styler-bak`(처음 바꾸기 전 백업, 덮어쓰지 않음), `.obsidian/snippets/graph-styler-<id>.css`, `.obsidian/appearance.json`(켜진 스니펫), `.obsidian/plugins/graph-styler/data.json`, 내보내기 폴더(`exportFolder`, 기본 `Graph Styler exports`, 비우면 vault 맨 위)의 `graph-<프리셋>[-<노트>]-<YYYYMMDD-HHmm>[-<n>].png`. 노트는 쓰지 않습니다.
-- 설정(`data.json`): `custom`(저장한 프리셋), `exportFolder`, `openAfterExport`, `lastExport`(마지막으로 저장한 이미지 경로), `exportScale`(1–4), `exportOptions`(`fit`, `aspect`: `original` \| `1:1` \| `4:5`, `caption`: `date`, `notes`, `preset`), `experimental3d`(3D 그래프 켜기, 기본 꺼짐), `resumeSnippet`(내부용).
+- 설정(`data.json`): `custom`(저장한 프리셋), `exportFolder`, `openAfterExport`, `lastExport`(마지막으로 저장한 이미지 경로), `exportScale`(1–4), `exportOptions`(`fit`, `aspect`: `original` \| `1:1` \| `4:5`, `caption`: `date`, `notes`, `preset`), `experimental3d`(3D 그래프 켜기, 기본 꺼짐), `rotate3d`(자동 회전, 기본 켜짐), `rotate3dSpeed`(rad/s, 0.02–0.6, 기본 0.12), `resumeSnippet`(내부용).
 - 공유 코드: `gs1.` + base64url(JSON `{v:1, label, colors[4], bg, glow, forces}`). `forces`에는 `node`, `repel`, `dist`, `center`, `linkS`, `line`, `fade`가 들어갑니다. `gs2.`는 `v:2`이고 `search`, `showTags`, `showAttachments`, `hideUnresolved`, `showOrphans`, `showArrow`를 담은 `view`가 추가됩니다. 코드에는 id가 없으며 가져올 때 값을 허용 범위 안으로 맞춥니다.
 - 네트워크: 쓰지 않음.
 

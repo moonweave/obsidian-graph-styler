@@ -102,6 +102,10 @@ const STRINGS = {
     noWebgl3d: 'The 3D graph needs WebGL 2, which is not available here.',
     lost3d: 'Drawing paused because the graphics context was lost. It resumes when the system gives it back.',
     empty3d: 'There are no notes to show yet.',
+    group3d: '🧊 3D (experimental)',
+    panel3dNote: 'A new tab with your notes and links in 3D, in the colours of the current preset.',
+    rotate3d: 'Auto-rotate',
+    rotate3dSpeed: 'Rotation speed',
     f: {
       colors: 'Group colors', bg: 'Background', glow: 'Glow',
       repel: 'Repel', dist: 'Link distance', center: 'Center', linkS: 'Link force',
@@ -184,6 +188,10 @@ const STRINGS = {
     noWebgl3d: '3D 그래프에는 WebGL 2가 필요한데, 여기서는 쓸 수 없어요.',
     lost3d: '그래픽 문맥을 잃어 그리기를 멈췄어요. 시스템이 돌려주면 다시 그려요.',
     empty3d: '아직 보여 줄 노트가 없어요.',
+    group3d: '🧊 3D (실험)',
+    panel3dNote: '새 탭에 노트와 링크를 지금 프리셋의 색으로 입체로 보여 줘요.',
+    rotate3d: '자동 회전',
+    rotate3dSpeed: '회전 속도',
     f: {
       colors: '그룹 색', bg: '배경', glow: '글로우',
       repel: '반발력', dist: '링크 거리', center: '중심력', linkS: '링크력',
@@ -925,6 +933,7 @@ class StylerView extends ItemView {
     this.buildCustomize(c);
     this.buildShare(c);
     this.buildExport(c);
+    this.build3d(c);
 
     // Restore acts on the whole vault, so it sits apart from the groups as a quiet footer action.
     const footer = c.createDiv({ cls: 'gs-footer' });
@@ -1107,6 +1116,51 @@ class StylerView extends ItemView {
     openRow.createSpan({ text: L.exportOpenAfter });
   }
 
+  // 실험 기능이라 접힌 그룹 하나에 모은다. 켜기 전에는 켜는 토글만 보인다. 설정 탭의 토글과 같은 값이라
+  // 어느 쪽에서 바꿔도 같고, 끄면 열린 3D 탭이 닫힌다.
+  build3d(parent) {
+    const plugin = this.plugin;
+    const c = this.group(parent, 'graph3d', L.group3d);
+    const onRow = c.createEl('label', { cls: 'gs-row gs-check' });
+    const onBox = onRow.createEl('input', { cls: 'gs-3d-switch' });
+    onBox.type = 'checkbox';
+    onBox.checked = !!plugin.settings.experimental3d;
+    // 바로 아래에 열기 버튼이 생기므로 '명령 팔레트에서 여세요' 알림은 띄우지 않는다.
+    // 켜고 끄면 패널을 다시 그려 이 체크박스가 새로 만들어지므로, 키보드 포커스를 새 체크박스로 옮긴다.
+    onBox.onchange = async () => {
+      await plugin.setExperimental3d(onBox.checked, false);
+      const again = this.contentEl.querySelector('.gs-3d-switch');
+      if (again) again.focus();
+    };
+    onRow.createSpan({ text: L.exp3dName });
+    c.createEl('p', { text: L.panel3dNote, cls: 'gs-note' });
+    if (!plugin.settings.experimental3d) return;
+
+    const openBtn = c.createEl('button', { cls: 'gs-open-3d', text: L.open3dCmd });
+    openBtn.onclick = () => plugin.open3d();
+    const rotateRow = c.createEl('label', { cls: 'gs-row gs-check' });
+    const rotateBox = rotateRow.createEl('input');
+    rotateBox.type = 'checkbox';
+    rotateBox.checked = plugin.rotate3d;
+    rotateRow.createSpan({ text: L.rotate3d });
+    const speedRow = c.createDiv({ cls: 'gs-row' });
+    speedRow.createSpan({ cls: 'gs-row-label', text: L.rotate3dSpeed });
+    const speed = speedRow.createEl('input');
+    speed.type = 'range';
+    speed.min = String(ROTATE_3D_MIN);
+    speed.max = String(ROTATE_3D_MAX);
+    speed.step = '0.01';
+    speed.value = String(plugin.rotate3dSpeed);
+    speed.disabled = !plugin.rotate3d;
+    rotateBox.onchange = () => {
+      speed.disabled = !rotateBox.checked;
+      plugin.setRotate3d(rotateBox.checked);
+    };
+    // 슬라이더를 움직이는 동안에는 열린 3D 탭에만 바로 반영하고, 놓을 때 한 번 저장한다.
+    speed.oninput = () => plugin.setRotate3dSpeed(Number(speed.value), false);
+    speed.onchange = () => plugin.setRotate3dSpeed(Number(speed.value), true);
+  }
+
   rawFromDraft(id) {
     const d = this.plugin.draft;
     return {
@@ -1143,7 +1197,9 @@ const VIEW_TYPE_3D = 'graph-styler-3d';
 // 자동 회전과 배치 애니메이션은 60fps로 묶는다. 120Hz 화면에서 CPU를 3분의 1쯤 덜 쓴다(실측 33–45% → 23–30%).
 // 드래그·확대처럼 입력이 있는 프레임은 화면 주사율대로 바로 그린다.
 const FPS_3D = 60;
-const ROTATE_3D = 0.12;     // rad/s
+const ROTATE_3D = 0.12;     // rad/s, 기본 회전 속도(한 바퀴 약 52초)
+const ROTATE_3D_MIN = 0.02; // 한 바퀴 약 5분
+const ROTATE_3D_MAX = 0.6;  // 한 바퀴 약 10초
 const IDLE_3D_MS = 3000;    // 마지막 입력 뒤 회전이 다시 시작될 때까지
 const EASE_3D_MS = 1500;    // 다시 시작한 회전이 제 속도에 이를 때까지
 
@@ -1903,10 +1959,17 @@ class Graph3DView extends ItemView {
   }
 
   rotationSpeed(t) {
-    if (this.drag) return 0;
-    if (!this.lastInput) return ROTATE_3D;
+    const base = this.plugin.rotate3d ? this.plugin.rotate3dSpeed : 0;
+    if (this.drag || !base) return 0;
+    if (!this.lastInput) return base;
     const k = Math.max(0, Math.min(1, (t - this.lastInput - IDLE_3D_MS) / EASE_3D_MS));
-    return ROTATE_3D * k * k * (3 - 2 * k);
+    return base * k * k * (3 - 2 * k);
+  }
+
+  // 자동 회전을 다시 켜면 멈춰 있던 그래프가 툭 출발하지 않게, 입력이 끝난 뒤처럼 천천히 속도를 올린다.
+  resumeRotation() {
+    if (this.plugin.rotate3d && !this.drag) this.lastInput = performance.now() - IDLE_3D_MS;
+    this.kick();
   }
 
   panBy(dx, dy) {
@@ -2212,6 +2275,8 @@ module.exports = class GraphStyler extends Plugin {
     this.exportOptions = sanitizeExportOptions(this.settings.exportOptions);
     this.exportFolder = exportFolderPath(this.settings.exportFolder);
     this.openAfterExport = this.settings.openAfterExport !== false;
+    this.rotate3d = this.settings.rotate3d !== false;
+    this.rotate3dSpeed = finiteRange(this.settings.rotate3dSpeed, ROTATE_3D, ROTATE_3D_MIN, ROTATE_3D_MAX);
     this.currentPreset = null;
 
     // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
@@ -2309,22 +2374,62 @@ module.exports = class GraphStyler extends Plugin {
     }
   }
 
+  // 3D 탭(= WebGL 문맥)은 하나만 연다. 이미 있으면 그 탭을 보여 주고, 여는 중에 다시 누르면 같은 열기를 기다린다.
   async open3d() {
-    await this.app.workspace.getLeaf('tab').setViewState({ type: VIEW_TYPE_3D, active: true });
+    if (!this.opening3d) {
+      this.opening3d = (async () => {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(VIEW_TYPE_3D)[0];
+        if (!leaf) {
+          leaf = workspace.getLeaf('tab');
+          await leaf.setViewState({ type: VIEW_TYPE_3D, active: true });
+        }
+        workspace.revealLeaf(leaf);
+      })();
+    }
+    try {
+      await this.opening3d;
+    } finally {
+      this.opening3d = null;
+    }
   }
 
-  async setExperimental3d(on) {
+  // 설정 탭과 패널 어느 쪽에서 바꿔도 패널을 다시 그려 두 토글이 같은 값을 보인다.
+  // notice=false: 켜는 곳(패널)에 이미 열기 버튼이 있어 명령 안내가 필요 없을 때.
+  async setExperimental3d(on, notice = true) {
     this.settings.experimental3d = on;
     await this.saveData(this.settings);
-    if (on) new Notice(L.exp3dOn);
-    else for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_3D)) leaf.detach();
+    // 켤 때는 이미 열린(복원된) 3D 탭을 닫지 않는다. 닫는 것은 끌 때뿐이다.
+    if (on && notice) new Notice(L.exp3dOn);
+    if (!on) for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_3D)) leaf.detach();
+    // 꺼져 있을 때 복원된 탭은 '꺼져 있음' 안내만 띄운 채라, 켜면 그 자리에서 다시 열어 그리게 한다.
+    else for (const view of this.views3d()) if (!view.canvas) view.onOpen();
+    this.refreshViews();
+  }
+
+  async setRotate3d(on) {
+    this.rotate3d = !!on;
+    this.settings.rotate3d = this.rotate3d;
+    for (const view of this.views3d()) view.resumeRotation();
+    await this.saveData(this.settings);
+  }
+
+  // 열린 3D 탭은 매 프레임 이 값을 읽는다. 각도에 속도를 쌓아 가므로 값을 바꿔도 화면이 튀지 않는다.
+  // 0이나 음수도 최솟값으로 올린다. 회전을 멈추는 스위치는 자동 회전 하나뿐이다.
+  async setRotate3dSpeed(value, save) {
+    this.rotate3dSpeed = finiteRange(value, ROTATE_3D, ROTATE_3D_MIN, ROTATE_3D_MAX);
+    this.settings.rotate3dSpeed = this.rotate3dSpeed;
+    for (const view of this.views3d()) view.kick();
+    if (save) await this.saveData(this.settings);
+  }
+
+  views3d() {
+    return this.app.workspace.getLeavesOfType(VIEW_TYPE_3D).map((leaf) => leaf.view).filter((view) => view instanceof Graph3DView);
   }
 
   // 프리셋을 바꾸면 열린 3D 그래프도 새 색을 쓴다(테마 전환은 3D 뷰가 css-change로 직접 받는다).
   refresh3d() {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_3D)) {
-      if (leaf.view instanceof Graph3DView) leaf.view.applyStyle();
-    }
+    for (const view of this.views3d()) view.applyStyle();
   }
 
   // 찍을 그래프: 활성 leaf가 그래프·로컬 그래프면 그것(명령 팔레트), 아니면 가장 최근에 활성이던 것
