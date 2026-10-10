@@ -1911,14 +1911,15 @@ class Graph3DView extends ItemView {
   }
 
   // 노드별 값(위치·색)을 굵은 링크용 텍스처에 올린다. 텍스처는 가로 TEX_W_3D칸으로 접은 RGB32F.
+  // 꽉 찬 줄과 마지막 줄을 원본 배열에서 바로 올려, 배치가 도는 동안 매번 새 배열을 만들지 않는다.
   uploadNodeTexture(tex, values) {
     const gl = this.gl;
     const n = this.data.n;
-    const h = Math.ceil(n / TEX_W_3D);
-    const padded = new Float32Array(TEX_W_3D * h * 3);
-    padded.set(values.subarray(0, n * 3));
+    const rows = Math.floor(n / TEX_W_3D);
+    const rest = n - rows * TEX_W_3D;
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TEX_W_3D, h, gl.RGB, gl.FLOAT, padded);
+    if (rows) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TEX_W_3D, rows, gl.RGB, gl.FLOAT, values, 0);
+    if (rest) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, rows, rest, 1, gl.RGB, gl.FLOAT, values, rows * TEX_W_3D * 3);
   }
 
   startLayout() {
@@ -2012,7 +2013,7 @@ class Graph3DView extends ItemView {
       return t;
     };
     this.tex = { pos: texture(), col: texture() };
-    this.uploadNodeTexture(this.tex.pos, this.pos);
+    this.posTexStale = true;
     this.uploadNodeTexture(this.tex.col, col);
     const attr = (loc, b, n, divisor) => {
       gl.bindBuffer(gl.ARRAY_BUFFER, b);
@@ -2284,7 +2285,7 @@ class Graph3DView extends ItemView {
       this.posDirty = false;
       gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.pos);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.pos);
-      this.uploadNodeTexture(this.tex.pos, this.pos);
+      this.posTexStale = true;
       if (!this.userMoved) {
         this.fit = this.measureFit();
         this.cam.dist = this.shownDist = this.fitDistance();
@@ -2332,6 +2333,11 @@ class Graph3DView extends ItemView {
     gl.uniform1f(P.u.uLight, light);
     gl.uniform1f(P.u.uAlpha, baseAlpha * (hovering ? 0.3 : 1));
     if (lines.thick) {
+      // 위치 텍스처는 굵은 선에만 쓰므로, 기본 굵기에서는 배치가 도는 동안에도 올리지 않는다.
+      if (this.posTexStale) {
+        this.posTexStale = false;
+        this.uploadNodeTexture(this.tex.pos, this.pos);
+      }
       gl.uniform2f(P.u.uView, c.width, c.height);
       gl.uniform1f(P.u.uWidth, lines.width);
       gl.uniform1i(P.u.uTexW, TEX_W_3D);

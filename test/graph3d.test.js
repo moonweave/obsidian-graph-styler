@@ -410,6 +410,40 @@ function stubView() {
     assert.ok(Math.abs(view.size[0] - want) < 1e-5, 'hover radius follows');
   });
 }
+{
+  // the position texture only feeds thick links: the default 1 px path never uploads it, even while the layout moves
+  // nodes; thick links upload it once per layout step, straight from the positions array (full rows, then the rest)
+  const { view } = stubView();
+  let bound = null;
+  const posUploads = [];
+  view.gl = new Proxy({}, { get: (t, k) => {
+    if (/^[A-Z0-9_]+$/.test(k)) return k;
+    if (k === 'bindTexture') return (target, tex) => { bound = tex; };
+    if (k === 'texSubImage2D') return (...a) => { if (bound === 'posTex') posUploads.push(a); };
+    return () => ({});
+  } });
+  const prog = { p: {}, u: new Proxy({}, { get: (t, k) => k }) };
+  view.prog = { bg: prog, line: prog, thick: prog, halo: prog, core: prog };
+  view.buf = {};
+  view.tex = { pos: 'posTex', col: 'colTex' };
+  view.data = { n: 1500, links: Uint32Array.from([0, 1]) };
+  view.pos = new Float32Array(1500 * 3);
+  view.userMoved = true;
+  view.posTexStale = true;
+  view.draw = Graph3DView.prototype.draw;
+  view.style = { bg: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], line: [1, 1, 1], light: false, lineSize: 1 };
+  for (let i = 0; i < 2; i++) { view.posDirty = true; view.draw(); }
+  assert.strictEqual(posUploads.length, 0, 'default width: no position texture uploads');
+  view.style.lineSize = 3;
+  view.draw();
+  assert.strictEqual(posUploads.length, 2, 'thick: one full row of 1024 nodes, then the last 476');
+  assert.deepStrictEqual(posUploads.map((a) => [a[4], a[5], a[8] === view.pos, a[9]]), [[1024, 1, true, 0], [476, 1, true, 1024 * 3]]);
+  view.draw();
+  assert.strictEqual(posUploads.length, 2, 'nodes did not move: no upload');
+  view.posDirty = true;
+  view.draw();
+  assert.strictEqual(posUploads.length, 4, 'next layout step: uploaded again');
+}
 
 // ---------------------------------------------------------------- data extraction
 {
