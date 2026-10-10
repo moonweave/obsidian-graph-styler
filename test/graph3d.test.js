@@ -316,6 +316,36 @@ function stubView() {
 
 // ---------------------------------------------------------------- node size and link width follow the graph settings
 // Every mapping is a ratio to Obsidian's own defaults (1 and 1), so a vault on the defaults draws exactly as before.
+
+// A WebGL2 stand-in that records every call as [name, ...args]. Constants read as their own names, create* calls return
+// fresh objects, shaders compile and programs link (with no active uniforms).
+function recordingGl() {
+  const calls = [];
+  let id = 0;
+  const own = { calls, isContextLost: () => false, getShaderParameter: () => true, getExtension: () => null,
+    getProgramParameter: (p, what) => (what === 'ACTIVE_UNIFORMS' ? 0 : true) };
+  return new Proxy(own, { get: (t, k) => {
+    if (k in t) return t[k];
+    if (typeof k !== 'string') return undefined;
+    if (/^[A-Z0-9_]+$/.test(k)) return k;
+    return (...a) => { calls.push([k, ...a]); return k.startsWith('create') ? { id: ++id, kind: k } : undefined; };
+  } });
+}
+// What each buffer / texture received, keyed by the object bound when the data went up: buffer data, or the
+// texSubImage2D arguments (target, level, x, y, w, h, format, type, src, srcOffset).
+function uploads(calls) {
+  const bound = {};
+  const got = new Map();
+  const put = (obj, v) => { if (!got.has(obj)) got.set(obj, []); got.get(obj).push(v); };
+  for (const [name, ...a] of calls) {
+    if (name === 'bindBuffer' || name === 'bindTexture') bound[a[0]] = a[1];
+    else if (name === 'bufferSubData') put(bound[a[0]], a[2]);
+    else if (name === 'bufferData') put(bound[a[0]], a[1]);
+    else if (name === 'texSubImage2D') put(bound[a[0]], a);
+  }
+  return got;
+}
+
 {
   assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 1 }, 'nodeSizeMultiplier'), 1);
   assert.strictEqual(displayRatio3d({}, 'nodeSizeMultiplier'), 1, 'not set = Obsidian default');
@@ -323,6 +353,9 @@ function stubView() {
   assert.strictEqual(displayRatio3d({ lineSizeMultiplier: 40 }, 'lineSizeMultiplier'), 5, 'hand-edited values clamp to the slider range');
   assert.strictEqual(displayRatio3d({ lineSizeMultiplier: 0 }, 'lineSizeMultiplier'), 0.1);
   assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 'big' }, 'nodeSizeMultiplier'), 1);
+  for (const bad of [NaN, Infinity, -Infinity, null, true, false, [2], '2', undefined]) {
+    assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: bad }, 'nodeSizeMultiplier'), 1, `${String(bad)}: the default`);
+  }
   assert.deepStrictEqual(lineMode3d(1), { thick: false, alpha: 1, width: 1 }, 'default: the 1 px lines as before');
   assert.deepStrictEqual(lineMode3d(0.3), { thick: false, alpha: 0.3, width: 1 }, 'thinner = fainter 1 px lines');
   assert.deepStrictEqual(lineMode3d(3), { thick: true, alpha: 1, width: 3 }, 'thicker = 3 px quads');
@@ -370,10 +403,15 @@ function stubView() {
   assert.strictEqual(view.hover, 0, 'node size x2: the same point now hovers it');
 }
 {
-  // a 2D graph-settings change (graph.json rewritten) reaches an open 3D tab, debounced, without touching the camera
+  // a 2D graph-settings change (graph.json rewritten) reaches an open 3D tab: a burst of writes leaves one re-style
+  // pending, 200 ms after the last; other config files are ignored; the camera is untouched; closing the tab drops a
+  // pending re-style
   const { view, win } = stubView();
-  const timers = [];
-  win.setTimeout = (cb) => { timers.push(cb); return timers.length; };
+  const timers = new Map();
+  let nextTimer = 0;
+  win.setTimeout = (cb, ms) => { timers.set(++nextTimer, { cb, ms }); return nextTimer; };
+  win.clearTimeout = (id) => { timers.delete(id); };
+  const fireAll = () => { const due = [...timers.values()]; timers.clear(); due.forEach((t) => t.cb()); };
   const raw = [];
   view.app = { workspace: { on: () => ({}) }, vault: { on: (name, cb) => { raw.push(cb); return {}; } } };
   view.plugin.graphPath = () => '.obsidian/graph.json';
@@ -387,62 +425,132 @@ function stubView() {
   view.onOpen().then(() => {
     const cam = JSON.stringify(view.cam);
     raw.forEach((cb) => cb('.obsidian/workspace.json'));
-    assert.strictEqual(timers.length, 0, 'other config files are ignored');
+    assert.strictEqual(timers.size, 0, 'other config files are ignored');
     for (let i = 0; i < 5; i++) raw.forEach((cb) => cb('.obsidian/graph.json'));
-    timers[timers.length - 1]();
-    assert.deepStrictEqual([applied, JSON.stringify(view.cam)], [1, cam], 'one re-style for a burst of writes, camera untouched');
+    assert.deepStrictEqual([...timers.values()].map((t) => t.ms), [200], 'a burst of writes leaves one pending re-style');
+    fireAll();
+    assert.deepStrictEqual([applied, JSON.stringify(view.cam)], [1, cam], 'one re-style for the burst, camera untouched');
+    raw.forEach((cb) => cb('.obsidian/graph.json'));
+    view.gl = null;
+    return view.onClose();
+  }).then(() => {
+    assert.strictEqual(timers.size, 0, 'closing the tab drops the pending re-style');
+    fireAll();
+    assert.strictEqual(applied, 1);
   });
 }
 {
-  // applyStyle pushes the new sizes to the GPU and to the hover radius
+  // applyStyle pushes the new colours and sizes to the GPU (vertex buffers and the thick links' colour texture) and to
+  // the hover radius
   const { view } = stubView();
-  const uploads = [];
-  view.gl = { isContextLost: () => false, ARRAY_BUFFER: 1, TEXTURE_2D: 2, RGB: 3, FLOAT: 4,
-    bindBuffer() {}, bufferSubData: (t, o, data) => uploads.push(data), bindTexture() {}, texSubImage2D() {} };
-  view.buf = { col: {}, size: {} };
-  view.tex = { col: {} };
+  const gl = view.gl = recordingGl();
+  view.buf = { col: 'colBuf', size: 'sizeBuf' };
+  view.tex = { col: 'colTex' };
   view.data = { n: 2, deg: Uint32Array.from([1, 1]) };
   view.files = [{ path: 'a.md' }, { path: 'b.md' }];
-  view.readStyle = async () => ({ groups: [], fill: [1, 1, 1], nodeSize: 3, lineSize: 1 });
+  view.readStyle = async () => ({ groups: [], fill: [0.5, 0.25, 1], nodeSize: 3, lineSize: 1 });
   view.applyStyle().then(() => {
     const want = (2.2 + 1.1) * 3;
-    assert.ok(uploads.some((u) => u.length === 2 && Math.abs(u[0] - want) < 1e-5), 'size buffer re-uploaded');
+    const got = uploads(gl.calls);
+    assert.deepStrictEqual(Array.from(got.get('sizeBuf')[0]).map((v) => +v.toFixed(5)), [want, want].map((v) => +v.toFixed(5)), 'size buffer');
+    assert.deepStrictEqual(Array.from(got.get('colBuf')[0]), [0.5, 0.25, 1, 0.5, 0.25, 1], 'colour buffer');
+    assert.strictEqual(got.get('colTex').length, 1, 'colour texture');
+    assert.strictEqual(got.get('colTex')[0][8], got.get('colBuf')[0], 'the same colours, no copy');
     assert.ok(Math.abs(view.size[0] - want) < 1e-5, 'hover radius follows');
   });
 }
 {
-  // the position texture only feeds thick links: the default 1 px path never uploads it, even while the layout moves
-  // nodes; thick links upload it once per layout step, straight from the positions array (full rows, then the rest)
+  // initGL fills the thick links' colour texture and marks the position texture stale (filled before thick links read
+  // it); a context restore builds everything anew without deleting the objects of the lost context
   const { view } = stubView();
-  let bound = null;
-  const posUploads = [];
-  view.gl = new Proxy({}, { get: (t, k) => {
-    if (/^[A-Z0-9_]+$/.test(k)) return k;
-    if (k === 'bindTexture') return (target, tex) => { bound = tex; };
-    if (k === 'texSubImage2D') return (...a) => { if (bound === 'posTex') posUploads.push(a); };
-    return () => ({});
-  } });
-  const prog = { p: {}, u: new Proxy({}, { get: (t, k) => k }) };
-  view.prog = { bg: prog, line: prog, thick: prog, halo: prog, core: prog };
-  view.buf = {};
+  const gl = view.gl = recordingGl();
+  view.data = graphData3d(['a.md', 'b.md', 'c.md'], { 'a.md': { 'b.md': 1 } });
+  view.files = [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md' }];
+  view.pos = new Float32Array(9);
+  view.hi = new Float32Array(3);
+  view.style = { groups: [], fill: [1, 1, 1], nodeSize: 1, lineSize: 1 };
+  view.label = { toggleClass() {} };
+  view.initGL();
+  assert.strictEqual(view.posTexStale, true, 'a new position texture is filled before thick links read it');
+  const got = uploads(gl.calls);
+  assert.deepStrictEqual(got.get(view.tex.col).map((a) => a[8]), [got.get(view.buf.col)[0]], 'colour texture filled with the colours');
+  const old = { tex: view.tex, vaoThick: view.vaoThick, buf: view.buf };
+  gl.calls.length = 0;
+  view.restoreGL();
+  // (deleteShader only frees the new shaders once linked)
+  assert.deepStrictEqual(gl.calls.filter(([n]) => n.startsWith('delete') && n !== 'deleteShader').map(([n]) => n), [], 'nothing of the lost context is deleted');
+  assert(view.tex !== old.tex && view.vaoThick !== old.vaoThick && view.buf !== old.buf, 'all rebuilt');
+}
+{
+  // hovering uploads the node's links twice: as indices for the 1 px pass and as instance pairs for the thick pass
+  const { view } = stubView();
+  const gl = view.gl = recordingGl();
+  view.data = graphData3d(['a.md', 'b.md', 'c.md'], { 'a.md': { 'b.md': 1, 'c.md': 1 } });
+  view.files = [{ path: 'a.md', basename: 'a' }, { path: 'b.md', basename: 'b' }, { path: 'c.md', basename: 'c' }];
+  view.hi = new Float32Array(3);
+  view.buf = { hi: 'hiBuf', hiLinks: 'hiIdx', hiPairs: 'hiPairs' };
+  view.label = { setText() {}, toggleClass() {} };
+  view.hover = -1;
+  view.setHover(0);
+  const got = uploads(gl.calls);
+  assert.deepStrictEqual(Array.from(got.get('hiIdx')[0]), [0, 1, 0, 2]);
+  assert.deepStrictEqual(Array.from(got.get('hiPairs')[0]), [0, 1, 0, 2]);
+  assert.strictEqual(view.hiCount, 4);
+}
+{
+  // the link pass. Link thickness 1 or less: 1 px lines, fainter below 1 (0.4 -> alpha x0.4). Above 1: one instanced
+  // quad per link, as wide as the thickness in device px, endpoints from node textures 1024 wide. A hovered node's links
+  // are drawn again on top. The position texture only feeds thick links: uploaded straight from the positions array
+  // (full rows, then the rest), once per layout step.
+  const { view } = stubView();
+  const gl = view.gl = recordingGl();
+  const prog = (name) => ({ p: name, u: new Proxy({}, { get: (t, k) => k }) });
+  view.prog = { bg: prog('bg'), line: prog('line'), thick: prog('thick'), halo: prog('halo'), core: prog('core') };
+  view.buf = { pos: 'posBuf', links: 'linkIdx', hiLinks: 'hiIdx', linkPairs: 'pairs', hiPairs: 'hiPairs' };
   view.tex = { pos: 'posTex', col: 'colTex' };
-  view.data = { n: 1500, links: Uint32Array.from([0, 1]) };
+  view.data = { n: 1500, links: Uint32Array.from([0, 1, 1, 2, 2, 3]) };
   view.pos = new Float32Array(1500 * 3);
   view.userMoved = true;
   view.posTexStale = true;
+  view.hover = -1;
   view.draw = Graph3DView.prototype.draw;
-  view.style = { bg: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], line: [1, 1, 1], light: false, lineSize: 1 };
-  for (let i = 0; i < 2; i++) { view.posDirty = true; view.draw(); }
-  assert.strictEqual(posUploads.length, 0, 'default width: no position texture uploads');
-  view.style.lineSize = 3;
-  view.draw();
-  assert.strictEqual(posUploads.length, 2, 'thick: one full row of 1024 nodes, then the last 476');
-  assert.deepStrictEqual(posUploads.map((a) => [a[4], a[5], a[8] === view.pos, a[9]]), [[1024, 1, true, 0], [476, 1, true, 1024 * 3]]);
-  view.draw();
-  assert.strictEqual(posUploads.length, 2, 'nodes did not move: no upload');
+  view.style = { bg: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], line: [1, 1, 1], light: false, lineSize: 0.4 };
+  // the calls made while a program is in use
+  const pass = (name) => { const out = []; let cur = null; for (const c of gl.calls) { if (c[0] === 'useProgram') cur = c[1]; else if (cur === name) out.push(c); } return out; };
+  const draws = (calls) => calls.filter(([n]) => n.startsWith('draw'));
+  const uniform = (calls, u) => calls.filter(([n, loc]) => n.startsWith('uniform') && loc === u).map((c) => c[2]);
+  const frame = (hover, hiCount) => { gl.calls.length = 0; view.hover = hover; view.hiCount = hiCount; view.draw(); };
+  const posUploads = () => uploads(gl.calls).get('posTex') || [];
+
   view.posDirty = true;
-  view.draw();
-  assert.strictEqual(posUploads.length, 4, 'next layout step: uploaded again');
+  frame(-1, 0);
+  assert.deepStrictEqual(draws(pass('line')), [['drawElements', 'LINES', 6, 'UNSIGNED_INT', 0]]);
+  assert.deepStrictEqual(uniform(pass('line'), 'uAlpha'), [0.22 * 0.4], 'thinner = fainter');
+  assert.deepStrictEqual([pass('thick').length, posUploads().length], [0, 0], 'no thick pass, no position texture');
+  frame(1, 4);
+  assert.deepStrictEqual(draws(pass('line')), [['drawElements', 'LINES', 6, 'UNSIGNED_INT', 0], ['drawElements', 'LINES', 4, 'UNSIGNED_INT', 0]]);
+  assert.deepStrictEqual(uniform(pass('line'), 'uAlpha'), [0.22 * 0.4 * 0.3, 0.9], 'hover: the rest dimmed, its links bright');
+
+  view.style.lineSize = 3;
+  frame(-1, 0);
+  const thick = pass('thick');
+  assert.deepStrictEqual(draws(thick), [['drawArraysInstanced', 'TRIANGLE_STRIP', 0, 4, 3]], 'one quad per link');
+  assert.deepStrictEqual([uniform(thick, 'uWidth'), uniform(thick, 'uTexW'), uniform(thick, 'uAlpha')], [[3], [1024], [0.22]]);
+  assert.strictEqual(pass('line').length, 0, 'no 1 px pass');
+  assert.deepStrictEqual(posUploads().map((a) => [a[3], a[4], a[5], a[8] === view.pos, a[9]]), [[0, 1024, 1, true, 0], [1, 476, 1, true, 1024 * 3]],
+    'one full row of 1024 nodes, then the last 476 in row 1');
+  frame(1, 4);
+  const hov = pass('thick');
+  assert.deepStrictEqual(draws(hov), [['drawArraysInstanced', 'TRIANGLE_STRIP', 0, 4, 3], ['drawArraysInstanced', 'TRIANGLE_STRIP', 0, 4, 2]],
+    'the hovered node: its 2 links again');
+  const second = hov.indexOf(draws(hov)[1]);
+  const lastPairs = hov.slice(0, second).filter(([n, t]) => n === 'bindBuffer' && t === 'ARRAY_BUFFER').pop();
+  assert.strictEqual(lastPairs[2], 'hiPairs', 'from the highlight pairs');
+  assert.deepStrictEqual(uniform(hov, 'uAlpha'), [0.22 * 0.3, 0.9]);
+  assert.strictEqual(posUploads().length, 0, 'nodes did not move: no upload');
+  view.posDirty = true;
+  frame(-1, 0);
+  assert.strictEqual(posUploads().length, 2, 'next layout step: uploaded again');
 }
 
 // ---------------------------------------------------------------- data extraction
