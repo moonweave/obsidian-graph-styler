@@ -1136,6 +1136,8 @@ module.exports = class GraphStyler extends Plugin {
     // 첫 await 전에 등록해야 loadData와 첫 복원 사이에 온 기록도 놓치지 않는다.
     let resumed;
     const firstResume = new Promise((resolve) => { resumed = resolve; });
+    // onunload는 이 첫 복원이 끝나기를 기다린다 — 복원 도중에 끄면 아직 켜지지 않은 스니펫을 읽는다.
+    this._restored = firstResume;
     const dataPath = this.manifest && this.manifest.dir ? `${this.manifest.dir}/data.json` : null;
     if (dataPath) {
       this.registerEvent(this.app.vault.on('raw', (path) => {
@@ -1158,7 +1160,7 @@ module.exports = class GraphStyler extends Plugin {
     this.currentPreset = null;
 
     // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
-    const restoreSnippet = () => this.resumeSnippet().then(resumed);
+    const restoreSnippet = () => this.resumeSnippet().finally(resumed);
     const workspace = this.app.workspace;
     if (workspace && typeof workspace.onLayoutReady === 'function') workspace.onLayoutReady(restoreSnippet);
     else restoreSnippet();
@@ -1200,6 +1202,9 @@ module.exports = class GraphStyler extends Plugin {
 
   async onunload() {
     try {
+      // 켜자마자 끄면 로드 때 시작한 복원이 아직 돌고 있다. 그 전에 읽으면 '켜진 것 없음'으로 보고 복원 기록을 null로
+      // 덮어써 테마가 꺼진 채 남는다. 복원이 끝난 뒤의 상태에서 끈다.
+      if (this._restored) await this._restored;
       if (this._applying && this._applyIdle) await this._applyIdle;
       // 사용자가 직접 끈 스니펫은 기록하지 않는다 — 다시 켤 때 되살리는 건 여기서 끈 것뿐.
       // 끄기를 먼저 해 새 버전의 로드와 겹치는 구간을 줄인다.

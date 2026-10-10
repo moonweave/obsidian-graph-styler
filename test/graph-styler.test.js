@@ -455,6 +455,41 @@ async function reloadRace({ watch = true } = {}) {
   };
 }
 
+// Disabling the plugin right after enabling it: onunload arrives while the load-time restore is still
+// running (or before onload has even read data.json). It used to read "nothing enabled yet", overwrite the
+// resume record with null and leave the theme off. The restore is held at its first await so the order is
+// the same on every run.
+async function unloadDuringLoad({ beforeDataRead }) {
+  const { app, files } = makeHarness();
+  delete files['.obsidian/snippets/graph-styler-stale.css'];
+  const neonPath = '.obsidian/snippets/graph-styler-neon.css';
+  files[neonPath] = 'generated';
+  const adapterExists = app.vault.adapter.exists;
+  let releaseRestore;
+  const restoreGate = new Promise((resolve) => { releaseRestore = resolve; });
+  app.vault.adapter.exists = async (filePath) => {
+    if (filePath === neonPath) await restoreGate;
+    return adapterExists(filePath);
+  };
+  let layoutReady = null;
+  app.workspace.onLayoutReady = (callback) => { layoutReady = callback(); };
+  let data = { custom: [], resumeSnippet: 'neon' };
+  const writes = [];
+  const plugin = new GraphStyler(app);
+  plugin.loadData = async () => JSON.parse(JSON.stringify(data));
+  plugin.saveData = async (settings) => { data = JSON.parse(JSON.stringify(settings)); writes.push(settings.resumeSnippet); };
+  const loading = plugin.onload();
+  if (!beforeDataRead) await loading;
+  const unloading = plugin.onunload();
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  releaseRestore();
+  await loading;
+  await layoutReady;
+  await unloading;
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  return { enabled: [...app.customCss.enabledSnippets], resumeOnDisk: data.resumeSnippet, writes };
+}
+
 async function glowCssFor() {
   const { app, files } = makeHarness();
   const plugin = new GraphStyler(app);
@@ -1402,6 +1437,13 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
   // new instance has loaded. Without watching data.json the theme stays off until Obsidian restarts.
   assert.deepStrictEqual(await reloadRace({ watch: false }), { enabled: [], resumeOnDisk: 'neon' });
   assert.deepStrictEqual(await reloadRace(), { enabled: ['graph-styler-neon'], resumeOnDisk: null });
+
+  // Enable then disable at once: the restore finishes first, then the usual unload switches the theme off
+  // and records it, exactly as if the user had waited. Either way the next enable brings the theme back.
+  for (const beforeDataRead of [false, true]) {
+    assert.deepStrictEqual(await unloadDuringLoad({ beforeDataRead }),
+      { enabled: [], resumeOnDisk: 'neon', writes: [null, 'neon'] }, `beforeDataRead=${beforeDataRead}`);
+  }
 
   // A snippet written by an older version (dead .graph-view-content rules) is rewritten on load.
   const olderSnippet = '/* graph-styler :: neon (auto-generated) */\n.theme-dark .graph-view-content { background: none; }\n';
