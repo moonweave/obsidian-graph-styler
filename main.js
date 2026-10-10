@@ -2369,8 +2369,24 @@ module.exports = class GraphStyler extends Plugin {
     }
   }
 
+  // 3D 탭(= WebGL 문맥)은 하나만 연다. 이미 있으면 그 탭을 보여 주고, 여는 중에 다시 누르면 같은 열기를 기다린다.
   async open3d() {
-    await this.app.workspace.getLeaf('tab').setViewState({ type: VIEW_TYPE_3D, active: true });
+    if (!this.opening3d) {
+      this.opening3d = (async () => {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(VIEW_TYPE_3D)[0];
+        if (!leaf) {
+          leaf = workspace.getLeaf('tab');
+          await leaf.setViewState({ type: VIEW_TYPE_3D, active: true });
+        }
+        workspace.revealLeaf(leaf);
+      })();
+    }
+    try {
+      await this.opening3d;
+    } finally {
+      this.opening3d = null;
+    }
   }
 
   // 설정 탭과 패널 어느 쪽에서 바꿔도 패널을 다시 그려 두 토글이 같은 값을 보인다.

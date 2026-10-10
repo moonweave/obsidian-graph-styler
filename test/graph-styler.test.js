@@ -1548,6 +1548,15 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.deepStrictEqual([t.counts.detached, t.leaves3d.length], [1, 0]);
   }
 
+  // Open (button or command) keeps one 3D tab: a double click opens one, a later click brings it to the front.
+  {
+    const t = await plugin3d();
+    await Promise.all([t.plugin.open3d(), t.plugin.open3d()]);
+    await t.plugin.open3d();
+    assert.strictEqual(t.leaves3d.length, 1, 'one 3D tab, one WebGL context');
+    assert.strictEqual(t.counts.revealed, 2);
+  }
+
   // The GL texture limit caps the scale.
   const capped = await exportWith(new FakeGraphRenderer(400));
   assert.deepStrictEqual([capped.canvas.width, capped.canvas.height], [400, 200]);
