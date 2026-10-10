@@ -765,6 +765,9 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
   assert.strictEqual(p({ linkDistance: 500 }).linkDistance, 24 * Math.pow(2, 1.5), 'link distance 2x: 2^1.5 (calibrated against 2D)');
   assert.strictEqual(p({ linkDistance: 9999 }).linkDistance, 24 * Math.pow(2, 1.5), 'hand-edited values clamp to the slider range');
   assert.strictEqual(p({ linkDistance: 'far' }).linkDistance, 24, 'not a number: the default');
+  for (const bad of [NaN, Infinity, -Infinity, null, true, [2], '250', undefined]) {
+    assert.deepStrictEqual(p({ centerStrength: bad, repelStrength: bad, linkStrength: bad, linkDistance: bad }), before, `${String(bad)}: the defaults`);
+  }
 }
 {
   // Obsidian's defaults lay out bit for bit as without force settings
