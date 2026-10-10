@@ -1461,14 +1461,39 @@ function layoutWorker3d() {
 
 const LAYOUT_WORKER_3D = `${forceLayout3d.toString()}\n(${layoutWorker3d.toString()})();`;
 
-// 'rgb(…)' / 'rgba(…)' / '#rrggbb' → [r, g, b, a] (0–1)
+// CSS 색 → [r, g, b, a] (0–1). '#rrggbb', 'rgb(…)'/'rgba(…)', 'color(srgb …)'는 바로 읽는다. 그 밖의 표기
+// (oklch(), lab(), color(display-p3 …), 테마의 color-mix 결과)는 1×1 캔버스에 칠해 sRGB로 바꾼다.
+// 모르는 표기를 검정으로 두면 그 테마에서 노드·선·배경이 보이지 않았다.
+let colorCanvas3d = null;
 function parseCssColor(css) {
   const s = String(css || '').trim();
   if (/^#[0-9a-f]{6}$/i.test(s)) return rgbOf(s).map((v) => v / 255).concat(1);
-  const m = s.match(/rgba?\(([^)]+)\)/);
-  if (!m) return [0, 0, 0, 1];
-  const p = m[1].split(/[\s,/]+/).filter(Boolean).map((v) => parseFloat(v));
-  return [p[0] / 255, p[1] / 255, p[2] / 255, p.length > 3 ? p[3] : 1];
+  const unit = (v, scale) => (v.endsWith('%') ? parseFloat(v) / 100 : parseFloat(v) / scale);
+  const alpha = (v) => (v === undefined ? 1 : unit(v.trim(), 1));
+  let m = s.match(/^rgba?\(([^)]+)\)$/);
+  if (m) {
+    const p = m[1].split(/[\s,/]+/).filter(Boolean);
+    return [unit(p[0], 255), unit(p[1], 255), unit(p[2], 255), alpha(p[3])];
+  }
+  m = s.match(/^color\(srgb\s+([^)]+)\)$/);
+  if (m) {
+    const [rgb, a] = m[1].split('/');
+    const p = rgb.trim().split(/\s+/);
+    return [unit(p[0], 1), unit(p[1], 1), unit(p[2], 1), alpha(a)];
+  }
+  if (!colorCanvas3d) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    colorCanvas3d = canvas.getContext('2d', { willReadFrequently: true });
+  }
+  const ctx = colorCanvas3d;
+  ctx.clearRect(0, 0, 1, 1);
+  ctx.fillStyle = '#000';
+  ctx.fillStyle = s;
+  ctx.fillRect(0, 0, 1, 1);
+  const d = ctx.getImageData(0, 0, 1, 1).data;
+  return [d[0] / 255, d[1] / 255, d[2] / 255, d[3] / 255];
 }
 
 function overColor(top, base) {
@@ -3280,3 +3305,4 @@ module.exports.forceLayout3d = forceLayout3d;
 module.exports.LAYOUT_WORKER_3D = LAYOUT_WORKER_3D;
 module.exports.applyCssFilter = applyCssFilter;
 module.exports.Graph3DView = Graph3DView;
+module.exports.parseCssColor = parseCssColor;

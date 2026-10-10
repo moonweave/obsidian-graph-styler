@@ -20,7 +20,7 @@ Module._load = function load(request, parent, isMain) {
 };
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
 Module._load = originalLoad;
-const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView } = GraphStyler;
+const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor } = GraphStyler;
 
 // A Graph3DView with just enough of Obsidian and the DOM stubbed to drive its pointer handlers and frame().
 // draw() and pick() are replaced by recorders; the handlers come from bindInput() through registerDomEvent.
@@ -132,6 +132,34 @@ function stubView() {
   view.fit = { r: 100, max: 120 };
   handlers.wheel({ deltaY: -100, deltaMode: 0, ctrlKey: false, preventDefault: () => { prevented = true; } });
   assert.ok(view.cam.dist < dist && prevented, 'with a graph the wheel zooms');
+}
+
+// ---------------------------------------------------------------- CSS colour formats
+// Community themes and color-mix() give colours as color(srgb …), oklch(), lab() …; those used to parse as opaque
+// black, making nodes, lines or the background disappear.
+{
+  const near = (a, b) => a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) < 1e-6);
+  for (const [css, want] of [
+    ['#336699', [0.2, 0.4, 0.6, 1]],
+    ['rgb(10, 20, 30)', [10 / 255, 20 / 255, 30 / 255, 1]],
+    ['rgba(37,67,92,0.9)', [37 / 255, 67 / 255, 92 / 255, 0.9]],
+    ['rgb(10 20 30 / 50%)', [10 / 255, 20 / 255, 30 / 255, 0.5]],
+    ['color(srgb 0.5 0.25 1 / 0.5)', [0.5, 0.25, 1, 0.5]],
+    ['color(srgb 50% 25% 100%)', [0.5, 0.25, 1, 1]],
+  ]) assert.ok(near(parseCssColor(css), want), `${css} -> ${parseCssColor(css)}`);
+  // anything else goes through a 1x1 canvas, which converts it to sRGB
+  const filled = [];
+  let created = 0;
+  global.document.createElement = (tag) => {
+    assert.strictEqual(tag, 'canvas');
+    created += 1;
+    const ctx = { clearRect() {}, fillRect() { filled.push(this.fillStyle); }, getImageData: () => ({ data: [51, 102, 153, 255] }) };
+    return { getContext: () => ctx };
+  };
+  assert.ok(near(parseCssColor('oklch(0.6 0.15 250)'), [0.2, 0.4, 0.6, 1]));
+  assert.deepStrictEqual(filled, ['oklch(0.6 0.15 250)']);
+  parseCssColor('lab(50 40 20)');
+  assert.deepStrictEqual([filled, created], [['oklch(0.6 0.15 250)', 'lab(50 40 20)'], 1], 'one canvas, reused');
 }
 
 // ---------------------------------------------------------------- data extraction
