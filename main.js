@@ -1205,6 +1205,23 @@ const EASE_3D_MS = 1500;    // 다시 시작한 회전이 제 속도에 이를 �
 // 화면에 맞출 반지름의 최솟값(월드 단위). 가장 작은 노드 반지름(2.2)의 열 배 남짓이라, 노트가 하나뿐인 새 vault도
 // 화면을 채우는 원판이 아니라 작은 점으로 보인다.
 const FIT_MIN_3D = 30;
+// Obsidian 그래프 설정의 기본값(1.11.7 app.js의 표시 기본값). 3D는 이 값에 대한 배율로 따라가므로,
+// 기본값이면 지금까지와 똑같이 그린다. 슬라이더 범위는 0.1–5.
+const GRAPH_DISPLAY_DEFAULTS_3D = { nodeSizeMultiplier: 1, lineSizeMultiplier: 1 };
+const TEX_W_3D = 1024;  // 노드 텍스처 가로 칸 수(WebGL2가 보장하는 최대 크기 2048 안)
+
+// 그래프 설정 값 → 기본값에 대한 배율. 숫자가 아니면 1, 손으로 고친 값은 슬라이더 범위로 자른다.
+function displayRatio3d(options, key) {
+  const v = options && options[key];
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 1;
+  return Math.max(0.1, Math.min(5, v)) / GRAPH_DISPLAY_DEFAULTS_3D[key];
+}
+
+// 링크 굵기. gl.LINES는 늘 1px이라, 1배 이하는 그 선을 옅게 그리고(0.1배 = 10% 불투명) 1배를 넘으면
+// 화면 공간 사각형으로 굵게 그린다(1배 = 장치 1px). 기본값 1은 지금까지의 1px 선 그대로다.
+function lineMode3d(lineSize) {
+  return lineSize > 1 ? { thick: true, alpha: 1, width: lineSize } : { thick: false, alpha: lineSize, width: 1 };
+}
 
 // 노트 경로 목록과 metadataCache.resolvedLinks → 링크 쌍과 이웃 목록(CSR).
 // 자기 링크, 양방향 중복, 노트가 아닌 대상(첨부파일·없는 파일)은 뺀다.
@@ -1594,6 +1611,44 @@ in float vA;
 uniform float uLight;
 out vec4 o;
 void main() { o = vec4(vCol * vA, uLight * vA); }`],
+  // 굵은 링크: 링크마다 사각형 하나(인스턴스). 끝점 위치·색은 노드 텍스처에서 읽어, 노드 버퍼를 링크마다 복사하지 않는다.
+  thick: `#version 300 es
+layout(location=4) in vec2 aCorner;
+layout(location=5) in uvec2 aEnds;
+uniform highp sampler2D uPosTex, uColTex;
+uniform int uTexW;
+uniform mat4 uMvp;
+uniform vec2 uView, uFog;
+uniform vec3 uLine;
+uniform float uAlpha, uWidth;
+out vec3 vCol;
+out float vA;
+vec4 node(highp sampler2D t, uint i) { return texelFetch(t, ivec2(int(i) % uTexW, int(i) / uTexW), 0); }
+void main() {
+  vec4 a = uMvp * vec4(node(uPosTex, aEnds.x).xyz, 1.0);
+  vec4 b = uMvp * vec4(node(uPosTex, aEnds.y).xyz, 1.0);
+  vec3 ca = node(uColTex, aEnds.x).rgb, cb = node(uColTex, aEnds.y).rgb;
+  // 카메라 앞면(near 평면, z = -w) 뒤로 넘어간 끝은 그 평면에서 자른다. GPU가 1px 선을 자르는 것과 같다.
+  // 끝 하나가 뒤에 있다고 선을 버리면, 그래프 속으로 확대했을 때 화면을 지나는 부분까지 굵은 선만 사라졌다.
+  float da = a.z + a.w, db = b.z + b.w;
+  if (da < 0.0 && db < 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  if (da < 0.0) {
+    float t = da / (da - db);
+    a = mix(a, b, t);
+    ca = mix(ca, cb, t);
+  } else if (db < 0.0) {
+    float t = db / (db - da);
+    b = mix(b, a, t);
+    cb = mix(cb, ca, t);
+  }
+  vec2 d = b.xy / b.w * uView - a.xy / a.w * uView;
+  vec2 nrm = normalize(vec2(-d.y, d.x) + vec2(0.0, 1e-6));
+  bool atB = aCorner.x > 0.0;
+  vec4 p = atB ? b : a;
+  gl_Position = p + vec4(nrm * aCorner.y * uWidth / uView * p.w, 0.0, 0.0);
+  vCol = mix(uLine, atB ? cb : ca, 0.55);
+  vA = uAlpha * (1.0 - smoothstep(uFog.x, uFog.y, p.w) * 0.75);
+}`,
   node: `#version 300 es
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aCol;
@@ -1690,6 +1745,7 @@ class Graph3DView extends ItemView {
     // 메인 창 것을 쓰면 메인 창이 최소화됐을 때 팝아웃의 그래프가 멈추고, 다른 모니터에서는 해상도가 틀린다.
     this.registerDomEvent(el.doc, 'visibilitychange', () => this.kick());
     this.registerEvent(this.app.workspace.on('css-change', () => this.applyStyle()));
+    this.registerEvent(this.app.vault.on('raw', (path) => { if (path === this.plugin.graphPath()) this.scheduleStyle(); }));
     this.bindInput();
     this.resizeObserver = new el.win.ResizeObserver(() => {
       if (!this.userMoved && this.fit) this.cam.dist = this.shownDist = this.fitDistance();
@@ -1703,6 +1759,7 @@ class Graph3DView extends ItemView {
     this.disposed = true;
     this.stopLoop();
     this.contentEl.win.clearTimeout(this.resumeTimer);
+    this.contentEl.win.clearTimeout(this.styleTimer);
     this.stopLayout();
     if (this.resizeObserver) this.resizeObserver.disconnect();
     this.resizeObserver = null;
@@ -1717,7 +1774,7 @@ class Graph3DView extends ItemView {
   restoreGL() {
     this.clearMessage();
     // 잃기 전의 GPU 객체는 새 문맥에서 무효라, 지우려 하면 GL 오류만 난다. 버리고 새로 만든다.
-    this.prog = this.buf = this.vaoLine = this.vaoNode = null;
+    this.prog = this.buf = this.vaoLine = this.vaoNode = this.vaoThick = this.tex = this.glData = null;
     // 링크 강조 버퍼도 새로 만들어지므로 호버를 처음부터 다시 고르게 한다. 그대로 두면 노드만 밝고 링크는 어두웠다.
     this.hover = -1;
     if (this.hi) this.hi.fill(0);
@@ -1819,13 +1876,15 @@ class Graph3DView extends ItemView {
     return {
       bg,
       light: luminance(bg[2]) > 0.5,
+      nodeSize: displayRatio3d(options, 'nodeSizeMultiplier'),
+      lineSize: displayRatio3d(options, 'lineSizeMultiplier'),
       fill: applyCssFilter(probe('graph-view color-fill', 'color'), filter),
       line: applyCssFilter(probe('graph-view color-line', 'color'), filter),
       groups,
     };
   }
 
-  // 노드 색과 크기. 크기는 2D 그래프처럼 연결 수의 제곱근을 따른다.
+  // 노드 색과 크기. 크기는 2D 그래프처럼 연결 수의 제곱근을 따르고, 그래프 설정의 노드 크기 배율을 곱한다.
   nodeAttributes() {
     const { n, deg } = this.data;
     const { groups, fill } = this.style;
@@ -1837,7 +1896,7 @@ class Graph3DView extends ItemView {
       const tags = tagged ? (getAllTags(this.app.metadataCache.getFileCache(file) || {}) || []) : [];
       const g = groups.find((group) => group.test(file.path, tags));
       col.set(g ? g.rgb : fill, i * 3);
-      size[i] = 2.2 + Math.sqrt(deg[i]) * 1.1;
+      size[i] = (2.2 + Math.sqrt(deg[i]) * 1.1) * this.style.nodeSize;
     }
     return { col, size };
   }
@@ -1846,11 +1905,40 @@ class Graph3DView extends ItemView {
     if (!this.gl || !this.data || !this.data.n) return;
     this.style = await this.readStyle();
     if (this.disposed || !this.gl) return;
-    const { col } = this.nodeAttributes();
+    // 탭을 여는 동안(build가 readStyle을 기다리는 사이) GPU 자원은 아직 없거나 이전 그래프 크기다. 그때 온 변경은
+    // initGL이 끝난 뒤 다시 반영한다.
+    if (this.glData !== this.data) {
+      this.restyleAfterInit = true;
+      return;
+    }
+    const { col, size } = this.nodeAttributes();
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.col);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, col);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.size);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, size);
+    this.size = size;
+    this.uploadNodeTexture(this.tex.col, col);
     this.kick();
+  }
+
+  // 2D 그래프 설정(노드 크기·링크 굵기 슬라이더)이 바뀌면 graph.json이 다시 쓰인다. 끄는 동안 여러 번 오므로 묶어서 한 번 반영한다.
+  scheduleStyle() {
+    const win = this.contentEl.win;
+    win.clearTimeout(this.styleTimer);
+    this.styleTimer = win.setTimeout(() => this.applyStyle(), 200);
+  }
+
+  // 노드별 값(위치·색)을 굵은 링크용 텍스처에 올린다. 텍스처는 가로 TEX_W_3D칸으로 접은 RGB32F.
+  // 꽉 찬 줄과 마지막 줄을 원본 배열에서 바로 올려, 배치가 도는 동안 매번 새 배열을 만들지 않는다.
+  uploadNodeTexture(tex, values) {
+    const gl = this.gl;
+    const n = this.data.n;
+    const rows = Math.floor(n / TEX_W_3D);
+    const rest = n - rows * TEX_W_3D;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    if (rows) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TEX_W_3D, rows, gl.RGB, gl.FLOAT, values, 0);
+    if (rest) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, rows, rest, 1, gl.RGB, gl.FLOAT, values, rows * TEX_W_3D * 3);
   }
 
   startLayout() {
@@ -1886,6 +1974,8 @@ class Graph3DView extends ItemView {
     if (this.buf) for (const b of Object.values(this.buf)) gl.deleteBuffer(b);
     if (this.vaoLine) gl.deleteVertexArray(this.vaoLine);
     if (this.vaoNode) gl.deleteVertexArray(this.vaoNode);
+    if (this.vaoThick) gl.deleteVertexArray(this.vaoThick);
+    if (this.tex) for (const t of Object.values(this.tex)) gl.deleteTexture(t);
     const compile = (vs, fs) => {
       const p = gl.createProgram();
       for (const [type, text] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
@@ -1910,8 +2000,10 @@ class Graph3DView extends ItemView {
       line: compile(GL3D.line[0], GL3D.line[1]),
       halo: compile(GL3D.node, GL3D.halo),
       core: compile(GL3D.node, GL3D.core),
+      thick: compile(GL3D.thick, GL3D.line[1]),
     };
     const { col, size } = this.nodeAttributes();
+    this.size = size;
     const buf = (target, data, usage) => {
       const b = gl.createBuffer();
       gl.bindBuffer(target, b);
@@ -1926,8 +2018,22 @@ class Graph3DView extends ItemView {
       corner: buf(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW),
       links: buf(gl.ELEMENT_ARRAY_BUFFER, this.data.links, gl.STATIC_DRAW),
       hiLinks: buf(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(0), gl.DYNAMIC_DRAW),
+      // 굵은 링크의 인스턴스 속성(끝점 번호 쌍). WebGL은 요소 버퍼를 다른 용도로 묶을 수 없어 따로 둔다.
+      linkPairs: buf(gl.ARRAY_BUFFER, this.data.links, gl.STATIC_DRAW),
+      hiPairs: buf(gl.ARRAY_BUFFER, new Uint32Array(2), gl.DYNAMIC_DRAW),
     };
     this.hiCount = 0;
+    const texture = () => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB32F, TEX_W_3D, Math.ceil(this.data.n / TEX_W_3D), 0, gl.RGB, gl.FLOAT, null);
+      return t;
+    };
+    this.tex = { pos: texture(), col: texture() };
+    this.posTexStale = true;
+    this.uploadNodeTexture(this.tex.col, col);
     const attr = (loc, b, n, divisor) => {
       gl.bindBuffer(gl.ARRAY_BUFFER, b);
       gl.enableVertexAttribArray(loc);
@@ -1945,7 +2051,19 @@ class Graph3DView extends ItemView {
     attr(2, this.buf.size, 1, 1);
     attr(3, this.buf.hi, 1, 1);
     attr(4, this.buf.corner, 2, 0);
+    this.vaoThick = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoThick);
+    attr(4, this.buf.corner, 2, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.linkPairs);
+    gl.enableVertexAttribArray(5);
+    gl.vertexAttribIPointer(5, 2, gl.UNSIGNED_INT, 0, 0);
+    gl.vertexAttribDivisor(5, 1);
     gl.bindVertexArray(null);
+    this.glData = this.data;
+    if (this.restyleAfterInit) {
+      this.restyleAfterInit = false;
+      this.applyStyle();
+    }
   }
 
   bindInput() {
@@ -2074,6 +2192,8 @@ class Graph3DView extends ItemView {
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.hi);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.hiLinks);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(hiLinks), gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.hiPairs);
+    gl.bufferData(gl.ARRAY_BUFFER, new Uint32Array(hiLinks), gl.DYNAMIC_DRAW);
     this.hiCount = hiLinks.length;
   }
 
@@ -2095,7 +2215,7 @@ class Graph3DView extends ItemView {
       if (w <= 0) continue;
       const sx = ((M[0] * x + M[4] * y + M[8] * z + M[12]) / w * 0.5 + 0.5) * c.width;
       const sy = (0.5 - (M[1] * x + M[5] * y + M[9] * z + M[13]) / w * 0.5) * c.height;
-      const r = Math.max((2.2 + Math.sqrt(this.data.deg[i]) * 1.1) * this.pxScale / w, minR);
+      const r = Math.max(this.size[i] * this.pxScale / w, minR);
       const score = Math.hypot(sx - mx, sy - my) / r;
       if (score <= bestScore) { best = i; bestScore = score; }
     }
@@ -2189,6 +2309,7 @@ class Graph3DView extends ItemView {
       this.posDirty = false;
       gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.pos);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.pos);
+      this.posTexStale = true;
       if (!this.userMoved) {
         this.fit = this.measureFit();
         this.cam.dist = this.shownDist = this.fitDistance();
@@ -2226,20 +2347,49 @@ class Graph3DView extends ItemView {
     gl.enable(gl.BLEND);
     gl.blendEquation(gl.FUNC_ADD);
     gl.blendFunc(gl.ONE, light ? gl.ONE_MINUS_SRC_ALPHA : gl.ONE);
-    P = this.prog.line;
+    const lines = lineMode3d(st.lineSize);
+    const baseAlpha = (light ? 0.35 : 0.22) * lines.alpha;
+    P = lines.thick ? this.prog.thick : this.prog.line;
     gl.useProgram(P.p);
     gl.uniformMatrix4fv(P.u.uMvp, false, this.mvp);
     gl.uniform2fv(P.u.uFog, fog);
     gl.uniform3fv(P.u.uLine, st.line);
     gl.uniform1f(P.u.uLight, light);
-    gl.bindVertexArray(this.vaoLine);
-    gl.uniform1f(P.u.uAlpha, (light ? 0.35 : 0.22) * (hovering ? 0.3 : 1));
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.links);
-    gl.drawElements(gl.LINES, m * 2, gl.UNSIGNED_INT, 0);
-    if (hovering && this.hiCount) {
-      gl.uniform1f(P.u.uAlpha, 0.9);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.hiLinks);
-      gl.drawElements(gl.LINES, this.hiCount, gl.UNSIGNED_INT, 0);
+    gl.uniform1f(P.u.uAlpha, baseAlpha * (hovering ? 0.3 : 1));
+    if (lines.thick) {
+      // 위치 텍스처는 굵은 선에만 쓰므로, 기본 굵기에서는 배치가 도는 동안에도 올리지 않는다.
+      if (this.posTexStale) {
+        this.posTexStale = false;
+        this.uploadNodeTexture(this.tex.pos, this.pos);
+      }
+      gl.uniform2f(P.u.uView, c.width, c.height);
+      gl.uniform1f(P.u.uWidth, lines.width);
+      gl.uniform1i(P.u.uTexW, TEX_W_3D);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.tex.pos);
+      gl.uniform1i(P.u.uPosTex, 0);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.tex.col);
+      gl.uniform1i(P.u.uColTex, 1);
+      gl.bindVertexArray(this.vaoThick);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.linkPairs);
+      gl.vertexAttribIPointer(5, 2, gl.UNSIGNED_INT, 0, 0);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, m);
+      if (hovering && this.hiCount) {
+        gl.uniform1f(P.u.uAlpha, 0.9);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.hiPairs);
+        gl.vertexAttribIPointer(5, 2, gl.UNSIGNED_INT, 0, 0);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.hiCount / 2);
+      }
+    } else {
+      gl.bindVertexArray(this.vaoLine);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.links);
+      gl.drawElements(gl.LINES, m * 2, gl.UNSIGNED_INT, 0);
+      if (hovering && this.hiCount) {
+        gl.uniform1f(P.u.uAlpha, 0.9);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.hiLinks);
+        gl.drawElements(gl.LINES, this.hiCount, gl.UNSIGNED_INT, 0);
+      }
     }
 
     gl.bindVertexArray(this.vaoNode);
@@ -3327,3 +3477,5 @@ module.exports.LAYOUT_WORKER_3D = LAYOUT_WORKER_3D;
 module.exports.applyCssFilter = applyCssFilter;
 module.exports.Graph3DView = Graph3DView;
 module.exports.parseCssColor = parseCssColor;
+module.exports.displayRatio3d = displayRatio3d;
+module.exports.lineMode3d = lineMode3d;
