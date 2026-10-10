@@ -1247,8 +1247,11 @@ function layoutParams3d(options) {
   const D = LAYOUT_DEFAULTS_3D;
   return {
     gravity: D.gravity * ratio('centerStrength', 0, 1, forceCurve3d),
-    // Obsidian은 1보다 약한 반발력을 1로 올린다.
-    charge: D.charge * ratio('repelStrength', 0, 20, (v) => Math.max(1, v * v * v)),
+    // 반발력은 기본값의 0.44배(슬라이더 약 7.6) 밑으로 내리지 않는다. 2D는 반발력이 약해져도 collide 힘(노드 반지름 60)이
+    // 노드 사이를 벌려 두어 그 근처에서 더 오그라들지 않는데, 3D 배치에는 그 힘이 없어 끝까지 오그라들어 노드가 한 덩어리로
+    // 겹쳤다. 0.44는 Obsidian의 실제 2D 시뮬레이션과 평균 링크 길이를 맞춰 고른 값이다(1보다 약한 반발력을 1로 올리는
+    // Obsidian의 처리도 이 아래라 따로 하지 않는다).
+    charge: D.charge * Math.max(0.44, ratio('repelStrength', 0, 20, (v) => v * v * v)),
     linkStrength: D.linkStrength * ratio('linkStrength', 0, 1, forceCurve3d),
     // 링크 길이는 2D·3D 모두 반발력이 정하는 몫이 커서(3D는 쉬는 길이의 약 4배, 2D는 약 2배까지 늘어난다), 같은 배율로는
     // 3D가 덜 반응한다. 1.5제곱이면 링크 거리 30–500에서 평균 링크 길이의 변화가 2D와 몇 % 안에서 맞는다.

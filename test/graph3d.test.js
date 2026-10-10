@@ -758,7 +758,8 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
     "Obsidian's defaults as graph.json stores them: exactly the layout as before");
   const p = (o) => layoutParams3d(o);
   assert.strictEqual(p({ repelStrength: 20 }).charge, -240, 'repel 20 = 8000 against 1000: 8x');
-  assert.strictEqual(p({ repelStrength: 0 }).charge, -0.03, 'below 1 Obsidian uses 1');
+  for (const low of [0, 2, 5, 7.5]) assert.strictEqual(p({ repelStrength: low }).charge, -30 * 0.44, `repel ${low}: held at 0.44x (2D stops shrinking there)`);
+  assert.strictEqual(p({ repelStrength: 8 }).charge, -30 * 0.512, 'above the floor: the plain ratio');
   assert.strictEqual(p({ centerStrength: 0 }).gravity, 0);
   assert.strictEqual(p({ centerStrength: 1 }).gravity, 0.6, 'centre 1 = force 1 against 0.1: 10x');
   assert.strictEqual(p({ linkStrength: 0 }).linkStrength, 0);
@@ -813,6 +814,13 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
   assert(falling(series('centerStrength', [0, obsidianDefaultCentre, 1], 'radius')), 'more centre force: tighter');
   assert(falling(series('linkStrength', [0, 0.5, 1], 'link')), 'more link force: shorter links');
   assert(rising(series('linkDistance', [30, 250, 500], 'link')), 'longer link distance: longer links');
+  // weak repel: like Obsidian's 2D graph (held by its collision force) the layout stops shrinking instead of
+  // collapsing into an overlapping lump, even with the strongest centre force
+  const def = at({});
+  const low = at({ repelStrength: 0 });
+  const lump = at({ repelStrength: 0, centerStrength: 1 });
+  // (without the floor: 0.31 and 0.04 of the default radius; with it 0.71 and 0.24)
+  assert(low.radius > def.radius * 0.5 && lump.radius > def.radius * 0.15, `no collapse (${low.radius.toFixed(0)}, ${lump.radius.toFixed(0)} of ${def.radius.toFixed(0)})`);
 }
 {
   // in the view: a forces change restarts the layout from where the nodes are, keeps the camera, ends the old worker
