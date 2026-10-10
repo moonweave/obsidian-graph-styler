@@ -812,6 +812,11 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
   assert.strictEqual(p({ linkDistance: 500 }).linkDistance, 24 * Math.pow(2, 1.5), 'link distance 2x: 2^1.5 (calibrated against 2D)');
   assert.strictEqual(p({ linkDistance: 9999 }).linkDistance, 24 * Math.pow(2, 1.5), 'hand-edited values clamp to the slider range');
   assert.strictEqual(p({ linkDistance: 'far' }).linkDistance, 24, 'not a number: the default');
+  // hand-edited values outside the sliders clamp to their ends
+  assert.deepStrictEqual([p({ centerStrength: -1 }).gravity, p({ centerStrength: 2 }).gravity], [0, 0.6]);
+  assert.deepStrictEqual([p({ repelStrength: -5 }).charge, p({ repelStrength: 25 }).charge], [-30 * 0.44, -240]);
+  assert.deepStrictEqual([p({ linkStrength: -1 }).linkStrength, p({ linkStrength: 2 }).linkStrength], [0, 1]);
+  assert.strictEqual(p({ linkDistance: 0 }).linkDistance, 24 * Math.pow(30 / 250, 1.5));
   for (const bad of [NaN, Infinity, -Infinity, null, true, [2], '250', undefined]) {
     assert.deepStrictEqual(p({ centerStrength: bad, repelStrength: bad, linkStrength: bad, linkDistance: bad }), before, `${String(bad)}: the defaults`);
   }
@@ -893,9 +898,12 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
     view.startLayout();
     assert.strictEqual(workers[0].sent[0].params.alpha, 1, 'a new tab lays out from scratch');
     assert.deepStrictEqual([view.pos.length, view.data.links.length], [6, 2], 'the view keeps its own positions and links');
+    view.raf = 0;
     workers[0].onmessage({ data: { pos: Float32Array.from([1, 0, 0, -1, 0, 0]), alpha: 0.8, done: false } });
+    assert(view.posDirty && view.raf, 'a layout step is drawn');
     options = { repelStrength: 15 };
     view.userMoved = false;
+    view.raf = 0;
     return view.applyStyle();
   }).then(() => {
     assert.strictEqual(workers.length, 2);
@@ -905,6 +913,7 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
     assert.strictEqual(msg.params.charge, layoutParams3d(options).charge);
     assert.deepStrictEqual(Array.from(msg.pos), [1, 0, 0, -1, 0, 0], 'from the current positions');
     assert.strictEqual(view.userMoved, false, 'a camera the user never moved keeps fitting the layout');
+    assert(view.raf, 'and a frame is requested');
     assert.deepStrictEqual([view.pos.length, view.data.links.length], [6, 2], 'still its own positions and links after a restart');
     workers[1].onmessage({ data: { pos: Float32Array.from([2, 0, 0, -2, 0, 0]), alpha: 0.0009, done: true } });
     assert(view.layoutDone && workers[1].terminated, 'settled: no worker left');
@@ -929,6 +938,23 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
     const pos = view.pos;
     workers[3].onmessage({ data: { pos: Float32Array.from([9, 9, 9, 9, 9, 9]), alpha: 0.2, done: false } });
     assert.strictEqual(view.pos, pos, 'a late message from an ended worker is ignored');
+    // each force on its own restarts the layout (one more setting changed at a time, the others kept)
+    let chain = Promise.resolve();
+    for (const change of [{ centerStrength: 0.8 }, { linkStrength: 0.5 }, { linkDistance: 400 }]) {
+      chain = chain.then(() => {
+        const before = workers.length;
+        options = Object.assign({}, options, change);
+        return view.applyStyle().then(() => assert.strictEqual(workers.length, before + 1, `${Object.keys(change)[0]} alone restarts`));
+      });
+    }
+    return chain;
+  }).then(() => {
+    // closing the tab ends a running layout
+    const running = live()[0];
+    view.gl = null;
+    Object.assign(view.contentEl, { empty() {} });
+    return view.onClose().then(() => assert(running.terminated, 'closing ends the layout'));
+  }).then(() => {
     delete global.Worker;
   });
 }
