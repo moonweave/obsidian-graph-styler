@@ -34,6 +34,8 @@ To install by hand, download `main.js`, `manifest.json` and `styles.css` from th
 2. Select the palette icon (**Graph Styler**) in the left ribbon. The panel opens on the right.
 3. Select a preset. The graph changes at once; **↩︎ Restore original** at any time brings back what you had.
 
+The panel keeps the presets on top. **🎛️ Customize**, **📋 Share code** and **🖼️ Export image** are collapsed groups below them, and **↩︎ Restore original** is at the very bottom. Each group opens and closes with a click, and keeps that state until you restart Obsidian.
+
 ![The Graph Styler panel next to a graph styled with Neon](docs/quick-start.jpg)
 
 ## What you can do
@@ -46,21 +48,21 @@ Fourteen presets, each with its own colours, background and glow:
 
 ![All fourteen presets on the same 391-note vault](docs/presets.jpg)
 
-Presets change colours, glow and colour groups only. Your forces and size settings stay as they are. Each built-in preset is also a command: **Graph Styler: Apply: Neon** and so on.
+The presets sit in a two-column grid. The one in use has a frame and a check mark. Presets change colours, glow and colour groups only. Your forces and size settings stay as they are. Each built-in preset is also a command: **Graph Styler: Apply: Neon** and so on.
 
 ### Make your own preset
 
-Open **🎛️ Customize**, pick group colours, a background and the glow, and move the physics sliders. The graph follows as you drag. Name it and select **💾 Save as preset**; it appears under *My presets*.
+Expand **🎛️ Customize**, pick group colours, a background and the glow, and move the physics sliders. The graph follows as you drag. Name it and select **💾 Save as preset**; it appears under *My presets*.
 
-<img src="docs/customize.png" width="288" alt="The Customize section with colour pickers, sliders and the Save as preset button" />
+<img src="docs/customize.png" width="288" alt="The expanded Customize group with colour pickers, sliders and the Save as preset button" />
 
 Customize changes the graph's physics live, so save only what you want to reuse.
 
 ### Share a preset
 
-To send a preset to someone, select 📋 next to it under *My presets*. A one-line code starting with `gs1.` is copied. To use a code you received, paste it into **Paste a share code** and select **Import share code**. The preset is added to *My presets* but not applied until you select it.
+To send a preset to someone, select 📋 next to it under *My presets*. A one-line code starting with `gs1.` is copied. To use a code you received, expand **📋 Share code**, paste it into **Paste a share code** and select **Import share code**. The preset is added to *My presets* but not applied until you select it.
 
-<img src="docs/share.png" width="288" alt="My presets with the copy and delete buttons and the share-code box" />
+<img src="docs/share.png" width="288" alt="My presets with the copy and delete buttons, above the Customize group and the expanded Share code group with its code box and Import button" />
 
 Imported values are checked, so a damaged or edited code cannot push the graph out of range. Colours go to the recipient's own busiest folders, so the same preset can colour different folders in another vault.
 
@@ -72,20 +74,23 @@ Presets saved this way share as codes starting with `gs2.`. Graph Styler 0.2 rej
 
 ### Export your graph as a PNG
 
-Run **Graph Styler: Export graph as PNG** from the command palette, or use **Export graph as PNG** in the panel. The PNG is saved as `Graph Styler exports/graph-<preset>-<date>.png`. The image opens next to your graph and is highlighted in the file explorer. A notice shows the path, with **Open** and **Show in Finder** buttons, and the panel keeps a **Last export** link to it. Use **Copy image** to put the picture on the clipboard instead of saving a file, for example to paste it into a post or a chat.
+Run **Graph Styler: Export graph as PNG** from the command palette, or expand **🖼️ Export image** in the panel and use **Export graph as PNG**. The PNG is saved as `Graph Styler exports/graph-<preset>-<date>.png`. The image opens next to your graph and is highlighted in the file explorer. A notice shows the path, with **Open** and **Show in Finder** buttons, and the **Export image** group keeps a **Last export** link to it. Use **Copy image** to put the picture on the clipboard instead of saving a file, for example to paste it into a post or a chat.
 
-Each option in the panel has a one-line explanation under it. The options only change the saved picture, not your graph.
+Each option in the panel has a one-line explanation under it. The options only change the saved picture, not your graph. **Aspect**, the two buttons and the last export are always visible in the group; the other options are under **More options**, which starts closed.
+
+- **Aspect** 1:1 or 4:5 pads the image with the preset background. Notes are never cropped.
+
+Under **More options**:
 
 - **Scale** (1x–4x, default 2x) multiplies the graph as it is drawn on your screen. 2x of a typical pane is wide enough for a 1080 px post.
 - **Fit whole graph** frames every note for the export, then puts your view back.
-- **Aspect** 1:1 or 4:5 pads the image with the preset background. Notes are never cropped.
 - **Caption** adds a small line with the date, the note count or the preset name.
 - **Save exported images to** sets the folder (created when needed). Leave it empty to save at the top of the vault.
 - **Open the image after exporting** can be turned off if you export often.
 
-<img src="docs/export-options.png" width="288" alt="Export section: Scale 2x, Fit whole graph, Aspect 4:5, a caption with date and note count, each with a one-line explanation; the save folder, Open the image after exporting, the Export and Copy image buttons and a Last export link" />
+<img src="docs/export-options.png" width="288" alt="The Export image group with More options expanded: Aspect 4:5, the Export and Copy image buttons and a Last export link, then Scale 2x, Fit whole graph, a caption with date and note count, the save folder and Open the image after exporting, each with a one-line explanation" />
 
-To post on Instagram, tick **Fit whole graph**, choose **4:5**, pick the caption items and export at 2x. When the fitted view is too far out for Obsidian to show labels, the most-linked notes are named in the image.
+To post on Instagram, choose **4:5**, then under **More options** tick **Fit whole graph**, pick the caption items and keep 2x, and export. When the fitted view is too far out for Obsidian to show labels, the most-linked notes are named in the image.
 
 <img src="docs/export-post-ready.png" width="400" alt="A 4:5 export of a 391-note vault in Vaporwave, with hub labels and a caption" />
 
@@ -103,9 +108,9 @@ A local graph that opens without colour groups of its own takes the active prese
 
 ### Use the panel from the keyboard
 
-In *My presets*, Tab moves from a preset to its 📋 (copy share code) and ✕ (delete) buttons, and Enter or Space runs them without applying the preset. These buttons show a focus ring.
+Tab walks through the presets, then the group headers (**Customize**, **Share code**, **Export image**, and **More options** when its group is open). Enter or Space on a header opens or closes the group. In *My presets*, Tab moves from a preset to its 📋 (copy share code) and ✕ (delete) buttons, and Enter or Space runs them without applying the preset. Focused buttons and headers show a focus ring.
 
-<img src="docs/keyboard.png" width="288" alt="The copy button of a preset with a keyboard focus ring" />
+<img src="docs/keyboard.png" width="288" alt="The copy button of a preset with a keyboard focus ring, above the closed Customize and Share code groups" />
 
 ## How colours map to your vault
 
@@ -145,7 +150,7 @@ New local graphs take the colours only while a Graph Styler preset is active, on
 The scale multiplies the graph as drawn on screen, so a narrow pane gives a narrow image; widen the pane or the window. If a scale is too large for the graphics card, Graph Styler saves at the largest scale that fits and says so ("4x is too large for this graph view — saved at 3x").
 
 **Where did my exported picture go?**
-Into the `Graph Styler exports` folder in your vault (or the folder set under **Save exported images to**). Right after an export the image opens next to the graph, it is highlighted in the file explorer, and the notice has **Open** and **Show in Finder**. Later, use the **Last export** link at the bottom of the panel. Graph Styler 0.3.1 and earlier saved exports at the top of the vault.
+Into the `Graph Styler exports` folder in your vault (or the folder set under **Save exported images to**). Right after an export the image opens next to the graph, it is highlighted in the file explorer, and the notice has **Open** and **Show in Finder**. Later, use the **Last export** link in the panel's **Export image** group. Graph Styler 0.3.1 and earlier saved exports at the top of the vault.
 
 **Does my theme survive a plugin update?**
 Yes, from 0.2.0 on. When the plugin loads, the active preset's snippet file is rewritten if an older version generated it; snippets you edited by hand are left alone.

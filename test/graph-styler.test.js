@@ -47,7 +47,24 @@ Module._load = function load(request, parent, isMain) {
   return originalLoad.call(this, request, parent, isMain);
 };
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
+const stubbedLoad = Module._load;
 Module._load = originalLoad;
+
+// A second copy of the plugin whose panel strings follow the given Obsidian language.
+function loadGraphStylerIn(language) {
+  const file = path.join(__dirname, '..', 'main.js');
+  const navigatorBefore = global.navigator;
+  Object.defineProperty(global, 'navigator', { value: { language }, configurable: true });
+  Module._load = stubbedLoad;
+  delete require.cache[file];
+  try {
+    return require(file);
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[file];
+    Object.defineProperty(global, 'navigator', { value: navigatorBefore, configurable: true });
+  }
+}
 
 function makeHarness() {
   const files = {
@@ -552,6 +569,9 @@ class FakeEl {
   createDiv(opts = {}) { return this.createEl('div', opts); }
   createSpan(opts = {}) { return this.createEl('span', opts); }
   setAttr(name, value) { this.attrs[name] = value; }
+  empty() { this.children = []; }
+  addClass(name) { this.cls.add(name); }
+  addEventListener(type, listener) { this.listeners = Object.assign(this.listeners || {}, { [type]: listener }); }
   toggleClass(name, on) { if (on) this.cls.add(name); else this.cls.delete(name); }
   walk() { return [this].concat(...this.children.map((child) => child.walk())); }
 }
@@ -573,9 +593,9 @@ async function presetRow(withActions) {
   const calls = [];
   plugin.applyPreset = () => { calls.push('apply'); };
   const parent = new FakeEl('div');
-  // After a delete the panel re-renders; focus goes to the first remaining row, else the import box.
+  // After a delete the panel re-renders; focus goes to the first remaining row, else the first group header.
   view.contentEl = {
-    querySelector: (selector) => (selector === '.gs-code' ? { focus: () => calls.push(`focus ${selector}`) } : null),
+    querySelector: (selector) => (selector === '.gs-group > summary' ? { focus: () => calls.push(`focus ${selector}`) } : null),
   };
   const preset = { id: 'night', label: 'Night', emoji: '*', swatch: ['#112233'] };
   view.presetButton(parent, preset,
@@ -1206,8 +1226,9 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     }
   }
 
-  // The panel explains every export option in one line, keeps choose → act → result order, links the
-  // last export, and disables Copy image where the clipboard cannot take images.
+  // The export group shows the basic controls first (aspect → buttons → last export) and folds the rest into
+  // "More options"; every option keeps its one-line explanation, the last export is linked, and Copy image
+  // is disabled where the clipboard cannot take images.
   {
     const { app } = makeHarness();
     app.vault.getAbstractFileByPath = (filePath) => (filePath === 'Graph Styler exports/g.png' ? { path: filePath } : null);
@@ -1220,20 +1241,102 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     const panel = new FakeEl('div');
     view.buildExport(panel);
     const texts = panel.walk().map((el) => el.text).filter(Boolean);
-    for (const line of ['Export as image', 'These options only change the saved picture, not your graph.',
+    for (const line of ['🖼️ Export image', 'These options only change the saved picture, not your graph.',
       'Image size, as a multiple of the graph on your screen. 2x suits an Instagram post.',
       'Frames every note in the image, even if you are zoomed in. Your view is not changed.',
       'Original keeps the current shape. 1:1 and 4:5 add background around the graph so it fits a post. Notes are never cropped.',
       'Adds a small line at the bottom of the image: the date, how many notes, and/or the preset name.',
-      'Save exported images to', 'Open the image after exporting', 'Export graph as PNG', 'Copy image',
+      'A folder in this vault, created when needed. Leave it empty to save at the top of the vault.',
+      'Save exported images to', 'Open the image after exporting', 'Export graph as PNG', 'Copy image', 'More options',
       'Last export: ', 'Graph Styler exports/g.png']) {
       assert.ok(texts.includes(line), `missing panel text: ${line}`);
     }
-    assert.ok(texts.indexOf('Copy image') > texts.indexOf('Open the image after exporting'));
-    assert.ok(texts.indexOf('Graph Styler exports/g.png') > texts.indexOf('Export graph as PNG'));
+    const more = panel.walk().find((el) => el.cls.has('gs-sub'));
+    const moreTexts = more.walk().map((el) => el.text).filter(Boolean);
+    for (const line of ['Scale', 'Fit whole graph', 'Caption', 'Save exported images to', 'Open the image after exporting']) {
+      assert.ok(moreTexts.includes(line), `not under More options: ${line}`);
+    }
+    for (const line of ['Aspect', 'Export graph as PNG', 'Copy image', 'Last export: ']) {
+      assert.ok(!moreTexts.includes(line), `hidden under More options: ${line}`);
+    }
+    const order = ['Aspect', 'Export graph as PNG', 'Copy image', 'Last export: ', 'More options', 'Scale'].map((line) => texts.indexOf(line));
+    assert.ok(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])), `choose → act → result → more: ${order}`);
     const copyButton = panel.walk().find((el) => el.text === 'Copy image');
     assert.strictEqual(copyButton.disabled, true);
     assert.strictEqual(copyButton.attrs.title, 'This version of Obsidian cannot put images on the clipboard');
+  }
+
+  // The whole panel: Look (themes grid, My presets) stays open, then three folded groups, then Restore as a
+  // quiet footer above the credit. A group's open state survives the re-render a theme apply triggers.
+  {
+    const renderPanel = async (Plugin, custom = []) => {
+      const { app } = makeHarness();
+      const plugin = new Plugin(app);
+      let factory = null;
+      plugin.registerView = (type, make) => { factory = make; };
+      plugin.loadData = async () => ({ custom });
+      await plugin.onload();
+      const view = factory({});
+      view.contentEl = new FakeEl('div');
+      view.render();
+      return { plugin, view, panel: view.contentEl };
+    };
+    const mine = [{ id: 'mine', label: 'Mine', colors: ['#112233', '#223344', '#334455', '#445566'], bg: '#000000', glow: 10, forces: {} }];
+    const empty = await renderPanel(GraphStyler);
+    const top = empty.panel.children.map((el) => [el.tag, [...el.cls].join(' ')]);
+    assert.deepStrictEqual(top.map(([, cls]) => cls), [
+      '', 'setting-item-description', 'gs-section', 'gs-note', 'gs-list gs-grid',
+      'gs-group', 'gs-group', 'gs-group', 'gs-footer', 'gs-credit']);
+    assert.strictEqual(empty.panel.children[4].children.length, 14);
+    assert.deepStrictEqual(empty.panel.children.filter((el) => el.tag === 'details')
+      .map((el) => el.children[0].text), ['🎛️ Customize', '📋 Share code', '🖼️ Export image']);
+    assert.ok(empty.panel.children.filter((el) => el.tag === 'details').every((el) => !el.open), 'groups start closed');
+    // My presets only shows a heading when there is something under it.
+    assert.ok(!empty.panel.walk().some((el) => el.text === 'My presets'));
+    const withMine = await renderPanel(GraphStyler, mine);
+    assert.ok(withMine.panel.walk().some((el) => el.text === 'My presets'));
+    assert.ok(withMine.panel.children.some((el) => el.cls.has('gs-list') && !el.cls.has('gs-grid') && el.children[0].cls.has('gs-preset-row')));
+    // Restore is the last action before the credit and still runs plugin.restore.
+    const footer = empty.panel.children[8];
+    const restoreButton = footer.children[0];
+    assert.deepStrictEqual([restoreButton.tag, restoreButton.text], ['button', '↩︎ Restore original']);
+    let restored = 0;
+    empty.plugin.restore = () => { restored += 1; };
+    restoreButton.onclick();
+    assert.strictEqual(restored, 1);
+    // Import lives in the Share code group.
+    const share = empty.panel.children[6];
+    const imports = [];
+    empty.plugin.importShareCode = (code) => imports.push(code);
+    share.walk().find((el) => el.tag === 'input').value = 'gs1.abc';
+    share.walk().find((el) => el.cls.has('gs-import')).onclick();
+    assert.deepStrictEqual(imports, ['gs1.abc']);
+    // Open state is kept by group id: opening records it, the re-render restores it, closing forgets it.
+    const exportGroup = empty.panel.children[7];
+    exportGroup.open = true;
+    exportGroup.listeners.toggle();
+    const nested = exportGroup.walk().find((el) => el.cls.has('gs-sub'));
+    nested.open = true;
+    nested.listeners.toggle();
+    assert.deepStrictEqual([...empty.plugin.openGroups].sort(), ['export', 'exportMore']);
+    empty.view.render();
+    const again = empty.panel.children.filter((el) => el.tag === 'details');
+    assert.deepStrictEqual(again.map((el) => !!el.open), [false, false, true]);
+    assert.strictEqual(again[2].walk().find((el) => el.cls.has('gs-sub')).open, true);
+    again[2].open = false;
+    again[2].listeners.toggle();
+    assert.deepStrictEqual([...empty.plugin.openGroups], ['exportMore']);
+
+    // Korean: same structure, no string left empty.
+    const ko = await renderPanel(loadGraphStylerIn('ko'), mine);
+    const shape = (el) => el.walk().map((node) => `${node.tag}.${[...node.cls].join('.')}`);
+    assert.deepStrictEqual(shape(ko.panel), shape(withMine.panel));
+    const blank = withMine.panel.walk().map((node, i) => [node, ko.panel.walk()[i]])
+      .filter(([en, koNode]) => en.text && !koNode.text);
+    assert.deepStrictEqual(blank.map(([en]) => en.text), []);
+    assert.deepStrictEqual(ko.panel.children.filter((el) => el.tag === 'details').map((el) => el.children[0].text),
+      ['🎛️ 커스터마이즈', '📋 공유 코드', '🖼️ 이미지 내보내기']);
+    assert.ok(ko.panel.walk().some((el) => el.text === '옵션 더 보기'));
   }
 
   // The GL texture limit caps the scale.
@@ -1495,13 +1598,14 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
   }
   const [presetEl, copyEl, deleteEl] = row.children;
   assert.deepStrictEqual([copyEl.attrs.type, deleteEl.attrs.type], ['button', 'button']);
+  assert.strictEqual(presetEl.attrs.title, 'Night');
   assert.strictEqual(copyEl.attrs['aria-label'], 'Copy share code: Night');
   assert.strictEqual(deleteEl.attrs['aria-label'], 'Delete preset: Night');
   copyEl.onclick();
   await deleteEl.onclick();
-  assert.deepStrictEqual(customRow.calls, ['copy', 'delete', 'focus .gs-code']);
+  assert.deepStrictEqual(customRow.calls, ['copy', 'delete', 'focus .gs-group > summary']);
   presetEl.onclick();
-  assert.deepStrictEqual(customRow.calls, ['copy', 'delete', 'focus .gs-code', 'apply']);
+  assert.deepStrictEqual(customRow.calls, ['copy', 'delete', 'focus .gs-group > summary', 'apply']);
   // Built-in presets keep a single button directly in the list.
   const builtInRow = await presetRow(false);
   assert.deepStrictEqual(builtInRow.parent.children.map((el) => [el.tag, [...el.cls][0]]), [['button', 'gs-btn']]);
@@ -1511,6 +1615,22 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
   for (const selector of ['.gs-btn:focus-visible', '.gs-share:focus-visible', '.gs-del:focus-visible']) {
     assert.ok(focusRule.includes(`.graph-styler-panel ${selector}`), selector);
   }
+  // The active theme is marked by more than colour: a frame inside the button, a bold name and a check.
+  for (const selector of ['.gs-btn.is-active {', '.gs-btn.is-active .gs-btn-label {', '.gs-btn.is-active::after {']) {
+    assert.ok(css.includes(`.graph-styler-panel ${selector}`), selector);
+  }
+  assert.ok(focusRule.includes('.graph-styler-panel .gs-group > summary:focus-visible'));
+  // A long preset name shrinks to an ellipsis instead of pushing the swatch out of the button or running under the
+  // check, copy and delete buttons: the label may shrink, the swatch may not, and the row reserves room past the check.
+  const rule = (selector) => css.slice(css.indexOf(`.graph-styler-panel ${selector} {`)).split('}')[0];
+  for (const declaration of ['min-width: 0', 'overflow: hidden', 'text-overflow: ellipsis', 'white-space: nowrap']) {
+    assert.ok(rule('.gs-btn-label').includes(declaration), `.gs-btn-label ${declaration}`);
+  }
+  assert.ok(rule('.gs-swatch').includes('flex-shrink: 0'));
+  assert.ok(rule('.gs-btn').includes('justify-content: flex-start'));
+  const reserved = Number(/padding-right: (\d+)px/.exec(rule('.gs-preset-row .gs-btn'))[1]);
+  const checkRight = Number(/right: (\d+)px/.exec(rule('.gs-preset-row .gs-btn.is-active::after'))[1]);
+  assert.ok(reserved >= checkRight + 14, `row reserves ${reserved}px, the check sits ${checkRight}px from the right`);
 
   // Full-view presets (opt-in): filters and display ride along, are sanitised, and Restore returns everything.
   const fullView = { search: 'tag:#paper', showTags: true, showAttachments: false, hideUnresolved: true, showOrphans: false, showArrow: true };

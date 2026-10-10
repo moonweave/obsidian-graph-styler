@@ -30,9 +30,9 @@ const STRINGS = {
     title: '🎨 Graph Styler',
     desc: 'Tap a preset — colors and glow change instantly while your current graph physics stays unchanged.',
     themes: 'Themes',
-    physicsNote: 'Built-in themes change color, glow, and group styling only. Your graph physics and visual size settings stay unchanged.',
+    physicsNote: 'Only color and glow change; physics and sizes stay.',
     restore: '↩︎ Restore original',
-    restoreNote: 'Restore returns to the graph settings saved before Graph Styler first changed this vault.',
+    restoreNote: 'Back to the settings saved before Graph Styler first changed this vault.',
     restoreConfirm: 'Restore the graph settings saved before Graph Styler first changed this vault? Changes made since then will be overwritten.',
     openCmd: 'Open Graph Styler panel',
     applyCmd: 'Apply',
@@ -42,7 +42,8 @@ const STRINGS = {
     restored: '↩︎ Restored to original',
     noBackup: 'No backup found',
     by: 'made by ',
-    exportTitle: 'Export as image',
+    exportTitle: '🖼️ Export image',
+    exportMore: 'More options',
     exportOnlyNote: 'These options only change the saved picture, not your graph.',
     exportCmd: 'Export graph as PNG',
     exportScale: 'Scale',
@@ -77,6 +78,7 @@ const STRINGS = {
     customizeNote: 'Customize changes graph physics live. Save it only if you want a reusable custom preset.',
     active: 'active',
     myPresets: 'My presets',
+    shareCode: '📋 Share code',
     save: '💾 Save as preset',
     namePh: 'Preset name',
     includeView: 'Include filters and display',
@@ -100,9 +102,9 @@ const STRINGS = {
     title: '🎨 Graph Styler',
     desc: '프리셋을 누르면 색과 글로우가 바로 바뀌고, 현재 그래프 물리는 그대로 유지됩니다.',
     themes: '테마',
-    physicsNote: '기본 테마는 색·글로우·그룹 스타일만 바꾸고 현재 그래프 물리·크기 설정은 유지합니다.',
+    physicsNote: '색과 글로우만 바뀌고 물리·크기 설정은 그대로입니다.',
     restore: '↩︎ 원래대로 되돌리기',
-    restoreNote: '되돌리기는 Graph Styler가 이 vault를 처음 변경하기 전에 저장한 그래프 설정으로 돌아갑니다.',
+    restoreNote: 'Graph Styler가 이 vault를 처음 바꾸기 전에 저장한 설정으로 돌아갑니다.',
     restoreConfirm: 'Graph Styler가 이 vault를 처음 적용하기 전의 그래프 설정으로 되돌릴까요? 그 이후의 변경은 덮어써집니다.',
     openCmd: 'Graph Styler 패널 열기',
     applyCmd: '적용',
@@ -112,7 +114,8 @@ const STRINGS = {
     restored: '↩︎ 원래대로 복구함',
     noBackup: '백업이 없어요',
     by: 'made by ',
-    exportTitle: '이미지로 내보내기',
+    exportTitle: '🖼️ 이미지 내보내기',
+    exportMore: '옵션 더 보기',
     exportOnlyNote: '아래 옵션은 저장되는 그림에만 적용되고, 그래프 자체는 바뀌지 않습니다.',
     exportCmd: '그래프를 PNG로 내보내기',
     exportScale: '배율',
@@ -147,6 +150,7 @@ const STRINGS = {
     customizeNote: '커스터마이즈는 그래프 물리를 실시간으로 바꿉니다. 다시 쓸 설정만 프리셋으로 저장하세요.',
     active: '현재 적용됨',
     myPresets: '내 프리셋',
+    shareCode: '📋 공유 코드',
     save: '💾 내 프리셋으로 저장',
     namePh: '프리셋 이름',
     includeView: '필터·표시 설정 포함',
@@ -845,6 +849,7 @@ class StylerView extends ItemView {
     btn.toggleClass('is-active', !!active);
     btn.setAttr('aria-pressed', active ? 'true' : 'false');
     btn.setAttr('aria-label', `${preset.label}${active ? ` (${L.active})` : ''}`);
+    btn.setAttr('title', preset.label);
     const swatch = btn.createSpan({ cls: 'gs-swatch' });
     for (const color of preset.swatch) {
       const dot = swatch.createSpan({ cls: 'gs-dot' });
@@ -864,8 +869,8 @@ class StylerView extends ItemView {
     if (onDelete) {
       action('gs-del', '✕', L.deletePreset, async () => {
         await onDelete();
-        // 지운 행은 다시 그리면서 사라지므로 포커스가 문서 맨 위로 빠진다. 남은 첫 내 프리셋, 없으면 가져오기 칸으로 옮긴다.
-        const next = this.contentEl.querySelector('.gs-preset-row .gs-btn') || this.contentEl.querySelector('.gs-code');
+        // 지운 행은 다시 그리면서 사라지므로 포커스가 문서 맨 위로 빠진다. 남은 첫 내 프리셋, 없으면 그 아래 첫 그룹 머리글로 옮긴다.
+        const next = this.contentEl.querySelector('.gs-preset-row .gs-btn') || this.contentEl.querySelector('.gs-group > summary');
         if (next) next.focus();
       });
     }
@@ -882,13 +887,13 @@ class StylerView extends ItemView {
     // built-in presets
     c.createEl('div', { cls: 'gs-section', text: L.themes });
     c.createEl('p', { text: L.physicsNote, cls: 'gs-note' });
-    const list = c.createDiv({ cls: 'gs-list' });
+    const list = c.createDiv({ cls: 'gs-list gs-grid' });
     for (const key of Object.keys(PRESETS)) this.presetButton(list, PRESETS[key]);
 
-    // user presets — 가져오기 칸이 있어 비어 있어도 섹션은 보인다.
+    // user presets
     const custom = this.plugin.settings.custom || [];
-    c.createEl('div', { cls: 'gs-section', text: L.myPresets });
     if (custom.length) {
+      c.createEl('div', { cls: 'gs-section', text: L.myPresets });
       const myList = c.createDiv({ cls: 'gs-list' });
       for (const raw of custom) {
         this.presetButton(myList, presetFromRaw(raw),
@@ -896,20 +901,17 @@ class StylerView extends ItemView {
           () => this.plugin.copyShareCode(raw));
       }
     }
-    const importRow = c.createDiv({ cls: 'gs-row' });
-    const codeEl = importRow.createEl('input', { cls: 'gs-code' });
-    codeEl.type = 'text';
-    codeEl.placeholder = L.codePh;
-    const importBtn = c.createEl('button', { cls: 'gs-import', text: L.importCode });
-    importBtn.onclick = () => this.plugin.importShareCode(codeEl.value);
-
-    const restore = c.createEl('button', { cls: 'gs-restore', text: L.restore });
-    restore.setAttr('title', L.restoreNote);
-    restore.onclick = () => this.plugin.restore();
-    c.createEl('p', { text: L.restoreNote, cls: 'gs-note gs-restore-note' });
 
     this.buildCustomize(c);
+    this.buildShare(c);
     this.buildExport(c);
+
+    // Restore acts on the whole vault, so it sits apart from the groups as a quiet footer action.
+    const footer = c.createDiv({ cls: 'gs-footer' });
+    const restore = footer.createEl('button', { cls: 'gs-restore', text: L.restore });
+    restore.setAttr('title', L.restoreNote);
+    restore.onclick = () => this.plugin.restore();
+    footer.createEl('p', { text: L.restoreNote, cls: 'gs-note gs-restore-note' });
 
     const credit = c.createDiv({ cls: 'gs-credit' });
     credit.createSpan({ text: L.by });
@@ -918,13 +920,23 @@ class StylerView extends ItemView {
     link.setAttr('rel', 'noopener');
   }
 
+  // 접이식 그룹. 열림 상태는 id로 plugin.openGroups에 두어 render()가 다시 그려도 유지된다 — 그룹을 더하려면
+  // id와 제목을 주고 돌려받은 본문에 채우면 된다.
+  group(parent, id, title, cls = 'gs-group') {
+    const details = parent.createEl('details', { cls });
+    details.open = this.plugin.openGroups.has(id);
+    details.addEventListener('toggle', () => {
+      if (details.open) this.plugin.openGroups.add(id);
+      else this.plugin.openGroups.delete(id);
+    });
+    details.createEl('summary', { text: title });
+    return details.createDiv({ cls: 'gs-group-body' });
+  }
+
   // 컨트롤 값은 plugin.draft에 write-through → 재렌더/저장 후에도 유지(리셋 안 됨)
   buildCustomize(c) {
     const draft = this.plugin.draft;
-    const details = c.createEl('details', { cls: 'gs-custom' });
-    details.open = this.plugin.customizeOpen;
-    details.addEventListener('toggle', () => { this.plugin.customizeOpen = details.open; });
-    details.createEl('summary', { text: L.customize });
+    const details = this.group(c, 'customize', L.customize);
     details.createEl('p', { text: L.customizeNote, cls: 'gs-note' });
 
     // group colors
@@ -969,6 +981,16 @@ class StylerView extends ItemView {
     saveBtn.onclick = () => this.saveCurrent();
   }
 
+  buildShare(c) {
+    const body = this.group(c, 'share', L.shareCode);
+    const importRow = body.createDiv({ cls: 'gs-row' });
+    const codeEl = importRow.createEl('input', { cls: 'gs-code' });
+    codeEl.type = 'text';
+    codeEl.placeholder = L.codePh;
+    const importBtn = body.createEl('button', { cls: 'gs-import', text: L.importCode });
+    importBtn.onclick = () => this.plugin.importShareCode(codeEl.value);
+  }
+
   sliderRow(parent, label, min, max, step, value, onChange) {
     const row = parent.createDiv({ cls: 'gs-row' });
     row.createSpan({ cls: 'gs-row-label', text: label });
@@ -983,29 +1005,13 @@ class StylerView extends ItemView {
   }
 
   // 처음 쓰는 사람이 '이 체크박스가 그래프를 바꾸나?', '어디에 저장됐지?'를 패널만 보고 알 수 있게
-  // 옵션마다 한 줄 설명을 붙이고, 고른 뒤 누르는 순서(옵션 → 버튼 → 마지막 결과)로 놓는다.
-  buildExport(c) {
-    c.createEl('div', { cls: 'gs-section', text: L.exportTitle });
+  // 옵션마다 한 줄 설명을 붙인다. 자주 쓰는 비율·버튼·마지막 결과는 그룹 안에 바로 두고, 나머지 옵션은 '옵션 더 보기'에 접는다.
+  buildExport(parent) {
+    const c = this.group(parent, 'export', L.exportTitle);
     c.createEl('p', { text: L.exportOnlyNote, cls: 'gs-note' });
-    const hint = (text) => c.createEl('p', { text, cls: 'gs-note gs-export-hint' });
-
-    const scaleRow = c.createDiv({ cls: 'gs-row' });
-    scaleRow.createSpan({ cls: 'gs-row-label', text: L.exportScale });
-    const scaleEl = scaleRow.createEl('select', { cls: 'dropdown' });
-    for (const k of EXPORT_SCALES) scaleEl.createEl('option', { value: String(k), text: `${k}x` });
-    scaleEl.value = String(this.plugin.exportScale);
-    scaleEl.onchange = () => this.plugin.setExportScale(Number(scaleEl.value));
-    hint(L.exportScaleNote);
+    const hint = (el, text) => el.createEl('p', { text, cls: 'gs-note gs-export-hint' });
 
     const options = this.plugin.exportOptions;
-    const fitRow = c.createEl('label', { cls: 'gs-row gs-export-check' });
-    const fitBox = fitRow.createEl('input');
-    fitBox.type = 'checkbox';
-    fitBox.checked = options.fit;
-    fitBox.onchange = () => this.plugin.setExportOptions({ fit: fitBox.checked });
-    fitRow.createSpan({ text: L.exportFit });
-    hint(L.exportFitNote);
-
     const aspectRow = c.createDiv({ cls: 'gs-row' });
     aspectRow.createSpan({ cls: 'gs-row-label', text: L.exportAspect });
     const aspectEl = aspectRow.createEl('select', { cls: 'dropdown' });
@@ -1014,36 +1020,7 @@ class StylerView extends ItemView {
     }
     aspectEl.value = options.aspect;
     aspectEl.onchange = () => this.plugin.setExportOptions({ aspect: aspectEl.value });
-    hint(L.exportAspectNote);
-
-    const captionRow = c.createDiv({ cls: 'gs-row' });
-    captionRow.createSpan({ cls: 'gs-row-label', text: L.exportCaption });
-    const captionItems = captionRow.createSpan({ cls: 'gs-caption-items' });
-    for (const [key, text] of [['date', L.captionDate], ['notes', L.captionNotes], ['preset', L.captionPreset]]) {
-      const item = captionItems.createEl('label', { cls: 'gs-export-check' });
-      const box = item.createEl('input');
-      box.type = 'checkbox';
-      box.checked = options.caption[key];
-      box.onchange = () => this.plugin.setExportOptions({ caption: Object.assign({}, this.plugin.exportOptions.caption, { [key]: box.checked }) });
-      item.createSpan({ text });
-    }
-    hint(L.exportCaptionNote);
-
-    const folderRow = c.createDiv({ cls: 'gs-row gs-folder-row' });
-    folderRow.createSpan({ cls: 'gs-row-label', text: L.exportFolder });
-    const folderEl = folderRow.createEl('input', { cls: 'gs-folder' });
-    folderEl.type = 'text';
-    folderEl.placeholder = DEFAULT_EXPORT_FOLDER;
-    folderEl.value = this.plugin.exportFolder;
-    folderEl.onchange = () => this.plugin.setExportFolder(folderEl.value);
-    hint(L.exportFolderNote);
-
-    const openRow = c.createEl('label', { cls: 'gs-row gs-export-check' });
-    const openBox = openRow.createEl('input');
-    openBox.type = 'checkbox';
-    openBox.checked = this.plugin.openAfterExport;
-    openBox.onchange = () => this.plugin.setOpenAfterExport(openBox.checked);
-    openRow.createSpan({ text: L.exportOpenAfter });
+    hint(c, L.exportAspectNote);
 
     const actions = c.createDiv({ cls: 'gs-row gs-export-actions' });
     const exportBtn = actions.createEl('button', { cls: 'gs-export mod-cta', text: L.exportCmd });
@@ -1062,6 +1039,52 @@ class StylerView extends ItemView {
       const link = lastRow.createEl('a', { text: last.path, href: '#' });
       link.onclick = (ev) => { ev.preventDefault(); this.plugin.openExport(last); };
     }
+
+    const more = this.group(c, 'exportMore', L.exportMore, 'gs-group gs-sub');
+    const scaleRow = more.createDiv({ cls: 'gs-row' });
+    scaleRow.createSpan({ cls: 'gs-row-label', text: L.exportScale });
+    const scaleEl = scaleRow.createEl('select', { cls: 'dropdown' });
+    for (const k of EXPORT_SCALES) scaleEl.createEl('option', { value: String(k), text: `${k}x` });
+    scaleEl.value = String(this.plugin.exportScale);
+    scaleEl.onchange = () => this.plugin.setExportScale(Number(scaleEl.value));
+    hint(more, L.exportScaleNote);
+
+    const fitRow = more.createEl('label', { cls: 'gs-row gs-export-check' });
+    const fitBox = fitRow.createEl('input');
+    fitBox.type = 'checkbox';
+    fitBox.checked = options.fit;
+    fitBox.onchange = () => this.plugin.setExportOptions({ fit: fitBox.checked });
+    fitRow.createSpan({ text: L.exportFit });
+    hint(more, L.exportFitNote);
+
+    const captionRow = more.createDiv({ cls: 'gs-row gs-caption-row' });
+    captionRow.createSpan({ cls: 'gs-row-label', text: L.exportCaption });
+    const captionItems = captionRow.createSpan({ cls: 'gs-caption-items' });
+    for (const [key, text] of [['date', L.captionDate], ['notes', L.captionNotes], ['preset', L.captionPreset]]) {
+      const item = captionItems.createEl('label', { cls: 'gs-export-check' });
+      const box = item.createEl('input');
+      box.type = 'checkbox';
+      box.checked = options.caption[key];
+      box.onchange = () => this.plugin.setExportOptions({ caption: Object.assign({}, this.plugin.exportOptions.caption, { [key]: box.checked }) });
+      item.createSpan({ text });
+    }
+    hint(more, L.exportCaptionNote);
+
+    const folderRow = more.createDiv({ cls: 'gs-row gs-folder-row' });
+    folderRow.createSpan({ cls: 'gs-row-label', text: L.exportFolder });
+    const folderEl = folderRow.createEl('input', { cls: 'gs-folder' });
+    folderEl.type = 'text';
+    folderEl.placeholder = DEFAULT_EXPORT_FOLDER;
+    folderEl.value = this.plugin.exportFolder;
+    folderEl.onchange = () => this.plugin.setExportFolder(folderEl.value);
+    hint(more, L.exportFolderNote);
+
+    const openRow = more.createEl('label', { cls: 'gs-row gs-export-check' });
+    const openBox = openRow.createEl('input');
+    openBox.type = 'checkbox';
+    openBox.checked = this.plugin.openAfterExport;
+    openBox.onchange = () => this.plugin.setOpenAfterExport(openBox.checked);
+    openRow.createSpan({ text: L.exportOpenAfter });
   }
 
   rawFromDraft(id) {
@@ -1126,7 +1149,7 @@ module.exports = class GraphStyler extends Plugin {
       this.currentForceOptions = forceOptionsFromGraph(JSON.parse(await this.app.vault.adapter.read(this.graphPath())));
     } catch (_) { /* graph.json may not exist yet */ }
     this.draft = draftFromGraph(await this.readGraphOptions());
-    this.customizeOpen = false;
+    this.openGroups = new Set();
     // 2x면 인스타그램 1080px에 충분하고, 3x는 vault에 20MB 안팎을 쓴다. 마지막으로 고른 배율을 기억한다.
     this.exportScale = EXPORT_SCALES.includes(this.settings.exportScale) ? this.settings.exportScale : 2;
     this.exportOptions = sanitizeExportOptions(this.settings.exportOptions);
