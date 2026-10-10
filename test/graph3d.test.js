@@ -120,6 +120,20 @@ function stubView() {
   assert.ok(Math.abs(nodeShare(ring).fit.r - 200) < 1, 'graphs larger than the floor are fitted as before');
 }
 
+// ---------------------------------------------------------------- wheel over the "no notes" message
+// With no notes there is no layout and no fit radius; every wheel tick threw a TypeError.
+{
+  const { view, handlers } = stubView();
+  view.fit = undefined;
+  const dist = view.cam.dist;
+  let prevented = false;
+  assert.doesNotThrow(() => handlers.wheel({ deltaY: 100, deltaMode: 0, ctrlKey: false, preventDefault: () => { prevented = true; } }));
+  assert.deepStrictEqual([view.cam.dist, prevented], [dist, false], 'nothing to zoom, the page scroll is left alone');
+  view.fit = { r: 100, max: 120 };
+  handlers.wheel({ deltaY: -100, deltaMode: 0, ctrlKey: false, preventDefault: () => { prevented = true; } });
+  assert.ok(view.cam.dist < dist && prevented, 'with a graph the wheel zooms');
+}
+
 // ---------------------------------------------------------------- data extraction
 {
   const paths = ['A.md', 'B.md', 'C.md', 'D.md'];

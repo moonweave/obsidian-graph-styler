@@ -1954,6 +1954,8 @@ class Graph3DView extends ItemView {
     });
     // 트랙패드 핀치는 Chromium에서 ctrlKey가 붙은 wheel로 온다. 두 손가락 스크롤(작은 deltaY)도 확대로 쓴다.
     this.registerDomEvent(c, 'wheel', (e) => {
+      // 노트가 없으면(안내만 보일 때) 맞출 반지름도 없다.
+      if (!this.fit) return;
       e.preventDefault();
       const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
       const dist = this.cam.dist * Math.exp(dy * (e.ctrlKey ? 0.01 : 0.0015));
