@@ -1304,7 +1304,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.strictEqual(copyButton.attrs.title, 'This version of Obsidian cannot put images on the clipboard');
   }
 
-  // The whole panel: Look (themes grid, My presets) stays open, then three folded groups, then Restore as a
+  // The whole panel: Look (themes grid, My presets) stays open, then four folded groups, then Restore as a
   // quiet footer above the credit. A group's open state survives the re-render a theme apply triggers.
   {
     const renderPanel = async (Plugin, custom = []) => {
@@ -1324,10 +1324,10 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     const top = empty.panel.children.map((el) => [el.tag, [...el.cls].join(' ')]);
     assert.deepStrictEqual(top.map(([, cls]) => cls), [
       '', 'setting-item-description', 'gs-section', 'gs-note', 'gs-list gs-grid',
-      'gs-group', 'gs-group', 'gs-group', 'gs-footer', 'gs-credit']);
+      'gs-group', 'gs-group', 'gs-group', 'gs-group', 'gs-footer', 'gs-credit']);
     assert.strictEqual(empty.panel.children[4].children.length, 14);
     assert.deepStrictEqual(empty.panel.children.filter((el) => el.tag === 'details')
-      .map((el) => el.children[0].text), ['🎛️ Customize', '📋 Share code', '🖼️ Export image']);
+      .map((el) => el.children[0].text), ['🎛️ Customize', '📋 Share code', '🖼️ Export image', '🧊 3D (experimental)']);
     assert.ok(empty.panel.children.filter((el) => el.tag === 'details').every((el) => !el.open), 'groups start closed');
     // My presets only shows a heading when there is something under it.
     assert.ok(!empty.panel.walk().some((el) => el.text === 'My presets'));
@@ -1335,7 +1335,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.ok(withMine.panel.walk().some((el) => el.text === 'My presets'));
     assert.ok(withMine.panel.children.some((el) => el.cls.has('gs-list') && !el.cls.has('gs-grid') && el.children[0].cls.has('gs-preset-row')));
     // Restore is the last action before the credit and still runs plugin.restore.
-    const footer = empty.panel.children[8];
+    const footer = empty.panel.children[9];
     const restoreButton = footer.children[0];
     assert.deepStrictEqual([restoreButton.tag, restoreButton.text], ['button', '↩︎ Restore original']);
     let restored = 0;
@@ -1359,7 +1359,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.deepStrictEqual([...empty.plugin.openGroups].sort(), ['export', 'exportMore']);
     empty.view.render();
     const again = empty.panel.children.filter((el) => el.tag === 'details');
-    assert.deepStrictEqual(again.map((el) => !!el.open), [false, false, true]);
+    assert.deepStrictEqual(again.map((el) => !!el.open), [false, false, true, false]);
     assert.strictEqual(again[2].walk().find((el) => el.cls.has('gs-sub')).open, true);
     again[2].open = false;
     again[2].listeners.toggle();
@@ -1373,8 +1373,104 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
       .filter(([en, koNode]) => en.text && !koNode.text);
     assert.deepStrictEqual(blank.map(([en]) => en.text), []);
     assert.deepStrictEqual(ko.panel.children.filter((el) => el.tag === 'details').map((el) => el.children[0].text),
-      ['🎛️ 커스터마이즈', '📋 공유 코드', '🖼️ 이미지 내보내기']);
+      ['🎛️ 커스터마이즈', '📋 공유 코드', '🖼️ 이미지 내보내기', '🧊 3D (실험)']);
     assert.ok(ko.panel.walk().some((el) => el.text === '옵션 더 보기'));
+  }
+
+  // The 3D group: only the on/off toggle (the same experimental3d setting as the Settings tab) until 3D is on, then
+  // Open, Auto-rotate and Rotation speed. Changes reach open 3D tabs at once; the slider saves when released.
+  {
+    const render3d = async (Plugin, data = {}) => {
+      const { app } = makeHarness();
+      const plugin = new Plugin(app);
+      const factories = {};
+      plugin.registerView = (type, make) => { factories[type] = make; };
+      const saved = [];
+      plugin.loadData = async () => Object.assign({ custom: [] }, data);
+      plugin.saveData = async (settings) => { saved.push(JSON.parse(JSON.stringify(settings))); };
+      await plugin.onload();
+      const view = factories['graph-styler-panel']({});
+      view.contentEl = new FakeEl('div');
+      // the panel re-renders through refreshViews; 3D tabs are fakes that record what the plugin asks of them
+      const tabs = [];
+      app.workspace.getLeavesOfType = (type) => (type === 'graph-styler-panel' ? [{ view }] : []);
+      plugin.views3d = () => tabs;
+      view.render();
+      const group = () => view.contentEl.children.find((el) => el.tag === 'details' && el.children[0].text.includes('3D'));
+      return { plugin, view, saved, tabs, group, factories };
+    };
+    const inputs = (group) => group.walk().filter((el) => el.tag === 'input');
+
+    const off = await render3d(GraphStyler);
+    let g = off.group();
+    assert.ok(!g.open, 'the 3D group starts closed');
+    assert.deepStrictEqual(inputs(g).map((el) => [el.type, el.checked]), [['checkbox', false]]);
+    assert.ok(g.walk().some((el) => el.text === '3D graph view'));
+    assert.ok(!g.walk().some((el) => el.text === 'Open 3D graph'), 'nothing but the toggle while 3D is off');
+
+    // Turning it on in the panel saves the shared setting and re-renders the group with its controls.
+    inputs(g)[0].checked = true;
+    await inputs(g)[0].onchange();
+    assert.strictEqual(off.plugin.settings.experimental3d, true);
+    assert.strictEqual(off.saved[off.saved.length - 1].experimental3d, true);
+    g = off.group();
+    const [onBox, rotateBox, speed] = inputs(g);
+    assert.deepStrictEqual([onBox.checked, rotateBox.type, rotateBox.checked, speed.type], [true, 'checkbox', true, 'range']);
+    assert.deepStrictEqual([speed.min, speed.max, speed.step, speed.value, speed.disabled], ['0.02', '0.6', '0.01', '0.12', false]);
+    let opened = 0;
+    off.plugin.open3d = () => { opened += 1; };
+    g.walk().find((el) => el.text === 'Open 3D graph').onclick();
+    assert.strictEqual(opened, 1);
+
+    // The slider is live while dragging (no save), saved on release, and clamped to its range.
+    const tab = { kicks: 0, resumes: 0, kick() { this.kicks += 1; }, resumeRotation() { this.resumes += 1; } };
+    off.tabs.push(tab);
+    const writes = off.saved.length;
+    speed.value = '0.3';
+    await speed.oninput();
+    assert.strictEqual(off.plugin.rotate3dSpeed, 0.3);
+    assert.strictEqual(tab.kicks, 1, 'open 3D tabs are woken to pick up the new speed');
+    assert.strictEqual(off.saved.length, writes, 'dragging does not write data.json on every step');
+    await speed.onchange();
+    assert.strictEqual(off.saved[off.saved.length - 1].rotate3dSpeed, 0.3);
+    await off.plugin.setRotate3dSpeed(5, true);
+    assert.strictEqual(off.plugin.rotate3dSpeed, 0.6);
+    await off.plugin.setRotate3dSpeed(0.3, true);
+
+    // Auto-rotate off: saved, the slider greys out, open tabs are told.
+    rotateBox.checked = false;
+    await rotateBox.onchange();
+    assert.deepStrictEqual([off.plugin.rotate3d, off.saved[off.saved.length - 1].rotate3d, speed.disabled, tab.resumes], [false, false, true, 1]);
+
+    // Round trip: a new plugin instance reads the saved values back into the same controls.
+    const back = await render3d(GraphStyler, off.saved[off.saved.length - 1]);
+    const [onAgain, rotateAgain, speedAgain] = inputs(back.group());
+    assert.deepStrictEqual([onAgain.checked, rotateAgain.checked, speedAgain.value, speedAgain.disabled], [true, false, '0.3', true]);
+    // Damaged values fall back to the defaults.
+    const damaged = await render3d(GraphStyler, { experimental3d: true, rotate3d: 'no', rotate3dSpeed: 'fast' });
+    assert.deepStrictEqual([damaged.plugin.rotate3d, damaged.plugin.rotate3dSpeed], [true, 0.12]);
+
+    // The 3D view turns at the saved speed, stops when Auto-rotate is off, and eases back in when it is turned on.
+    const v = back.factories['graph-styler-3d']({});
+    back.plugin.rotate3d = true;
+    assert.strictEqual(v.rotationSpeed(performance.now()), 0.3);
+    back.plugin.rotate3d = false;
+    assert.strictEqual(v.rotationSpeed(performance.now()), 0);
+    back.plugin.rotate3d = true;
+    v.resumeRotation();
+    const t = performance.now();
+    assert.ok(v.rotationSpeed(t) < 0.01, 'starts from standstill');
+    assert.ok(Math.abs(v.rotationSpeed(t + 1600) - 0.3) < 1e-9, 'reaches the set speed after the ease');
+
+    // The Settings tab toggle and the panel toggle are the same setting: turning it off in Settings re-renders
+    // the panel without the controls.
+    await back.plugin.setExperimental3d(false);
+    assert.deepStrictEqual(inputs(back.group()).map((el) => [el.type, el.checked]), [['checkbox', false]]);
+
+    // Korean labels.
+    const ko = await render3d(loadGraphStylerIn('ko'), { experimental3d: true });
+    const koTexts = ko.group().walk().map((el) => el.text).filter(Boolean);
+    for (const text of ['🧊 3D (실험)', '3D 그래프 보기', '3D 그래프 열기', '자동 회전', '회전 속도']) assert.ok(koTexts.includes(text), `missing ko text: ${text}`);
   }
 
   // The GL texture limit caps the scale.
