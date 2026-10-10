@@ -1627,13 +1627,26 @@ vec4 node(highp sampler2D t, uint i) { return texelFetch(t, ivec2(int(i) % uTexW
 void main() {
   vec4 a = uMvp * vec4(node(uPosTex, aEnds.x).xyz, 1.0);
   vec4 b = uMvp * vec4(node(uPosTex, aEnds.y).xyz, 1.0);
-  if (a.w <= 0.0 || b.w <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vec3 ca = node(uColTex, aEnds.x).rgb, cb = node(uColTex, aEnds.y).rgb;
+  // 카메라 앞면(near 평면, z = -w) 뒤로 넘어간 끝은 그 평면에서 자른다. GPU가 1px 선을 자르는 것과 같다.
+  // 끝 하나가 뒤에 있다고 선을 버리면, 그래프 속으로 확대했을 때 화면을 지나는 부분까지 굵은 선만 사라졌다.
+  float da = a.z + a.w, db = b.z + b.w;
+  if (da < 0.0 && db < 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  if (da < 0.0) {
+    float t = da / (da - db);
+    a = mix(a, b, t);
+    ca = mix(ca, cb, t);
+  } else if (db < 0.0) {
+    float t = db / (db - da);
+    b = mix(b, a, t);
+    cb = mix(cb, ca, t);
+  }
   vec2 d = b.xy / b.w * uView - a.xy / a.w * uView;
   vec2 nrm = normalize(vec2(-d.y, d.x) + vec2(0.0, 1e-6));
   bool atB = aCorner.x > 0.0;
   vec4 p = atB ? b : a;
   gl_Position = p + vec4(nrm * aCorner.y * uWidth / uView * p.w, 0.0, 0.0);
-  vCol = mix(uLine, node(uColTex, atB ? aEnds.y : aEnds.x).rgb, 0.55);
+  vCol = mix(uLine, atB ? cb : ca, 0.55);
   vA = uAlpha * (1.0 - smoothstep(uFog.x, uFog.y, p.w) * 0.75);
 }`,
   node: `#version 300 es
