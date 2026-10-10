@@ -1774,7 +1774,7 @@ class Graph3DView extends ItemView {
   restoreGL() {
     this.clearMessage();
     // 잃기 전의 GPU 객체는 새 문맥에서 무효라, 지우려 하면 GL 오류만 난다. 버리고 새로 만든다.
-    this.prog = this.buf = this.vaoLine = this.vaoNode = this.vaoThick = this.tex = null;
+    this.prog = this.buf = this.vaoLine = this.vaoNode = this.vaoThick = this.tex = this.glData = null;
     // 링크 강조 버퍼도 새로 만들어지므로 호버를 처음부터 다시 고르게 한다. 그대로 두면 노드만 밝고 링크는 어두웠다.
     this.hover = -1;
     if (this.hi) this.hi.fill(0);
@@ -1905,6 +1905,12 @@ class Graph3DView extends ItemView {
     if (!this.gl || !this.data || !this.data.n) return;
     this.style = await this.readStyle();
     if (this.disposed || !this.gl) return;
+    // 탭을 여는 동안(build가 readStyle을 기다리는 사이) GPU 자원은 아직 없거나 이전 그래프 크기다. 그때 온 변경은
+    // initGL이 끝난 뒤 다시 반영한다.
+    if (this.glData !== this.data) {
+      this.restyleAfterInit = true;
+      return;
+    }
     const { col, size } = this.nodeAttributes();
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.col);
@@ -2053,6 +2059,11 @@ class Graph3DView extends ItemView {
     gl.vertexAttribIPointer(5, 2, gl.UNSIGNED_INT, 0, 0);
     gl.vertexAttribDivisor(5, 1);
     gl.bindVertexArray(null);
+    this.glData = this.data;
+    if (this.restyleAfterInit) {
+      this.restyleAfterInit = false;
+      this.applyStyle();
+    }
   }
 
   bindInput() {

@@ -446,7 +446,7 @@ function uploads(calls) {
   const gl = view.gl = recordingGl();
   view.buf = { col: 'colBuf', size: 'sizeBuf' };
   view.tex = { col: 'colTex' };
-  view.data = { n: 2, deg: Uint32Array.from([1, 1]) };
+  view.data = view.glData = { n: 2, deg: Uint32Array.from([1, 1]) };
   view.files = [{ path: 'a.md' }, { path: 'b.md' }];
   view.readStyle = async () => ({ groups: [], fill: [0.5, 0.25, 1], nodeSize: 3, lineSize: 1 });
   view.applyStyle().then(() => {
@@ -480,6 +480,40 @@ function uploads(calls) {
   // (deleteShader only frees the new shaders once linked)
   assert.deepStrictEqual(gl.calls.filter(([n]) => n.startsWith('delete') && n !== 'deleteShader').map(([n]) => n), [], 'nothing of the lost context is deleted');
   assert(view.tex !== old.tex && view.vaoThick !== old.vaoThick && view.buf !== old.buf, 'all rebuilt');
+}
+{
+  // a style change while the tab is still opening (build() waiting on readStyle, no GPU resources yet) does not touch
+  // the missing buffers and is applied once initGL has run
+  const { view } = stubView();
+  const gl = view.gl = recordingGl();
+  view.data = graphData3d(['a.md', 'b.md', 'c.md'], { 'a.md': { 'b.md': 1 } });
+  view.files = [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md' }];
+  view.pos = new Float32Array(9);
+  view.hi = new Float32Array(3);
+  view.readStyle = async () => ({ groups: [], fill: [1, 1, 1], nodeSize: 2, lineSize: 1 });
+  view.applyStyle().then(() => {
+    assert.deepStrictEqual(gl.calls, [], 'no GPU calls before initGL');
+    view.style = { groups: [], fill: [1, 1, 1], nodeSize: 1, lineSize: 1 };   // build()'s own style, read before the change
+    view.initGL();
+    assert.strictEqual(view.glData, view.data);
+    return new Promise((r) => setImmediate(r));
+  }).then(() => {
+    assert.strictEqual(view.style.nodeSize, 2, 'the change that came while opening is applied after initGL');
+    const sizes = uploads(gl.calls).get(view.buf.size);
+    assert.strictEqual(+sizes[sizes.length - 1][2].toFixed(5), +(2 * 2.2).toFixed(5), 'c.md (no links) at twice its radius');
+  });
+}
+{
+  // the same while the tab rebuilds for a larger graph (build() replaced data; the buffers are still the old size)
+  const { view } = stubView();
+  const gl = view.gl = recordingGl();
+  view.buf = { col: 'colBuf', size: 'sizeBuf' };
+  view.tex = { col: 'colTex' };
+  view.glData = { n: 2, deg: Uint32Array.from([1, 1]) };
+  view.data = { n: 3, deg: Uint32Array.from([1, 1, 0]) };
+  view.files = [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md' }];
+  view.readStyle = async () => ({ groups: [], fill: [1, 1, 1], nodeSize: 1, lineSize: 1 });
+  view.applyStyle().then(() => assert.deepStrictEqual([gl.calls, view.restyleAfterInit], [[], true], 'old-size buffers are not written'));
 }
 {
   // hovering uploads the node's links twice: as indices for the 1 px pass and as instance pairs for the thick pass
