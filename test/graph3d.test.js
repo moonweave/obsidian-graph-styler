@@ -946,6 +946,17 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
   assert(messages.length > 1, 'positions arrive in steps, so the view can draw the layout settling');
   assert.strictEqual(last.pos.length, paths.length * 3);
   assert.deepStrictEqual(Array.from(last.pos), Array.from(run(paths, links).positions), 'the worker computes the same layout');
+  // with forces and a restart heat from the view: the worker lays out exactly what forceLayout3d does with them
+  const params = Object.assign(layoutParams3d({ repelStrength: 15, centerStrength: 0.8, linkStrength: 0.5, linkDistance: 400 }), { alpha: 0.3 });
+  messages.length = 0;
+  self.onmessage({ data: { n: paths.length, links, pos: initialPositions3d(paths), params } });
+  for (let i = 0; i < 400 && !(messages.length && messages[messages.length - 1].done); i++) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  const withForces = messages[messages.length - 1];
+  assert(withForces && withForces.done);
+  assert.deepStrictEqual(Array.from(withForces.pos), Array.from(run(paths, links, params).positions), 'the worker uses the forces and the heat');
+  assert.notDeepStrictEqual(Array.from(withForces.pos), Array.from(last.pos), 'and they change the layout');
 })().catch((e) => {
   console.error(e);
   process.exit(1);
