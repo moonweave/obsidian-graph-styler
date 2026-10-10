@@ -874,7 +874,8 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
   const workers = [];
   global.Worker = class {
     constructor() { this.sent = []; this.terminated = false; workers.push(this); }
-    postMessage(msg) { this.sent.push(msg); }
+    // like a real worker: transferred arrays are moved, the sender's copies are left empty
+    postMessage(msg, transfer) { this.sent.push(structuredClone(msg, { transfer })); }
     terminate() { this.terminated = true; }
   };
   const { view } = stubView();
@@ -891,6 +892,7 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
     view.style = st;
     view.startLayout();
     assert.strictEqual(workers[0].sent[0].params.alpha, 1, 'a new tab lays out from scratch');
+    assert.deepStrictEqual([view.pos.length, view.data.links.length], [6, 2], 'the view keeps its own positions and links');
     workers[0].onmessage({ data: { pos: Float32Array.from([1, 0, 0, -1, 0, 0]), alpha: 0.8, done: false } });
     options = { repelStrength: 15 };
     view.userMoved = false;
@@ -903,6 +905,7 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
     assert.strictEqual(msg.params.charge, layoutParams3d(options).charge);
     assert.deepStrictEqual(Array.from(msg.pos), [1, 0, 0, -1, 0, 0], 'from the current positions');
     assert.strictEqual(view.userMoved, false, 'a camera the user never moved keeps fitting the layout');
+    assert.deepStrictEqual([view.pos.length, view.data.links.length], [6, 2], 'still its own positions and links after a restart');
     workers[1].onmessage({ data: { pos: Float32Array.from([2, 0, 0, -2, 0, 0]), alpha: 0.0009, done: true } });
     assert(view.layoutDone && workers[1].terminated, 'settled: no worker left');
     view.cam.theta = 1.25;
