@@ -5,7 +5,7 @@
  */
 'use strict';
 
-const { Plugin, ItemView, Notice, Platform } = require('obsidian');
+const { Plugin, ItemView, Notice, Platform, PluginSettingTab, Setting, Keymap, getAllTags } = require('obsidian');
 
 const AUTHOR = 'Moonweave';
 const AUTHOR_URL = 'https://github.com/moonweave';
@@ -92,6 +92,16 @@ const STRINGS = {
     importCode: 'Import share code',
     imported: (n) => `📥 “${n}” added to My presets`,
     badCode: 'That share code is not valid',
+    open3dCmd: 'Open 3D graph',
+    view3d: '3D graph (experimental)',
+    experimental: 'Experimental',
+    exp3dName: '3D graph view',
+    exp3dDesc: 'Adds the command “Open 3D graph”: your notes and links in 3D, in the colours of the current preset. Early version — it may change or be removed.',
+    exp3dOn: 'Open it from the command palette: “Graph Styler: Open 3D graph”',
+    off3d: 'The 3D graph is turned off. Turn on “3D graph view” in Settings → Graph Styler → Experimental.',
+    noWebgl3d: 'The 3D graph needs WebGL 2, which is not available here.',
+    lost3d: 'Drawing paused because the graphics context was lost. It resumes when the system gives it back.',
+    empty3d: 'There are no notes to show yet.',
     f: {
       colors: 'Group colors', bg: 'Background', glow: 'Glow',
       repel: 'Repel', dist: 'Link distance', center: 'Center', linkS: 'Link force',
@@ -164,6 +174,16 @@ const STRINGS = {
     importCode: '공유 코드 가져오기',
     imported: (n) => `📥 “${n}” 내 프리셋에 추가됨`,
     badCode: '유효하지 않은 공유 코드입니다',
+    open3dCmd: '3D 그래프 열기',
+    view3d: '3D 그래프 (실험 기능)',
+    experimental: '실험 기능',
+    exp3dName: '3D 그래프 보기',
+    exp3dDesc: '“3D 그래프 열기” 명령을 추가해요. 노트와 링크를 지금 프리셋의 색으로 입체로 보여 줘요. 초기 버전이라 바뀌거나 빠질 수 있어요.',
+    exp3dOn: '명령 팔레트에서 “Graph Styler: 3D 그래프 열기”로 열 수 있어요',
+    off3d: '3D 그래프가 꺼져 있어요. 설정 → Graph Styler → 실험 기능에서 “3D 그래프 보기”를 켜 주세요.',
+    noWebgl3d: '3D 그래프에는 WebGL 2가 필요한데, 여기서는 쓸 수 없어요.',
+    lost3d: '그래픽 문맥을 잃어 그리기를 멈췄어요. 시스템이 돌려주면 다시 그려요.',
+    empty3d: '아직 보여 줄 노트가 없어요.',
     f: {
       colors: '그룹 색', bg: '배경', glow: '글로우',
       repel: '반발력', dist: '링크 거리', center: '중심력', linkS: '링크력',
@@ -1118,6 +1138,1041 @@ class StylerView extends ItemView {
   }
 }
 
+// ---------------------------------------------------------------- 3D graph (experimental)
+const VIEW_TYPE_3D = 'graph-styler-3d';
+// 자동 회전과 배치 애니메이션은 60fps로 묶는다. 120Hz 화면에서 CPU를 3분의 1쯤 덜 쓴다(실측 33–45% → 23–30%).
+// 드래그·확대처럼 입력이 있는 프레임은 화면 주사율대로 바로 그린다.
+const FPS_3D = 60;
+const ROTATE_3D = 0.12;     // rad/s
+const IDLE_3D_MS = 3000;    // 마지막 입력 뒤 회전이 다시 시작될 때까지
+const EASE_3D_MS = 1500;    // 다시 시작한 회전이 제 속도에 이를 때까지
+
+// 노트 경로 목록과 metadataCache.resolvedLinks → 링크 쌍과 이웃 목록(CSR).
+// 자기 링크, 양방향 중복, 노트가 아닌 대상(첨부파일·없는 파일)은 뺀다.
+function graphData3d(paths, resolvedLinks) {
+  const n = paths.length;
+  const index = new Map(paths.map((p, i) => [p, i]));
+  const seen = new Set();
+  const pairs = [];
+  for (const src of Object.keys(resolvedLinks || {})) {
+    const a = index.get(src);
+    if (a === undefined) continue;
+    for (const dst of Object.keys(resolvedLinks[src] || {})) {
+      const b = index.get(dst);
+      if (b === undefined || b === a) continue;
+      const key = a < b ? a * n + b : b * n + a;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push(a, b);
+    }
+  }
+  const links = Uint32Array.from(pairs);
+  const deg = new Uint32Array(n);
+  for (const i of links) deg[i]++;
+  const start = new Uint32Array(n + 1);
+  for (let i = 0; i < n; i++) start[i + 1] = start[i] + deg[i];
+  const next = start.slice(0, n);
+  const adj = new Uint32Array(links.length);
+  const adjLink = new Uint32Array(links.length);
+  for (let e = 0; e < links.length / 2; e++) {
+    const a = links[e * 2], b = links[e * 2 + 1];
+    adj[next[a]] = b; adjLink[next[a]++] = e;
+    adj[next[b]] = a; adjLink[next[b]++] = e;
+  }
+  return { n, links, deg, start, adj, adjLink };
+}
+
+// Graph Styler가 만드는 색 그룹 쿼리(path:"폴더", tag:#태그)만 해석한다. 그 밖의 검색 문법은 어느 노트와도
+// 맞지 않는 것으로 보고 기본 색을 쓴다.
+function colorGroupTest3d(query) {
+  const q = String(query || '').trim();
+  const path = q.match(/^path:\s*(?:"((?:[^"\\]|\\.)*)"|(\S+))$/);
+  if (path) {
+    const needle = (path[1] !== undefined ? path[1].replace(/\\(.)/g, '$1') : path[2]).toLowerCase();
+    return (notePath) => notePath.toLowerCase().includes(needle);
+  }
+  const tag = q.match(/^tag:\s*#?([^\s#]+)$/);
+  if (tag) {
+    const want = `#${tag[1].toLowerCase()}`;
+    return (notePath, tags) => tags.some((t) => {
+      const low = t.toLowerCase();
+      return low === want || low.startsWith(`${want}/`);
+    });
+  }
+  return () => false;
+}
+
+function mulberry32(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// 시작 위치는 노트 경로로 정한다. 파일 순서가 바뀌어도 같은 노트는 같은 곳에서 출발한다.
+function initialPositions3d(paths) {
+  const pos = new Float32Array(paths.length * 3);
+  const r0 = 12 * Math.cbrt(Math.max(1, paths.length));
+  paths.forEach((p, i) => {
+    let h = 2166136261;
+    for (let k = 0; k < p.length; k++) h = Math.imul(h ^ p.charCodeAt(k), 16777619);
+    const rand = mulberry32(h >>> 0);
+    let x, y, z;
+    do { x = rand() * 2 - 1; y = rand() * 2 - 1; z = rand() * 2 - 1; } while (x * x + y * y + z * z > 1);
+    pos[i * 3] = x * r0; pos[i * 3 + 1] = y * r0; pos[i * 3 + 2] = z * r0;
+  });
+  return pos;
+}
+
+// Barnes–Hut 3D 힘 배치. d3-force와 같은 식(다체 반발 + 링크 스프링 + 약한 중심 인력)이고 300번에 식는다.
+// 이 함수의 소스를 그대로 Worker에 넣으므로 바깥 이름을 쓰면 안 된다.
+function forceLayout3d(n, links, pos, params) {
+  const P = Object.assign({
+    charge: -30, theta: 0.9, linkDistance: 24, gravity: 0.06, velocityKeep: 0.6, alphaMin: 0.001, ticks: 300,
+  }, params);
+  const EMPTY = -1;
+  const INTERNAL = -2;
+  const alphaDecay = 1 - Math.pow(P.alphaMin, 1 / P.ticks);
+  const m = links.length / 2;
+  const vel = new Float32Array(n * 3);
+  const deg = new Float32Array(n);
+  for (let e = 0; e < links.length; e++) deg[links[e]]++;
+  const bias = new Float32Array(m);
+  const strength = new Float32Array(m);
+  for (let e = 0; e < m; e++) {
+    const a = deg[links[e * 2]], b = deg[links[e * 2 + 1]];
+    bias[e] = a / (a + b);
+    strength[e] = 1 / Math.min(a, b);
+  }
+  // 팔진 트리는 평평한 배열에 둔다. 칸이 모자라면 두 배로 늘린다.
+  let cap = 0;
+  let cells = 0;
+  let child, body, cnt, sx, sy, sz, ox, oy, oz, hs;
+  const stack = new Int32Array(8192);
+  const grow = (A, T, k, c) => {
+    const B = new T(c * k);
+    if (A) B.set(A.subarray(0, Math.min(A.length, c * k)));
+    return B;
+  };
+  const alloc = (c) => {
+    child = grow(child, Int32Array, 8, c);
+    body = grow(body, Int32Array, 1, c);
+    cnt = grow(cnt, Float64Array, 1, c);
+    sx = grow(sx, Float64Array, 1, c); sy = grow(sy, Float64Array, 1, c); sz = grow(sz, Float64Array, 1, c);
+    ox = grow(ox, Float64Array, 1, c); oy = grow(oy, Float64Array, 1, c); oz = grow(oz, Float64Array, 1, c);
+    hs = grow(hs, Float64Array, 1, c);
+    cap = c;
+  };
+  const cell = (x, y, z, h) => {
+    if (cells === cap) alloc(cap * 2);
+    const c = cells++;
+    child.fill(-1, c * 8, c * 8 + 8);
+    body[c] = EMPTY; cnt[c] = 0; sx[c] = 0; sy[c] = 0; sz[c] = 0;
+    ox[c] = x; oy[c] = y; oz[c] = z; hs[c] = h;
+    return c;
+  };
+  const sub = (c, k) => {
+    const h = hs[c] / 2;
+    return cell(ox[c] + (k & 1 ? h : -h), oy[c] + (k & 2 ? h : -h), oz[c] + (k & 4 ? h : -h), h);
+  };
+  const octant = (c, x, y, z) => (x >= ox[c] ? 1 : 0) | (y >= oy[c] ? 2 : 0) | (z >= oz[c] ? 4 : 0);
+  const insert = (i, x, y, z) => {
+    let c = 0;
+    for (let depth = 0; ; depth++) {
+      sx[c] += x; sy[c] += y; sz[c] += z; cnt[c] += 1;
+      const b = body[c];
+      if (b === EMPTY) { body[c] = i; return; }
+      if (b >= 0) {
+        if (depth >= 24) return; // 겹친 점은 무거운 잎 하나로 둔다
+        body[c] = INTERNAL;
+        const bx = pos[b * 3], by = pos[b * 3 + 1], bz = pos[b * 3 + 2];
+        const kb = octant(c, bx, by, bz);
+        const nb = sub(c, kb);
+        child[c * 8 + kb] = nb;
+        body[nb] = b; sx[nb] = bx; sy[nb] = by; sz[nb] = bz; cnt[nb] = 1;
+      }
+      const k = octant(c, x, y, z);
+      let nc = child[c * 8 + k];
+      if (nc < 0) { nc = sub(c, k); child[c * 8 + k] = nc; }
+      c = nc;
+    }
+  };
+  const manyBody = (alpha) => {
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (z < z0) z0 = z; if (z > z1) z1 = z;
+    }
+    cells = 0;
+    cell((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2, Math.max(x1 - x0, y1 - y0, z1 - z0) / 2 + 1e-3);
+    for (let i = 0; i < n; i++) insert(i, pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+    const theta2 = P.theta * P.theta;
+    const k = P.charge * alpha;
+    for (let i = 0; i < n; i++) {
+      const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+      let fx = 0, fy = 0, fz = 0, sp = 0;
+      stack[sp++] = 0;
+      while (sp) {
+        const c = stack[--sp];
+        const w = cnt[c];
+        if (!w) continue;
+        const b = body[c];
+        if (b === i && w === 1) continue;
+        const dx = sx[c] / w - x, dy = sy[c] / w - y, dz = sz[c] / w - z;
+        let l2 = dx * dx + dy * dy + dz * dz;
+        const width = hs[c] * 2;
+        if (b !== INTERNAL || width * width < theta2 * l2) {
+          if (l2 < 1e-6) continue;
+          if (l2 < 1) l2 = Math.sqrt(l2);
+          const f = k * w / l2;
+          fx += dx * f; fy += dy * f; fz += dz * f;
+        } else {
+          for (let q = 0; q < 8; q++) {
+            const cc = child[c * 8 + q];
+            if (cc >= 0) stack[sp++] = cc;
+          }
+        }
+      }
+      vel[i * 3] += fx; vel[i * 3 + 1] += fy; vel[i * 3 + 2] += fz;
+    }
+  };
+  const linkForce = (alpha) => {
+    for (let e = 0; e < m; e++) {
+      const s = links[e * 2] * 3, t = links[e * 2 + 1] * 3;
+      let x = pos[t] + vel[t] - pos[s] - vel[s];
+      let y = pos[t + 1] + vel[t + 1] - pos[s + 1] - vel[s + 1];
+      let z = pos[t + 2] + vel[t + 2] - pos[s + 2] - vel[s + 2];
+      let l = Math.sqrt(x * x + y * y + z * z) || 1e-6;
+      l = (l - P.linkDistance) / l * alpha * strength[e];
+      x *= l; y *= l; z *= l;
+      const b = bias[e];
+      vel[t] -= x * b; vel[t + 1] -= y * b; vel[t + 2] -= z * b;
+      vel[s] += x * (1 - b); vel[s + 1] += y * (1 - b); vel[s + 2] += z * (1 - b);
+    }
+  };
+  alloc(n * 4 + 64);
+  let alpha = 1;
+  let ticks = 0;
+  return {
+    positions: pos,
+    get alpha() { return alpha; },
+    get ticks() { return ticks; },
+    get done() { return alpha < P.alphaMin; },
+    tick() {
+      if (!n) { alpha = 0; return; }
+      alpha += (0 - alpha) * alphaDecay;
+      linkForce(alpha);
+      manyBody(alpha);
+      const g = P.gravity * alpha;
+      let mx = 0, my = 0, mz = 0;
+      for (let i = 0; i < n * 3; i += 3) {
+        vel[i] -= pos[i] * g; vel[i + 1] -= pos[i + 1] * g; vel[i + 2] -= pos[i + 2] * g;
+        pos[i] += (vel[i] *= P.velocityKeep);
+        pos[i + 1] += (vel[i + 1] *= P.velocityKeep);
+        pos[i + 2] += (vel[i + 2] *= P.velocityKeep);
+        mx += pos[i]; my += pos[i + 1]; mz += pos[i + 2];
+      }
+      mx /= n; my /= n; mz /= n;
+      for (let i = 0; i < n * 3; i += 3) { pos[i] -= mx; pos[i + 1] -= my; pos[i + 2] -= mz; }
+      ticks++;
+    },
+  };
+}
+
+// Worker 본체: 12ms씩 계산하고 위치를 보낸 뒤 쉬어, 메시지(종료)를 받을 틈을 둔다.
+function layoutWorker3d() {
+  let layout = null;
+  const step = () => {
+    const t0 = performance.now();
+    do layout.tick(); while (!layout.done && performance.now() - t0 < 12);
+    const pos = layout.positions.slice();
+    self.postMessage({ pos, alpha: layout.alpha, ticks: layout.ticks, done: layout.done }, [pos.buffer]);
+    if (!layout.done) setTimeout(step, 0);
+  };
+  self.onmessage = (event) => {
+    const msg = event.data;
+    layout = forceLayout3d(msg.n, msg.links, msg.pos, msg.params);
+    step();
+  };
+}
+
+const LAYOUT_WORKER_3D = `${forceLayout3d.toString()}\n(${layoutWorker3d.toString()})();`;
+
+// 'rgb(…)' / 'rgba(…)' / '#rrggbb' → [r, g, b, a] (0–1)
+function parseCssColor(css) {
+  const s = String(css || '').trim();
+  if (/^#[0-9a-f]{6}$/i.test(s)) return rgbOf(s).map((v) => v / 255).concat(1);
+  const m = s.match(/rgba?\(([^)]+)\)/);
+  if (!m) return [0, 0, 0, 1];
+  const p = m[1].split(/[\s,/]+/).filter(Boolean).map((v) => parseFloat(v));
+  return [p[0] / 255, p[1] / 255, p[2] / 255, p.length > 3 ? p[3] : 1];
+}
+
+function overColor(top, base) {
+  return [0, 1, 2].map((i) => top[i] * top[3] + base[i] * (1 - top[3]));
+}
+
+function luminance(rgb) {
+  return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+}
+
+// 2D 그래프가 iframe에 거는 CSS filter(brightness → contrast → saturate)를 색에 미리 적용한다.
+// CSS filter처럼 단계마다 0–1로 잘라야 2D 그래프에 보이는 색과 같다(끝에서 한 번만 자르면 밝은 색이 더 진해진다).
+function applyCssFilter(rgb, filter) {
+  const amount = (name) => {
+    const m = String(filter || '').match(new RegExp(`${name}\\(([0-9.]+)\\)`));
+    return m ? parseFloat(m[1]) : 1;
+  };
+  const b = amount('brightness');
+  const c = amount('contrast');
+  const s = amount('saturate');
+  const clamp = (v) => Math.max(0, Math.min(1, v));
+  const [r, g, bl] = rgb.slice(0, 3).map((v) => clamp((clamp(v * b) - 0.5) * c + 0.5));
+  return [
+    (0.213 + 0.787 * s) * r + (0.715 - 0.715 * s) * g + (0.072 - 0.072 * s) * bl,
+    (0.213 - 0.213 * s) * r + (0.715 + 0.285 * s) * g + (0.072 - 0.072 * s) * bl,
+    (0.213 - 0.213 * s) * r + (0.715 - 0.715 * s) * g + (0.072 + 0.928 * s) * bl,
+  ].map(clamp);
+}
+
+function perspective3d(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2);
+  const nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
+}
+
+function lookAt3d(e, t) {
+  let zx = e[0] - t[0], zy = e[1] - t[1], zz = e[2] - t[2];
+  const l = Math.hypot(zx, zy, zz);
+  zx /= l; zy /= l; zz /= l;
+  const lx = Math.hypot(zz, zx) || 1;
+  const xx = zz / lx, xz = -zx / lx; // 위쪽 (0,1,0) × z
+  const yx = zy * xz, yy = zz * xx - zx * xz, yz = -zy * xx;
+  return [xx, yx, zx, 0, 0, yy, zy, 0, xz, yz, zz, 0,
+    -(xx * e[0] + xz * e[2]), -(yx * e[0] + yy * e[1] + yz * e[2]), -(zx * e[0] + zy * e[1] + zz * e[2]), 1];
+}
+
+function mat4Mul3d(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    }
+  }
+  return o;
+}
+
+// 셰이더. 노드는 인스턴스 사각형 하나에 심(불투명 원)과 halo(빛 번짐)를 따로 그린다.
+// 어두운 배경의 halo는 MAX 합성이라 겹쳐도 더해지지 않는다. 큰 묶음이 하얀 덩어리로 뭉개지지 않고 심이 보인다.
+// 밝은 배경에서는 빛이 아니라 옅은 색 번짐(일반 알파 합성)으로 그린다.
+const GL3D = {
+  bg: [`#version 300 es
+out vec2 vUv;
+void main() {
+  vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);
+  vUv = p * 0.5 + 0.5;
+  gl_Position = vec4(p, 0.0, 1.0);
+}`, `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform vec3 uC1, uC2, uC3;
+uniform vec2 uRes;
+out vec4 o;
+void main() {
+  vec2 d = (vUv - vec2(0.5, 0.58)) * uRes;
+  float r = length(d) / length(vec2(0.5, 0.58) * uRes);
+  vec3 c = r < 0.48 ? mix(uC1, uC2, r / 0.48) : mix(uC2, uC3, (r - 0.48) / 0.52);
+  float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  o = vec4(c + (n - 0.5) / 255.0, 1.0);
+}`],
+  line: [`#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aCol;
+uniform mat4 uMvp;
+uniform vec2 uFog;
+uniform vec3 uLine;
+uniform float uAlpha;
+out vec3 vCol;
+out float vA;
+void main() {
+  vec4 c = uMvp * vec4(aPos, 1.0);
+  vCol = mix(uLine, aCol, 0.55);
+  vA = uAlpha * (1.0 - smoothstep(uFog.x, uFog.y, c.w) * 0.75);
+  gl_Position = c;
+}`, `#version 300 es
+precision mediump float;
+in vec3 vCol;
+in float vA;
+uniform float uLight;
+out vec4 o;
+void main() { o = vec4(vCol * vA, uLight * vA); }`],
+  node: `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aCol;
+layout(location=2) in float aSize;
+layout(location=3) in float aHi;
+layout(location=4) in vec2 aCorner;
+uniform mat4 uMvp;
+uniform vec2 uView, uFog;
+uniform float uPx, uScale, uMinPx, uHover;
+out vec2 vUv;
+out vec3 vCol;
+out float vMix, vPx, vHi;
+void main() {
+  vec4 c = uMvp * vec4(aPos, 1.0);
+  if (c.w <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  float px = max(aSize * uPx / c.w, uMinPx) * (1.0 + 0.4 * aHi);
+  vPx = px;
+  vUv = aCorner;
+  vCol = aCol;
+  vHi = aHi;
+  float fog = smoothstep(uFog.x, uFog.y, c.w) * 0.4;
+  vMix = max(fog, uHover * (1.0 - aHi) * 0.7);
+  gl_Position = c + vec4(aCorner * px * uScale / uView * 2.0 * c.w, 0.0, 0.0);
+}`,
+  halo: `#version 300 es
+precision mediump float;
+in vec2 vUv;
+in vec3 vCol;
+in float vMix, vPx, vHi;
+uniform float uGain, uLight;
+out vec4 o;
+void main() {
+  float d2 = dot(vUv, vUv);
+  if (d2 > 1.0) discard;
+  float g = (exp(-d2 * 5.0) - 0.0067) * uGain * (1.0 - vMix);
+  o = vec4(vCol * g, uLight * g);
+}`,
+  core: `#version 300 es
+precision mediump float;
+in vec2 vUv;
+in vec3 vCol;
+in float vMix, vPx, vHi;
+uniform vec3 uFogColor;
+uniform float uSheen, uOnlyHi;
+out vec4 o;
+void main() {
+  if (uOnlyHi > 0.5 && vHi < 0.5) discard;
+  float d = length(vUv);
+  float a = 1.0 - smoothstep(1.0 - 1.5 / max(vPx, 1.0), 1.0, d);
+  if (a <= 0.01) discard;
+  vec3 c = mix(mix(vCol, vec3(1.0), uSheen * (1.0 - d * d)), uFogColor, vMix);
+  o = vec4(c * a, a);
+}`,
+};
+
+class Graph3DView extends ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+    this.cam = { theta: 0.6, phi: 0.25, dist: 400, target: [0, 0, 0], fov: 0.9 };
+    this.hover = -1;
+    this.raf = 0;
+    this.resumeTimer = 0;
+  }
+
+  getViewType() { return VIEW_TYPE_3D; }
+  getDisplayText() { return L.view3d; }
+  getIcon() { return 'box'; }
+
+  async onOpen() {
+    const el = this.contentEl;
+    el.empty();
+    el.addClass('gs3d-view');
+    if (!this.plugin.settings.experimental3d) {
+      this.showMessage(L.off3d);
+      return;
+    }
+    this.canvas = el.createEl('canvas', { cls: 'gs3d-canvas' });
+    this.gl = this.canvas.getContext('webgl2', { antialias: true, alpha: false, powerPreference: 'high-performance' });
+    if (!this.gl) {
+      this.canvas.remove();
+      this.canvas = null;
+      this.showMessage(L.noWebgl3d);
+      return;
+    }
+    this.label = el.createDiv({ cls: 'gs3d-label' });
+    this.registerDomEvent(this.canvas, 'webglcontextlost', (e) => {
+      e.preventDefault();
+      this.stopLoop();
+      this.showMessage(L.lost3d);
+    });
+    this.registerDomEvent(this.canvas, 'webglcontextrestored', () => {
+      this.clearMessage();
+      this.initGL();
+      this.kick();
+    });
+    this.registerDomEvent(document, 'visibilitychange', () => this.kick());
+    this.registerEvent(this.app.workspace.on('css-change', () => this.applyStyle()));
+    this.bindInput();
+    this.resizeObserver = new ResizeObserver(() => {
+      if (!this.userMoved && this.fit) this.cam.dist = this.shownDist = this.fitDistance();
+      this.kick();
+    });
+    this.resizeObserver.observe(this.canvas);
+    await this.build();
+  }
+
+  async onClose() {
+    this.disposed = true;
+    this.stopLoop();
+    window.clearTimeout(this.resumeTimer);
+    this.stopLayout();
+    if (this.resizeObserver) this.resizeObserver.disconnect();
+    this.resizeObserver = null;
+    // 탭을 닫는 즉시 GPU 메모리를 돌려준다. Chromium은 동시에 살아 있는 WebGL 문맥 수를 제한한다.
+    const lose = this.gl && this.gl.getExtension('WEBGL_lose_context');
+    if (lose) lose.loseContext();
+    this.gl = null;
+    this.canvas = null;
+    this.contentEl.empty();
+  }
+
+  showMessage(text) {
+    this.clearMessage();
+    this.message = this.contentEl.createDiv({ cls: 'gs3d-message', text });
+  }
+
+  clearMessage() {
+    if (this.message) this.message.remove();
+    this.message = null;
+  }
+
+  // 이름을 load()로 하면 View.open이 부르는 Component.load()를 덮는다. 그러면 뷰가 로드된 상태가 되지 않아
+  // 닫을 때 registerDomEvent·registerEvent로 건 것이 풀리지 않는다.
+  async build() {
+    const { vault, metadataCache } = this.app;
+    const files = vault.getMarkdownFiles();
+    const paths = files.map((f) => f.path);
+    this.files = files;
+    this.data = graphData3d(paths, metadataCache.resolvedLinks);
+    // Obsidian을 막 켜서 링크 색인이 덜 된 채 복원된 탭이면, 색인이 끝날 때 한 번만 다시 만든다.
+    // 그 뒤의 노트 변경은 반영하지 않는다(열 때의 그래프를 보여 준다).
+    if (!this.waitingIndex && Object.keys(metadataCache.resolvedLinks || {}).length < files.length) {
+      this.waitingIndex = true;
+      const ref = metadataCache.on('resolved', () => {
+        metadataCache.offref(ref);
+        if (!this.disposed) this.build();
+      });
+      this.registerEvent(ref);
+    }
+    if (!this.data.n) {
+      this.showMessage(L.empty3d);
+      return;
+    }
+    this.clearMessage();
+    this.pos = initialPositions3d(paths);
+    this.hi = new Float32Array(this.data.n);
+    this.hover = -1;
+    this.style = await this.readStyle();
+    if (this.disposed) return;
+    this.initGL();
+    this.fit = this.measureFit();
+    this.cam.target = [0, 0, 0];
+    this.cam.dist = this.shownDist = this.fitDistance();
+    this.userMoved = false;
+    this.startLayout();
+    this.kick();
+  }
+
+  // 색은 지금 화면의 2D 그래프와 같은 곳에서 읽는다: 노드·선 기본색은 테마/프리셋이 칠하는 .graph-view.color-*,
+  // 그룹 색은 코어 그래프 설정의 colorGroups, 배경과 글로우 filter는 적용 중인 프리셋. 프리셋이 없으면 테마 배경.
+  async readStyle() {
+    const plugin = this.plugin;
+    const palette = await plugin.activePalette();
+    const probe = (cls, prop) => {
+      const el = document.body.createDiv({ cls });
+      const color = parseCssColor(getComputedStyle(el)[prop]);
+      el.remove();
+      return color;
+    };
+    const filter = palette ? palette.filter : 'none';
+    let bg;
+    if (palette) {
+      const base = parseCssColor(palette.bg3);
+      const mid = overColor(parseCssColor(palette.bg2), base);
+      bg = [overColor(parseCssColor(palette.bg1), mid), mid, base.slice(0, 3)];
+    } else {
+      const el = document.body.createDiv();
+      el.style.backgroundColor = 'var(--background-primary)';
+      const base = parseCssColor(getComputedStyle(el).backgroundColor).slice(0, 3);
+      el.remove();
+      bg = [base, base, base];
+    }
+    const core = this.app.internalPlugins && this.app.internalPlugins.plugins && this.app.internalPlugins.plugins.graph;
+    const options = core && core.instance && core.instance.options && Array.isArray(core.instance.options.colorGroups)
+      ? core.instance.options : await plugin.readGraphOptions();
+    const groups = (Array.isArray(options.colorGroups) ? options.colorGroups : [])
+      .filter((g) => g && g.color && typeof g.color.rgb === 'number')
+      .map((g) => ({
+        test: colorGroupTest3d(g.query),
+        tags: /^\s*tag:/.test(String(g.query || '')),
+        rgb: applyCssFilter([(g.color.rgb >> 16) & 255, (g.color.rgb >> 8) & 255, g.color.rgb & 255].map((v) => v / 255), filter),
+      }));
+    return {
+      bg,
+      light: luminance(bg[2]) > 0.5,
+      fill: applyCssFilter(probe('graph-view color-fill', 'color'), filter),
+      line: applyCssFilter(probe('graph-view color-line', 'color'), filter),
+      groups,
+    };
+  }
+
+  // 노드 색과 크기. 크기는 2D 그래프처럼 연결 수의 제곱근을 따른다.
+  nodeAttributes() {
+    const { n, deg } = this.data;
+    const { groups, fill } = this.style;
+    const tagged = groups.some((g) => g.tags);
+    const col = new Float32Array(n * 3);
+    const size = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const file = this.files[i];
+      const tags = tagged ? (getAllTags(this.app.metadataCache.getFileCache(file) || {}) || []) : [];
+      const g = groups.find((group) => group.test(file.path, tags));
+      col.set(g ? g.rgb : fill, i * 3);
+      size[i] = 2.2 + Math.sqrt(deg[i]) * 1.1;
+    }
+    return { col, size };
+  }
+
+  async applyStyle() {
+    if (!this.gl || !this.data || !this.data.n) return;
+    this.style = await this.readStyle();
+    if (this.disposed || !this.gl) return;
+    const { col } = this.nodeAttributes();
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.col);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, col);
+    this.kick();
+  }
+
+  startLayout() {
+    this.stopLayout();
+    this.layoutDone = false;
+    const url = URL.createObjectURL(new Blob([LAYOUT_WORKER_3D], { type: 'text/javascript' }));
+    this.worker = new Worker(url);
+    URL.revokeObjectURL(url);
+    this.worker.onmessage = (event) => {
+      this.pos = event.data.pos;
+      this.posDirty = true;
+      if (event.data.done) {
+        this.layoutDone = true;
+        this.stopLayout();
+      }
+      this.kick();
+    };
+    const pos = this.pos.slice();
+    const links = this.data.links.slice();
+    this.worker.postMessage({ n: this.data.n, links, pos }, [pos.buffer, links.buffer]);
+  }
+
+  stopLayout() {
+    if (this.worker) this.worker.terminate();
+    this.worker = null;
+  }
+
+  initGL() {
+    const gl = this.gl;
+    if (!gl || gl.isContextLost() || !this.data) return;
+    // 색인이 끝나 다시 만들 때 이전 GPU 자원을 먼저 돌려준다. 문맥 복구 뒤에는 이미 무효라 지워도 무해하다.
+    if (this.prog) for (const P of Object.values(this.prog)) gl.deleteProgram(P.p);
+    if (this.buf) for (const b of Object.values(this.buf)) gl.deleteBuffer(b);
+    if (this.vaoLine) gl.deleteVertexArray(this.vaoLine);
+    if (this.vaoNode) gl.deleteVertexArray(this.vaoNode);
+    const compile = (vs, fs) => {
+      const p = gl.createProgram();
+      for (const [type, text] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, text);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+        gl.attachShader(p, sh);
+        gl.deleteShader(sh);
+      }
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+      const u = {};
+      for (let i = 0; i < gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i++) {
+        const name = gl.getActiveUniform(p, i).name;
+        u[name] = gl.getUniformLocation(p, name);
+      }
+      return { p, u };
+    };
+    this.prog = {
+      bg: compile(GL3D.bg[0], GL3D.bg[1]),
+      line: compile(GL3D.line[0], GL3D.line[1]),
+      halo: compile(GL3D.node, GL3D.halo),
+      core: compile(GL3D.node, GL3D.core),
+    };
+    const { col, size } = this.nodeAttributes();
+    const buf = (target, data, usage) => {
+      const b = gl.createBuffer();
+      gl.bindBuffer(target, b);
+      gl.bufferData(target, data, usage);
+      return b;
+    };
+    this.buf = {
+      pos: buf(gl.ARRAY_BUFFER, this.pos, gl.DYNAMIC_DRAW),
+      col: buf(gl.ARRAY_BUFFER, col, gl.DYNAMIC_DRAW),
+      size: buf(gl.ARRAY_BUFFER, size, gl.STATIC_DRAW),
+      hi: buf(gl.ARRAY_BUFFER, this.hi, gl.DYNAMIC_DRAW),
+      corner: buf(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW),
+      links: buf(gl.ELEMENT_ARRAY_BUFFER, this.data.links, gl.STATIC_DRAW),
+      hiLinks: buf(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(0), gl.DYNAMIC_DRAW),
+    };
+    this.hiCount = 0;
+    const attr = (loc, b, n, divisor) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribDivisor(loc, divisor);
+    };
+    this.vaoLine = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoLine);
+    attr(0, this.buf.pos, 3, 0);
+    attr(1, this.buf.col, 3, 0);
+    this.vaoNode = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoNode);
+    attr(0, this.buf.pos, 3, 1);
+    attr(1, this.buf.col, 3, 1);
+    attr(2, this.buf.size, 1, 1);
+    attr(3, this.buf.hi, 1, 1);
+    attr(4, this.buf.corner, 2, 0);
+    gl.bindVertexArray(null);
+  }
+
+  bindInput() {
+    const c = this.canvas;
+    this.registerDomEvent(c, 'pointerdown', (e) => {
+      c.setPointerCapture(e.pointerId);
+      this.drag = { x: e.clientX, y: e.clientY, moved: 0, pan: e.button === 2 || e.shiftKey, button: e.button };
+      this.touch();
+    });
+    this.registerDomEvent(c, 'pointermove', (e) => {
+      const d = this.drag;
+      if (d) {
+        const dx = e.clientX - d.x, dy = e.clientY - d.y;
+        d.x = e.clientX; d.y = e.clientY;
+        d.moved += Math.abs(dx) + Math.abs(dy);
+        if (d.pan) this.panBy(dx, dy);
+        else {
+          this.cam.theta -= dx * 0.006;
+          this.cam.phi = Math.max(-1.45, Math.min(1.45, this.cam.phi + dy * 0.006));
+        }
+        this.touch();
+      } else {
+        this.mouse = [e.offsetX, e.offsetY];
+      }
+      this.kick(true);
+    });
+    this.registerDomEvent(c, 'pointerup', (e) => {
+      const d = this.drag;
+      this.drag = null;
+      if (c.hasPointerCapture(e.pointerId)) c.releasePointerCapture(e.pointerId);
+      if (d && d.moved < 5 && d.button === 0 && this.hover >= 0) this.openNode(this.hover, e);
+      this.kick(true);
+    });
+    this.registerDomEvent(c, 'pointerleave', () => {
+      if (this.drag) return;
+      this.mouse = null;
+      this.setHover(-1);
+      this.kick(true);
+    });
+    // 트랙패드 핀치는 Chromium에서 ctrlKey가 붙은 wheel로 온다. 두 손가락 스크롤(작은 deltaY)도 확대로 쓴다.
+    this.registerDomEvent(c, 'wheel', (e) => {
+      e.preventDefault();
+      const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+      const dist = this.cam.dist * Math.exp(dy * (e.ctrlKey ? 0.01 : 0.0015));
+      this.cam.dist = Math.max(this.fit.r * 0.05, Math.min(this.fit.r * 12, dist));
+      this.touch();
+      this.kick(true);
+    }, { passive: false });
+    this.registerDomEvent(c, 'contextmenu', (e) => e.preventDefault());
+  }
+
+  // 입력이 있으면 회전을 멈추고, IDLE_3D_MS 동안 조용하면 다시 천천히 돌린다.
+  touch() {
+    this.userMoved = true;
+    this.lastInput = performance.now();
+    window.clearTimeout(this.resumeTimer);
+    this.resumeTimer = window.setTimeout(() => this.kick(), IDLE_3D_MS + 50);
+  }
+
+  rotationSpeed(t) {
+    if (this.drag) return 0;
+    if (!this.lastInput) return ROTATE_3D;
+    const k = Math.max(0, Math.min(1, (t - this.lastInput - IDLE_3D_MS) / EASE_3D_MS));
+    return ROTATE_3D * k * k * (3 - 2 * k);
+  }
+
+  panBy(dx, dy) {
+    const v = this.viewMatrix;
+    if (!v) return;
+    const k = this.shownDist * Math.tan(this.cam.fov / 2) * 2 / Math.max(1, this.canvas.clientHeight);
+    // view 행렬의 첫째·둘째 행 = 카메라의 오른쪽·위 방향
+    for (let i = 0; i < 3; i++) this.cam.target[i] += (-dx * v[i * 4] + dy * v[i * 4 + 1]) * k;
+  }
+
+  openNode(i, evt) {
+    const file = this.files[i];
+    const ws = this.app.workspace;
+    const mod = Keymap.isModEvent(evt);
+    // 3D 탭은 다시 배치하는 데 몇 초가 들어서, 2D 그래프와 달리 자기 탭을 노트로 바꾸지 않는다.
+    const leaf = mod ? ws.getLeaf(mod)
+      : ws.getLeavesOfType('markdown').find((l) => l.getRoot() === ws.rootSplit) || ws.getLeaf('tab');
+    leaf.openFile(file);
+  }
+
+  setHover(i) {
+    if (i === this.hover) return;
+    this.hover = i;
+    const { start, adj, adjLink, links } = this.data;
+    this.hi.fill(0);
+    const hiLinks = [];
+    if (i >= 0) {
+      this.hi[i] = 1;
+      for (let p = start[i]; p < start[i + 1]; p++) {
+        this.hi[adj[p]] = 1;
+        const e = adjLink[p];
+        hiLinks.push(links[e * 2], links[e * 2 + 1]);
+      }
+      this.label.setText(this.files[i].basename);
+    }
+    this.label.toggleClass('is-shown', i >= 0);
+    const gl = this.gl;
+    if (!gl || gl.isContextLost()) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.hi);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.hi);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.hiLinks);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(hiLinks), gl.DYNAMIC_DRAW);
+    this.hiCount = hiLinks.length;
+  }
+
+  // 마우스 아래 노드를 CPU에서 투영해 고른다(5,000개에 0.1ms 안팎). 반경에 대한 거리 비율이 가장 작은 노드라,
+  // 허브 바로 앞을 지나는 작은 노드보다 커서가 중심에 더 가까운 허브가 잡힌다.
+  pick() {
+    if (!this.mouse || !this.mvp) {
+      this.setHover(-1);
+      return;
+    }
+    const M = this.mvp, P = this.pos, c = this.canvas;
+    const dpr = c.width / Math.max(1, c.clientWidth);
+    const mx = this.mouse[0] * dpr, my = this.mouse[1] * dpr;
+    const minR = 6 * dpr;
+    let best = -1, bestScore = 1;
+    for (let i = 0; i < this.data.n; i++) {
+      const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+      const w = M[3] * x + M[7] * y + M[11] * z + M[15];
+      if (w <= 0) continue;
+      const sx = ((M[0] * x + M[4] * y + M[8] * z + M[12]) / w * 0.5 + 0.5) * c.width;
+      const sy = (0.5 - (M[1] * x + M[5] * y + M[9] * z + M[13]) / w * 0.5) * c.height;
+      const r = Math.max((2.2 + Math.sqrt(this.data.deg[i]) * 1.1) * this.pxScale / w, minR);
+      const score = Math.hypot(sx - mx, sy - my) / r;
+      if (score <= bestScore) { best = i; bestScore = score; }
+    }
+    this.setHover(best);
+    if (best >= 0) {
+      const s = this.project(best);
+      this.label.style.transform = `translate(${s[0] / dpr + 12}px, ${s[1] / dpr - 26}px)`;
+    }
+  }
+
+  project(i) {
+    const M = this.mvp, P = this.pos;
+    const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+    const w = M[3] * x + M[7] * y + M[11] * z + M[15];
+    return [((M[0] * x + M[4] * y + M[8] * z + M[12]) / w * 0.5 + 0.5) * this.canvas.width,
+      (0.5 - (M[1] * x + M[5] * y + M[9] * z + M[13]) / w * 0.5) * this.canvas.height];
+  }
+
+  measureFit() {
+    const n = this.data.n;
+    const d = new Float32Array(n);
+    for (let i = 0; i < n; i++) d[i] = Math.hypot(this.pos[i * 3], this.pos[i * 3 + 1], this.pos[i * 3 + 2]);
+    d.sort();
+    // 멀리 떠 있는 섬 몇 개 때문에 전체가 작아지지 않게 92% 지점에 맞춘다.
+    return { r: Math.max(d[Math.floor(n * 0.92)] || 1, 1), max: Math.max(d[n - 1] || 1, 1) };
+  }
+
+  fitDistance() {
+    const c = this.canvas;
+    const aspect = c && c.clientHeight ? c.clientWidth / c.clientHeight : 1;
+    const half = Math.min(this.cam.fov / 2, Math.atan(Math.tan(this.cam.fov / 2) * aspect));
+    return this.fit.r / Math.sin(half) * 1.02;
+  }
+
+  // input=true: 입력에 대한 응답이라 프레임 상한 없이 바로 그린다.
+  kick(input) {
+    if (input) this.inputPending = true;
+    if (!this.raf && this.gl && this.prog && !this.disposed) this.raf = window.requestAnimationFrame((t) => this.frame(t));
+  }
+
+  stopLoop() {
+    if (this.raf) window.cancelAnimationFrame(this.raf);
+    this.raf = 0;
+  }
+
+  frame(t) {
+    this.raf = 0;
+    const c = this.canvas;
+    const gl = this.gl;
+    if (!c || !gl || gl.isContextLost() || document.hidden || c.clientWidth === 0) return;
+    const gap = this.lastFrame ? t - this.lastFrame : 0;
+    if (gap > 0 && gap < 50) this.frameGap = this.frameGap ? this.frameGap * 0.9 + gap * 0.1 : gap;
+    this.lastFrame = t;
+    // 드래그 중이거나 입력 직후에는 화면 주사율대로 그린다. 회전·배치만 진행 중이면 FPS_3D 박자에 맞춰 건너뛴다:
+    // 120Hz 화면에서는 한 번 걸러 한 번 그리고, 144Hz처럼 나누어떨어지지 않는 화면에서도 평균이 FPS_3D를 넘지 않는다.
+    const interactive = this.inputPending || !!this.drag || t - (this.lastInput || -Infinity) < 300;
+    const period = 1000 / FPS_3D;
+    if (!interactive && this.nextDraw && t < this.nextDraw - (this.frameGap || 0) / 2) {
+      this.kick();
+      return;
+    }
+    this.nextDraw = !interactive && this.nextDraw && t - this.nextDraw < period ? this.nextDraw + period : t + period;
+    const dt = this.lastDraw ? Math.min(0.1, (t - this.lastDraw) / 1000) : 0;
+    this.lastDraw = t;
+    this.inputPending = false;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    const speed = this.rotationSpeed(t);
+    this.cam.theta += dt * speed;
+    // 휠 한 칸에 툭 튀지 않게 확대는 목표 거리로 미끄러지듯 따라간다.
+    this.shownDist += (this.cam.dist - this.shownDist) * (1 - Math.exp(-dt * 14));
+    const zooming = Math.abs(this.cam.dist - this.shownDist) > this.cam.dist * 1e-3;
+    this.draw();
+    this.pick();
+    if (speed > 0 || !this.layoutDone || zooming || interactive) this.kick();
+    else {
+      this.lastDraw = 0;
+      this.nextDraw = 0;
+    }
+  }
+
+  draw() {
+    const gl = this.gl;
+    const c = this.canvas;
+    const n = this.data.n;
+    const m = this.data.links.length / 2;
+    const st = this.style;
+    if (this.posDirty) {
+      this.posDirty = false;
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.pos);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.pos);
+      if (!this.userMoved) {
+        this.fit = this.measureFit();
+        this.cam.dist = this.shownDist = this.fitDistance();
+      }
+    }
+    const cam = this.cam;
+    const dist = this.shownDist;
+    const eye = [
+      cam.target[0] + dist * Math.cos(cam.phi) * Math.sin(cam.theta),
+      cam.target[1] + dist * Math.sin(cam.phi),
+      cam.target[2] + dist * Math.cos(cam.phi) * Math.cos(cam.theta),
+    ];
+    const near = Math.max(0.5, dist - this.fit.max * 1.5) * 0.05;
+    this.viewMatrix = lookAt3d(eye, cam.target);
+    this.mvp = mat4Mul3d(perspective3d(cam.fov, c.width / c.height, near, dist + this.fit.max * 3), this.viewMatrix);
+    this.pxScale = c.height / (2 * Math.tan(cam.fov / 2));
+    const fog = [dist - this.fit.r * 0.5, dist + this.fit.r * 1.3];
+    const hovering = this.hover >= 0 ? 1 : 0;
+    const light = st.light ? 1 : 0;
+
+    gl.viewport(0, 0, c.width, c.height);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    let P = this.prog.bg;
+    gl.useProgram(P.p);
+    gl.uniform3fv(P.u.uC1, st.bg[0]);
+    gl.uniform3fv(P.u.uC2, st.bg[1]);
+    gl.uniform3fv(P.u.uC3, st.bg[2]);
+    gl.uniform2f(P.u.uRes, c.width, c.height);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // 선: 어두운 배경에서는 빛처럼 더하고, 밝은 배경에서는 옅게 덮는다.
+    gl.enable(gl.BLEND);
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.blendFunc(gl.ONE, light ? gl.ONE_MINUS_SRC_ALPHA : gl.ONE);
+    P = this.prog.line;
+    gl.useProgram(P.p);
+    gl.uniformMatrix4fv(P.u.uMvp, false, this.mvp);
+    gl.uniform2fv(P.u.uFog, fog);
+    gl.uniform3fv(P.u.uLine, st.line);
+    gl.uniform1f(P.u.uLight, light);
+    gl.bindVertexArray(this.vaoLine);
+    gl.uniform1f(P.u.uAlpha, (light ? 0.35 : 0.22) * (hovering ? 0.3 : 1));
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.links);
+    gl.drawElements(gl.LINES, m * 2, gl.UNSIGNED_INT, 0);
+    if (hovering && this.hiCount) {
+      gl.uniform1f(P.u.uAlpha, 0.9);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.hiLinks);
+      gl.drawElements(gl.LINES, this.hiCount, gl.UNSIGNED_INT, 0);
+    }
+
+    gl.bindVertexArray(this.vaoNode);
+    const dpr = c.width / Math.max(1, c.clientWidth);
+    for (const name of ['halo', 'core']) {
+      P = this.prog[name];
+      gl.useProgram(P.p);
+      gl.uniformMatrix4fv(P.u.uMvp, false, this.mvp);
+      gl.uniform2f(P.u.uView, c.width, c.height);
+      gl.uniform1f(P.u.uPx, this.pxScale);
+      gl.uniform1f(P.u.uMinPx, 1.6 * dpr);
+      gl.uniform1f(P.u.uHover, hovering);
+      gl.uniform2fv(P.u.uFog, fog);
+      if (name === 'halo') {
+        gl.uniform1f(P.u.uScale, light ? 3 : 4.8);
+        gl.uniform1f(P.u.uGain, light ? 0.18 : 0.7);
+        gl.uniform1f(P.u.uLight, light);
+        if (light) gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        else gl.blendEquation(gl.MAX);
+      } else {
+        gl.blendEquation(gl.FUNC_ADD);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.enable(gl.DEPTH_TEST);
+        gl.uniform1f(P.u.uScale, 1);
+        gl.uniform3fv(P.u.uFogColor, st.bg[1]);
+        gl.uniform1f(P.u.uSheen, light ? 0 : 0.15);
+        gl.uniform1f(P.u.uOnlyHi, 0);
+      }
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
+    }
+    // 호버 중에는 강조된 노드를 한 번 더, 깊이 검사 없이 위에 그린다. 앞을 지나는 흐린 노드가 가려 반달처럼 먹히지 않게.
+    if (hovering) {
+      gl.disable(gl.DEPTH_TEST);
+      gl.uniform1f(this.prog.core.u.uOnlyHi, 1);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
+    }
+    gl.bindVertexArray(null);
+  }
+}
+
+class GraphStylerSettingTab extends PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    new Setting(containerEl).setName(L.experimental).setHeading();
+    new Setting(containerEl)
+      .setName(L.exp3dName)
+      .setDesc(L.exp3dDesc)
+      .addToggle((toggle) => toggle
+        .setValue(!!this.plugin.settings.experimental3d)
+        .onChange((value) => this.plugin.setExperimental3d(value)));
+  }
+}
+
 module.exports = class GraphStyler extends Plugin {
   // 플러그인 로더는 클래스만 쓴다. 내보내기 계산 함수는 테스트용으로 붙여 둔다.
   static exportScaleLimit = exportScaleLimit;
@@ -1173,6 +2228,19 @@ module.exports = class GraphStyler extends Plugin {
       this.registerEvent(workspace.on('layout-change', colorLocals));
     }
 
+    // 3D 그래프는 실험 기능이다. 설정에서 켜기 전에는 명령이 팔레트에 보이지 않고, 3D 코드는 아무것도 돌지 않는다.
+    // 뷰 종류는 늘 등록해 둔다. 켜 둔 채 닫은 탭이 복원돼도 '꺼져 있음' 안내만 보이게.
+    this.registerView(VIEW_TYPE_3D, (leaf) => new Graph3DView(leaf, this));
+    this.addCommand({
+      id: 'open-3d-graph',
+      name: L.open3dCmd,
+      checkCallback: (checking) => {
+        if (!this.settings.experimental3d) return false;
+        if (!checking) this.open3d();
+        return true;
+      },
+    });
+    this.addSettingTab(new GraphStylerSettingTab(this.app, this));
     this.registerView(VIEW_TYPE, (leaf) => new StylerView(leaf, this));
     this.addRibbonIcon('palette', 'Graph Styler', () => this.activateView());
     this.addCommand({
@@ -1238,6 +2306,24 @@ module.exports = class GraphStyler extends Plugin {
   refreshViews() {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       if (leaf.view && typeof leaf.view.render === 'function') leaf.view.render();
+    }
+  }
+
+  async open3d() {
+    await this.app.workspace.getLeaf('tab').setViewState({ type: VIEW_TYPE_3D, active: true });
+  }
+
+  async setExperimental3d(on) {
+    this.settings.experimental3d = on;
+    await this.saveData(this.settings);
+    if (on) new Notice(L.exp3dOn);
+    else for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_3D)) leaf.detach();
+  }
+
+  // 프리셋을 바꾸면 열린 3D 그래프도 새 색을 쓴다(테마 전환은 3D 뷰가 css-change로 직접 받는다).
+  refresh3d() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_3D)) {
+      if (leaf.view instanceof Graph3DView) leaf.view.applyStyle();
     }
   }
 
@@ -1851,6 +2937,7 @@ module.exports = class GraphStyler extends Plugin {
       this.currentForceOptions = forceOptionsFromGraph(merged);
       this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, graphOptions) });
       if (!live) this.refreshViews();
+      if (!live) this.refresh3d();
       if (!live && shown) new Notice(L.applied(preset));
     } catch (e) {
       console.error('[graph-styler] apply failed', e);
@@ -2055,11 +3142,18 @@ module.exports = class GraphStyler extends Plugin {
     this.syncCoreGraphOptions(restoredOptions);
     await this.reloadGraph(restoredOptions);
     this.refreshViews();
+    this.refresh3d();
     new Notice(L.restored);
   }
 };
 
-// 플러그인 로더는 module.exports(클래스)만 쓴다. 공유 코드 함수는 테스트용으로 붙여 둔다.
+// 플러그인 로더는 module.exports(클래스)만 쓴다. 공유 코드·3D 그래프 함수는 테스트용으로 붙여 둔다.
 module.exports.encodeShareCode = encodeShareCode;
 module.exports.decodeShareCode = decodeShareCode;
 module.exports.presetFromRaw = presetFromRaw;
+module.exports.graphData3d = graphData3d;
+module.exports.colorGroupTest3d = colorGroupTest3d;
+module.exports.initialPositions3d = initialPositions3d;
+module.exports.forceLayout3d = forceLayout3d;
+module.exports.LAYOUT_WORKER_3D = LAYOUT_WORKER_3D;
+module.exports.applyCssFilter = applyCssFilter;
