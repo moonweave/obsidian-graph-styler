@@ -1739,16 +1739,25 @@ class Graph3DView extends ItemView {
   // 이름을 load()로 하면 View.open이 부르는 Component.load()를 덮는다. 그러면 뷰가 로드된 상태가 되지 않아
   // 닫을 때 registerDomEvent·registerEvent로 건 것이 풀리지 않는다.
   async build() {
-    const { vault, metadataCache } = this.app;
+    const { vault, metadataCache, workspace } = this.app;
+    // 시작할 때 복원된 탭은 레이아웃이 준비되기 전에 열린다. 그때는 파일 목록도 덜 찼을 수 있어 준비된 뒤에 만든다.
+    if (!workspace.layoutReady) {
+      workspace.onLayoutReady(() => { if (!this.disposed) this.build(); });
+      return;
+    }
     const files = vault.getMarkdownFiles();
     const paths = files.map((f) => f.path);
     this.files = files;
     this.data = graphData3d(paths, metadataCache.resolvedLinks);
-    // Obsidian을 막 켜서 링크 색인이 덜 된 채 복원된 탭이면, 색인이 끝날 때 한 번만 다시 만든다.
-    // 그 뒤의 노트 변경은 반영하지 않는다(열 때의 그래프를 보여 준다).
-    if (!this.waitingIndex && Object.keys(metadataCache.resolvedLinks || {}).length < files.length) {
+    // 링크 색인이 덜 된 채 열렸으면, 모든 노트가 색인됐을 때 한 번만 다시 만든다. 'resolved'는 처음 색인하는 동안에도
+    // 여러 번 온다(노트 38개 vault를 처음 열 때 37번). 첫 번째에 다시 만들면 링크가 거의 없는 그래프가 그대로 남았다.
+    // 색인이 다 차면 resolvedLinks에는 노트마다 항목이 있다(제외 폴더·빈 노트 포함, 실측). 그 뒤의 노트 변경은
+    // 반영하지 않는다(열 때의 그래프를 보여 준다).
+    const indexed = () => Object.keys(metadataCache.resolvedLinks || {}).length >= vault.getMarkdownFiles().length;
+    if (!this.waitingIndex && !indexed()) {
       this.waitingIndex = true;
       const ref = metadataCache.on('resolved', () => {
+        if (!indexed()) return;
         metadataCache.offref(ref);
         if (!this.disposed) this.build();
       });

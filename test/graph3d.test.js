@@ -255,6 +255,64 @@ function stubView() {
   assert.strictEqual(run([[80, 50], [60, 50], [51, 50]]), 0, 'a drag that comes back near its start is not a click');
 }
 
+// ---------------------------------------------------------------- a tab restored before the link index is complete
+// At a cold start 'resolved' fires once per batch while the index fills (37 times for a 38-note vault, measured).
+// Rebuilding on the first one left a graph with 1 of 44 links. Rebuild once, when every note is indexed, and never on
+// later edits. A tab restored before the layout is ready waits for it (the file list may still be filling).
+{
+  const { view } = stubView();
+  const files = ['a.md', 'b.md', 'c.md'].map((path) => ({ path, basename: path }));
+  const resolved = {};
+  const listeners = [];
+  let ready = false;
+  const onReady = [];
+  view.app = {
+    vault: { getMarkdownFiles: () => files },
+    metadataCache: {
+      resolvedLinks: resolved,
+      on: (name, cb) => { const ref = { name, cb }; listeners.push(ref); return ref; },
+      offref: (ref) => { listeners.splice(listeners.indexOf(ref), 1); },
+    },
+    workspace: { get layoutReady() { return ready; }, onLayoutReady: (cb) => onReady.push(cb) },
+  };
+  view.registerEvent = () => {};
+  view.readStyle = async () => ({});
+  view.initGL = () => {};
+  view.startLayout = () => {};
+  view.clearMessage = () => {};
+  view.showMessage = () => {};
+  const builds = [];
+  const realBuild = view.build.bind(view);
+  view.build = async () => { builds.push(Object.keys(resolved).length); return realBuild(); };
+  const fire = async () => { for (const ref of listeners.slice()) ref.cb(); await new Promise((r) => setImmediate(r)); };
+
+  (async () => {
+    await view.build();
+    assert.deepStrictEqual([builds.length, view.data, onReady.length], [1, undefined, 1], 'before layout-ready: waits, builds nothing');
+    ready = true;
+    onReady[0]();
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(listeners.length, 1, 'index empty: waits for it');
+    resolved['a.md'] = { 'b.md': 1 };
+    await fire();
+    resolved['b.md'] = {};
+    await fire();
+    assert.deepStrictEqual(builds, [0, 0], 'no rebuild while notes are still being indexed');
+    resolved['c.md'] = { 'a.md': 1 };
+    await fire();
+    assert.deepStrictEqual([builds, listeners.length, view.data.links.length / 2], [[0, 0, 3], 0, 2], 'one rebuild with the whole index');
+    resolved['c.md'] = { 'a.md': 1, 'b.md': 1 };
+    await fire();
+    assert.strictEqual(builds.length, 3, 'a later edit does not rebuild the open graph');
+    // a tab opened with the index already complete never listens
+    const again = stubView().view;
+    again.app = view.app;
+    Object.assign(again, { registerEvent() {}, readStyle: view.readStyle, initGL() {}, startLayout() {}, clearMessage() {}, showMessage() {} });
+    await again.build();
+    assert.strictEqual(listeners.length, 0);
+  })().catch((e) => { console.error(e); process.exit(1); });
+}
+
 // ---------------------------------------------------------------- data extraction
 {
   const paths = ['A.md', 'B.md', 'C.md', 'D.md'];
