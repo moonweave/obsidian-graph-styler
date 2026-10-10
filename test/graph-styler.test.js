@@ -1575,6 +1575,49 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     }
   }
 
+  // The real views3d() keeps only 3D views; the speed is clamped (0 and below → the minimum, so Auto-rotate stays
+  // the only off switch); what the panel switch sets is what the Settings tab shows.
+  {
+    const t = await plugin3d();
+    await t.plugin.open3d();
+    const real = t.leaves3d[0].view;
+    let kicks = 0;
+    let other = 0;
+    real.kick = () => { kicks += 1; };
+    t.leaves3d.push({ view: { kick() { other += 1; }, resumeRotation() { other += 1; } } });
+    assert.deepStrictEqual(t.plugin.views3d(), [real]);
+    await t.plugin.setRotate3dSpeed(0.3, false);
+    await t.plugin.setRotate3d(true);
+    assert.deepStrictEqual([kicks, other], [2, 0]);
+    assert.ok(real.rotationSpeed(performance.now()) < 0.05, 'turning Auto-rotate on eases the open tab in from standstill');
+    t.leaves3d.pop();
+
+    for (const [value, want] of [[99, 0.6], [-1, 0.02], [0, 0.02], [Number.NaN, 0.12]]) {
+      await t.plugin.setRotate3dSpeed(value, false);
+      assert.strictEqual(t.plugin.rotate3dSpeed, want, `speed ${value}`);
+    }
+    real.lastInput = 0;
+    await t.plugin.setRotate3dSpeed(0, false);
+    assert.strictEqual(real.rotationSpeed(performance.now()), 0.02);
+    t.plugin.rotate3d = false;
+    assert.strictEqual(real.rotationSpeed(performance.now()), 0);
+
+    const settingValue = () => {
+      const tab = t.settingTab();
+      tab.containerEl = new FakeEl('div');
+      Setting.made.length = 0;
+      tab.display();
+      return Setting.made.find((row) => row.toggle).toggle.value;
+    };
+    t.panel.render();
+    for (const want of [true, false]) {
+      const box = t.panel.contentEl.querySelector('.gs-3d-switch');
+      box.checked = want;
+      await box.onchange();
+      assert.strictEqual(settingValue(), want, `panel → Settings tab (${want})`);
+    }
+  }
+
   // The GL texture limit caps the scale.
   const capped = await exportWith(new FakeGraphRenderer(400));
   assert.deepStrictEqual([capped.canvas.width, capped.canvas.height], [400, 200]);

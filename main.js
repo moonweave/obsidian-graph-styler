@@ -2413,6 +2413,7 @@ module.exports = class GraphStyler extends Plugin {
   }
 
   // 열린 3D 탭은 매 프레임 이 값을 읽는다. 각도에 속도를 쌓아 가므로 값을 바꿔도 화면이 튀지 않는다.
+  // 0이나 음수도 최솟값으로 올린다. 회전을 멈추는 스위치는 자동 회전 하나뿐이다.
   async setRotate3dSpeed(value, save) {
     this.rotate3dSpeed = finiteRange(value, ROTATE_3D, ROTATE_3D_MIN, ROTATE_3D_MAX);
     this.settings.rotate3dSpeed = this.rotate3dSpeed;
