@@ -1202,6 +1202,9 @@ const ROTATE_3D_MIN = 0.02; // 한 바퀴 약 5분
 const ROTATE_3D_MAX = 0.6;  // 한 바퀴 약 10초
 const IDLE_3D_MS = 3000;    // 마지막 입력 뒤 회전이 다시 시작될 때까지
 const EASE_3D_MS = 1500;    // 다시 시작한 회전이 제 속도에 이를 때까지
+// 화면에 맞출 반지름의 최솟값(월드 단위). 가장 작은 노드 반지름(2.2)의 열 배 남짓이라, 노트가 하나뿐인 새 vault도
+// 화면을 채우는 원판이 아니라 작은 점으로 보인다.
+const FIT_MIN_3D = 30;
 
 // 노트 경로 목록과 metadataCache.resolvedLinks → 링크 쌍과 이웃 목록(CSR).
 // 자기 링크, 양방향 중복, 노트가 아닌 대상(첨부파일·없는 파일)은 뺀다.
@@ -1458,14 +1461,39 @@ function layoutWorker3d() {
 
 const LAYOUT_WORKER_3D = `${forceLayout3d.toString()}\n(${layoutWorker3d.toString()})();`;
 
-// 'rgb(…)' / 'rgba(…)' / '#rrggbb' → [r, g, b, a] (0–1)
+// CSS 색 → [r, g, b, a] (0–1). '#rrggbb', 'rgb(…)'/'rgba(…)', 'color(srgb …)'는 바로 읽는다. 그 밖의 표기
+// (oklch(), lab(), color(display-p3 …), 테마의 color-mix 결과)는 1×1 캔버스에 칠해 sRGB로 바꾼다.
+// 모르는 표기를 검정으로 두면 그 테마에서 노드·선·배경이 보이지 않았다.
+let colorCanvas3d = null;
 function parseCssColor(css) {
   const s = String(css || '').trim();
   if (/^#[0-9a-f]{6}$/i.test(s)) return rgbOf(s).map((v) => v / 255).concat(1);
-  const m = s.match(/rgba?\(([^)]+)\)/);
-  if (!m) return [0, 0, 0, 1];
-  const p = m[1].split(/[\s,/]+/).filter(Boolean).map((v) => parseFloat(v));
-  return [p[0] / 255, p[1] / 255, p[2] / 255, p.length > 3 ? p[3] : 1];
+  const unit = (v, scale) => (v.endsWith('%') ? parseFloat(v) / 100 : parseFloat(v) / scale);
+  const alpha = (v) => (v === undefined ? 1 : unit(v.trim(), 1));
+  let m = s.match(/^rgba?\(([^)]+)\)$/);
+  if (m) {
+    const p = m[1].split(/[\s,/]+/).filter(Boolean);
+    return [unit(p[0], 255), unit(p[1], 255), unit(p[2], 255), alpha(p[3])];
+  }
+  m = s.match(/^color\(srgb\s+([^)]+)\)$/);
+  if (m) {
+    const [rgb, a] = m[1].split('/');
+    const p = rgb.trim().split(/\s+/);
+    return [unit(p[0], 1), unit(p[1], 1), unit(p[2], 1), alpha(a)];
+  }
+  if (!colorCanvas3d) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    colorCanvas3d = canvas.getContext('2d', { willReadFrequently: true });
+  }
+  const ctx = colorCanvas3d;
+  ctx.clearRect(0, 0, 1, 1);
+  ctx.fillStyle = '#000';
+  ctx.fillStyle = s;
+  ctx.fillRect(0, 0, 1, 1);
+  const d = ctx.getImageData(0, 0, 1, 1).data;
+  return [d[0] / 255, d[1] / 255, d[2] / 255, d[3] / 255];
 }
 
 function overColor(top, base) {
@@ -1657,15 +1685,13 @@ class Graph3DView extends ItemView {
       this.stopLoop();
       this.showMessage(L.lost3d);
     });
-    this.registerDomEvent(this.canvas, 'webglcontextrestored', () => {
-      this.clearMessage();
-      this.initGL();
-      this.kick();
-    });
-    this.registerDomEvent(document, 'visibilitychange', () => this.kick());
+    this.registerDomEvent(this.canvas, 'webglcontextrestored', () => this.restoreGL());
+    // 팝아웃 창에 열리면 캔버스는 그 창의 문서에 있다. 화면 갱신·가시성·DPR은 메인 창이 아니라 이 뷰가 있는 창을 따른다.
+    // 메인 창 것을 쓰면 메인 창이 최소화됐을 때 팝아웃의 그래프가 멈추고, 다른 모니터에서는 해상도가 틀린다.
+    this.registerDomEvent(el.doc, 'visibilitychange', () => this.kick());
     this.registerEvent(this.app.workspace.on('css-change', () => this.applyStyle()));
     this.bindInput();
-    this.resizeObserver = new ResizeObserver(() => {
+    this.resizeObserver = new el.win.ResizeObserver(() => {
       if (!this.userMoved && this.fit) this.cam.dist = this.shownDist = this.fitDistance();
       this.kick();
     });
@@ -1676,7 +1702,7 @@ class Graph3DView extends ItemView {
   async onClose() {
     this.disposed = true;
     this.stopLoop();
-    window.clearTimeout(this.resumeTimer);
+    this.contentEl.win.clearTimeout(this.resumeTimer);
     this.stopLayout();
     if (this.resizeObserver) this.resizeObserver.disconnect();
     this.resizeObserver = null;
@@ -1686,6 +1712,18 @@ class Graph3DView extends ItemView {
     this.gl = null;
     this.canvas = null;
     this.contentEl.empty();
+  }
+
+  restoreGL() {
+    this.clearMessage();
+    // 잃기 전의 GPU 객체는 새 문맥에서 무효라, 지우려 하면 GL 오류만 난다. 버리고 새로 만든다.
+    this.prog = this.buf = this.vaoLine = this.vaoNode = null;
+    // 링크 강조 버퍼도 새로 만들어지므로 호버를 처음부터 다시 고르게 한다. 그대로 두면 노드만 밝고 링크는 어두웠다.
+    this.hover = -1;
+    if (this.hi) this.hi.fill(0);
+    this.label.toggleClass('is-shown', false);
+    this.initGL();
+    this.kick(true);
   }
 
   showMessage(text) {
@@ -1701,16 +1739,25 @@ class Graph3DView extends ItemView {
   // 이름을 load()로 하면 View.open이 부르는 Component.load()를 덮는다. 그러면 뷰가 로드된 상태가 되지 않아
   // 닫을 때 registerDomEvent·registerEvent로 건 것이 풀리지 않는다.
   async build() {
-    const { vault, metadataCache } = this.app;
+    const { vault, metadataCache, workspace } = this.app;
+    // 시작할 때 복원된 탭은 레이아웃이 준비되기 전에 열린다. 그때는 파일 목록도 덜 찼을 수 있어 준비된 뒤에 만든다.
+    if (!workspace.layoutReady) {
+      workspace.onLayoutReady(() => { if (!this.disposed) this.build(); });
+      return;
+    }
     const files = vault.getMarkdownFiles();
     const paths = files.map((f) => f.path);
     this.files = files;
     this.data = graphData3d(paths, metadataCache.resolvedLinks);
-    // Obsidian을 막 켜서 링크 색인이 덜 된 채 복원된 탭이면, 색인이 끝날 때 한 번만 다시 만든다.
-    // 그 뒤의 노트 변경은 반영하지 않는다(열 때의 그래프를 보여 준다).
-    if (!this.waitingIndex && Object.keys(metadataCache.resolvedLinks || {}).length < files.length) {
+    // 링크 색인이 덜 된 채 열렸으면, 모든 노트가 색인됐을 때 한 번만 다시 만든다. 'resolved'는 처음 색인하는 동안에도
+    // 여러 번 온다(노트 38개 vault를 처음 열 때 37번). 첫 번째에 다시 만들면 링크가 거의 없는 그래프가 그대로 남았다.
+    // 색인이 다 차면 resolvedLinks에는 노트마다 항목이 있다(제외 폴더·빈 노트 포함, 실측). 그 뒤의 노트 변경은
+    // 반영하지 않는다(열 때의 그래프를 보여 준다).
+    const indexed = () => Object.keys(metadataCache.resolvedLinks || {}).length >= vault.getMarkdownFiles().length;
+    if (!this.waitingIndex && !indexed()) {
       this.waitingIndex = true;
       const ref = metadataCache.on('resolved', () => {
+        if (!indexed()) return;
         metadataCache.offref(ref);
         if (!this.disposed) this.build();
       });
@@ -1905,7 +1952,8 @@ class Graph3DView extends ItemView {
     const c = this.canvas;
     this.registerDomEvent(c, 'pointerdown', (e) => {
       c.setPointerCapture(e.pointerId);
-      this.drag = { x: e.clientX, y: e.clientY, moved: 0, pan: e.button === 2 || e.shiftKey, button: e.button };
+      this.mouse = [e.offsetX, e.offsetY];
+      this.drag = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, far: 0, pan: e.button === 2 || e.shiftKey, button: e.button };
       this.touch();
     });
     this.registerDomEvent(c, 'pointermove', (e) => {
@@ -1913,25 +1961,36 @@ class Graph3DView extends ItemView {
       if (d) {
         const dx = e.clientX - d.x, dy = e.clientY - d.y;
         d.x = e.clientX; d.y = e.clientY;
-        d.moved += Math.abs(dx) + Math.abs(dy);
+        // 누른 점에서 가장 멀리 간 거리(직선)로 클릭과 드래그를 가른다. 갔다가 돌아온 드래그는 클릭이 아니다.
+        d.far = Math.max(d.far, Math.hypot(e.clientX - d.sx, e.clientY - d.sy));
         if (d.pan) this.panBy(dx, dy);
         else {
           this.cam.theta -= dx * 0.006;
           this.cam.phi = Math.max(-1.45, Math.min(1.45, this.cam.phi + dy * 0.006));
         }
         this.touch();
-      } else {
-        this.mouse = [e.offsetX, e.offsetY];
       }
+      this.mouse = [e.offsetX, e.offsetY];
       this.kick(true);
     });
-    this.registerDomEvent(c, 'pointerup', (e) => {
+    // 손을 뗀 것(pointerup)만 클릭이 될 수 있다. 시스템이 끊은 포인터(pointercancel, 캡처를 잃음)는 드래그만 끝낸다.
+    // 그러지 않으면 drag가 남아 자동 회전이 영영 멈추고, 버튼을 놓은 뒤에도 마우스를 따라 돌았다.
+    const endDrag = (e, click) => {
       const d = this.drag;
+      if (!d) return;
       this.drag = null;
       if (c.hasPointerCapture(e.pointerId)) c.releasePointerCapture(e.pointerId);
-      if (d && d.moved < 5 && d.button === 0 && this.hover >= 0) this.openNode(this.hover, e);
+      if (click && d.far < 5 && d.button === 0) {
+        // 터치 탭에는 앞선 pointermove가 없어 호버가 없다. 뗀 자리에서 바로 골라 연다.
+        this.mouse = [e.offsetX, e.offsetY];
+        this.pick();
+        if (this.hover >= 0) this.openNode(this.hover, e);
+      }
       this.kick(true);
-    });
+    };
+    this.registerDomEvent(c, 'pointerup', (e) => endDrag(e, true));
+    this.registerDomEvent(c, 'pointercancel', (e) => endDrag(e, false));
+    this.registerDomEvent(c, 'lostpointercapture', (e) => endDrag(e, false));
     this.registerDomEvent(c, 'pointerleave', () => {
       if (this.drag) return;
       this.mouse = null;
@@ -1940,6 +1999,8 @@ class Graph3DView extends ItemView {
     });
     // 트랙패드 핀치는 Chromium에서 ctrlKey가 붙은 wheel로 온다. 두 손가락 스크롤(작은 deltaY)도 확대로 쓴다.
     this.registerDomEvent(c, 'wheel', (e) => {
+      // 노트가 없으면(안내만 보일 때) 맞출 반지름도 없다.
+      if (!this.fit) return;
       e.preventDefault();
       const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
       const dist = this.cam.dist * Math.exp(dy * (e.ctrlKey ? 0.01 : 0.0015));
@@ -1954,8 +2015,9 @@ class Graph3DView extends ItemView {
   touch() {
     this.userMoved = true;
     this.lastInput = performance.now();
-    window.clearTimeout(this.resumeTimer);
-    this.resumeTimer = window.setTimeout(() => this.kick(), IDLE_3D_MS + 50);
+    const win = this.contentEl.win;
+    win.clearTimeout(this.resumeTimer);
+    this.resumeTimer = win.setTimeout(() => this.kick(), IDLE_3D_MS + 50);
   }
 
   rotationSpeed(t) {
@@ -2058,7 +2120,7 @@ class Graph3DView extends ItemView {
     for (let i = 0; i < n; i++) d[i] = Math.hypot(this.pos[i * 3], this.pos[i * 3 + 1], this.pos[i * 3 + 2]);
     d.sort();
     // 멀리 떠 있는 섬 몇 개 때문에 전체가 작아지지 않게 92% 지점에 맞춘다.
-    return { r: Math.max(d[Math.floor(n * 0.92)] || 1, 1), max: Math.max(d[n - 1] || 1, 1) };
+    return { r: Math.max(d[Math.floor(n * 0.92)] || 0, FIT_MIN_3D), max: Math.max(d[n - 1] || 0, FIT_MIN_3D) };
   }
 
   fitDistance() {
@@ -2071,11 +2133,11 @@ class Graph3DView extends ItemView {
   // input=true: 입력에 대한 응답이라 프레임 상한 없이 바로 그린다.
   kick(input) {
     if (input) this.inputPending = true;
-    if (!this.raf && this.gl && this.prog && !this.disposed) this.raf = window.requestAnimationFrame((t) => this.frame(t));
+    if (!this.raf && this.gl && this.prog && !this.disposed) this.raf = this.contentEl.win.requestAnimationFrame((t) => this.frame(t));
   }
 
   stopLoop() {
-    if (this.raf) window.cancelAnimationFrame(this.raf);
+    if (this.raf) this.contentEl.win.cancelAnimationFrame(this.raf);
     this.raf = 0;
   }
 
@@ -2083,7 +2145,7 @@ class Graph3DView extends ItemView {
     this.raf = 0;
     const c = this.canvas;
     const gl = this.gl;
-    if (!c || !gl || gl.isContextLost() || document.hidden || c.clientWidth === 0) return;
+    if (!c || !gl || gl.isContextLost() || this.contentEl.doc.hidden || c.clientWidth === 0) return;
     const gap = this.lastFrame ? t - this.lastFrame : 0;
     if (gap > 0 && gap < 50) this.frameGap = this.frameGap ? this.frameGap * 0.9 + gap * 0.1 : gap;
     this.lastFrame = t;
@@ -2099,7 +2161,7 @@ class Graph3DView extends ItemView {
     const dt = this.lastDraw ? Math.min(0.1, (t - this.lastDraw) / 1000) : 0;
     this.lastDraw = t;
     this.inputPending = false;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = this.contentEl.win.devicePixelRatio || 1;
     const w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
     const speed = this.rotationSpeed(t);
@@ -2108,7 +2170,8 @@ class Graph3DView extends ItemView {
     this.shownDist += (this.cam.dist - this.shownDist) * (1 - Math.exp(-dt * 14));
     const zooming = Math.abs(this.cam.dist - this.shownDist) > this.cam.dist * 1e-3;
     this.draw();
-    this.pick();
+    // 드래그 중에는 화면이 커서 밑에서 돌아가므로 다시 고르지 않는다. 고르면 강조가 노드마다 바뀌며 깜박인다.
+    if (!this.drag) this.pick();
     if (speed > 0 || !this.layoutDone || zooming || interactive) this.kick();
     else {
       this.lastDraw = 0;
@@ -3262,3 +3325,5 @@ module.exports.initialPositions3d = initialPositions3d;
 module.exports.forceLayout3d = forceLayout3d;
 module.exports.LAYOUT_WORKER_3D = LAYOUT_WORKER_3D;
 module.exports.applyCssFilter = applyCssFilter;
+module.exports.Graph3DView = Graph3DView;
+module.exports.parseCssColor = parseCssColor;

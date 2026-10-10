@@ -20,7 +20,298 @@ Module._load = function load(request, parent, isMain) {
 };
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
 Module._load = originalLoad;
-const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter } = GraphStyler;
+const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor } = GraphStyler;
+
+// A Graph3DView with just enough of Obsidian and the DOM stubbed to drive its pointer handlers and frame().
+// draw() and pick() are replaced by recorders; the handlers come from bindInput() through registerDomEvent.
+// The view runs in whatever window holds its tab (a popout has its own), so the stub window is only reachable
+// through contentEl.win / contentEl.doc; the main-window globals throw if the view touches them.
+const mainWindowUse = () => { throw new Error('the 3D view used the main window instead of its own'); };
+Object.assign(global.window, { requestAnimationFrame: mainWindowUse, cancelAnimationFrame: mainWindowUse,
+  setTimeout: mainWindowUse, clearTimeout: mainWindowUse });
+function stubView() {
+  const rafs = [];
+  const win = {
+    devicePixelRatio: 2,
+    requestAnimationFrame: (cb) => { rafs.push(cb); return rafs.length; },
+    cancelAnimationFrame() {},
+    setTimeout: () => 1,
+    clearTimeout() {},
+  };
+  const doc = { hidden: false };
+  const view = new Graph3DView({}, { settings: { experimental3d: true }, rotate3d: true, rotate3dSpeed: 0.12 });
+  view.contentEl = { win, doc };
+  const handlers = {};
+  const targets = {};
+  view.registerDomEvent = (el, type, cb) => { handlers[type] = cb; targets[type] = el; };
+  view.canvas = { width: 800, height: 600, clientWidth: 400, clientHeight: 300,
+    setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {} };
+  view.gl = { isContextLost: () => false };
+  view.prog = {};
+  view.layoutDone = true;
+  view.shownDist = view.cam.dist;
+  view.fit = { r: 100, max: 120 };
+  const calls = { pick: 0, draw: 0, opened: [] };
+  view.draw = () => { calls.draw += 1; };
+  view.pick = () => { calls.pick += 1; };
+  view.openNode = (i) => calls.opened.push(i);
+  view.bindInput();
+  const pointer = (type, x, y, extra = {}) => handlers[type](Object.assign({
+    clientX: x, clientY: y, offsetX: x, offsetY: y, button: 0, pointerId: 1, shiftKey: false,
+  }, extra));
+  return { view, handlers, targets, calls, rafs, win, doc, pointer };
+}
+
+// ---------------------------------------------------------------- hover during a drag
+// The scene turns under a still cursor while dragging; re-picking every frame flipped the hover from node to node.
+{
+  const { view, calls, pointer } = stubView();
+  pointer('pointermove', 50, 50);
+  assert.deepStrictEqual(view.mouse, [50, 50]);
+  pointer('pointerdown', 50, 50);
+  pointer('pointermove', 80, 60);
+  assert.deepStrictEqual(view.mouse, [80, 60], 'the cursor point stays current during a drag');
+  const before = calls.pick;
+  view.frame(1000);
+  view.frame(1016);
+  assert.strictEqual(calls.pick, before, 'no re-pick while dragging');
+  pointer('pointerup', 80, 60);
+  view.frame(1032);
+  assert.strictEqual(calls.pick, before + 1, 'picking resumes when the drag ends');
+}
+
+// ---------------------------------------------------------------- cancelled pointers and touch taps
+// A pointer the system cancels (touch gesture, lost capture) ends the drag without opening a note; otherwise the
+// drag stayed set, Auto-rotate never resumed and the graph kept turning with no button held. A tap opens the note
+// under it even with no pointermove before it.
+{
+  for (const type of ['pointercancel', 'lostpointercapture']) {
+    const { view, calls, pointer } = stubView();
+    view.hover = 3;
+    pointer('pointerdown', 50, 50);
+    pointer('pointermove', 52, 50);
+    pointer(type, 52, 50);
+    assert.strictEqual(view.drag, null, `${type} ends the drag`);
+    pointer('pointerup', 52, 50);
+    assert.deepStrictEqual(calls.opened, [], `${type} never opens a note`);
+    view.lastInput = performance.now() - 10000;
+    assert.ok(view.rotationSpeed(performance.now()) > 0, `rotation resumes after ${type}`);
+  }
+  const { view, calls, pointer } = stubView();
+  view.pick = () => { calls.pick += 1; view.hover = view.mouse[0] === 70 ? 7 : -1; };
+  pointer('pointerdown', 70, 40, { pointerType: 'touch' });
+  assert.deepStrictEqual(view.mouse, [70, 40], 'pointerdown records the point (touch has no hover move)');
+  pointer('pointerup', 70, 40, { pointerType: 'touch' });
+  assert.deepStrictEqual(calls.opened, [7], 'a tap picks where it lands and opens that note');
+}
+
+// ---------------------------------------------------------------- fitting tiny vaults
+// A fresh vault has one note. With the fit radius floored at 1 world unit that note filled the canvas as one disc.
+{
+  const proto = Graph3DView.prototype;
+  const nodeShare = (positions) => {
+    const n = positions.length / 3;
+    const fit = proto.measureFit.call({ data: { n }, pos: Float32Array.from(positions) });
+    const cam = { fov: 0.9 };
+    const dist = proto.fitDistance.call({ canvas: { clientWidth: 540, clientHeight: 675 }, cam, fit });
+    const pxScale = 1350 / (2 * Math.tan(cam.fov / 2));
+    return { fit, share: 2.2 * pxScale / dist / 1350 };
+  };
+  for (const [name, positions] of [['one note', [0, 0, 0]], ['two linked notes', [-12, 0, 0, 12, 0, 0]]]) {
+    const { fit, share } = nodeShare(positions);
+    assert.ok(fit.r >= 30 && share < 0.06, `${name}: node radius is ${(share * 100).toFixed(1)}% of the canvas height (fit.r ${fit.r})`);
+  }
+  // a real-sized graph keeps its own fit
+  const ring = [];
+  for (let i = 0; i < 100; i++) ring.push(Math.cos(i) * 200, Math.sin(i) * 200, 0);
+  assert.ok(Math.abs(nodeShare(ring).fit.r - 200) < 1, 'graphs larger than the floor are fitted as before');
+}
+
+// ---------------------------------------------------------------- wheel over the "no notes" message
+// With no notes there is no layout and no fit radius; every wheel tick threw a TypeError.
+{
+  const { view, handlers } = stubView();
+  view.fit = undefined;
+  const dist = view.cam.dist;
+  let prevented = false;
+  assert.doesNotThrow(() => handlers.wheel({ deltaY: 100, deltaMode: 0, ctrlKey: false, preventDefault: () => { prevented = true; } }));
+  assert.deepStrictEqual([view.cam.dist, prevented], [dist, false], 'nothing to zoom, the page scroll is left alone');
+  view.fit = { r: 100, max: 120 };
+  handlers.wheel({ deltaY: -100, deltaMode: 0, ctrlKey: false, preventDefault: () => { prevented = true; } });
+  assert.ok(view.cam.dist < dist && prevented, 'with a graph the wheel zooms');
+}
+
+// ---------------------------------------------------------------- CSS colour formats
+// Community themes and color-mix() give colours as color(srgb …), oklch(), lab() …; those used to parse as opaque
+// black, making nodes, lines or the background disappear.
+{
+  const near = (a, b) => a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) < 1e-6);
+  for (const [css, want] of [
+    ['#336699', [0.2, 0.4, 0.6, 1]],
+    ['rgb(10, 20, 30)', [10 / 255, 20 / 255, 30 / 255, 1]],
+    ['rgba(37,67,92,0.9)', [37 / 255, 67 / 255, 92 / 255, 0.9]],
+    ['rgb(10 20 30 / 50%)', [10 / 255, 20 / 255, 30 / 255, 0.5]],
+    ['color(srgb 0.5 0.25 1 / 0.5)', [0.5, 0.25, 1, 0.5]],
+    ['color(srgb 50% 25% 100%)', [0.5, 0.25, 1, 1]],
+  ]) assert.ok(near(parseCssColor(css), want), `${css} -> ${parseCssColor(css)}`);
+  // anything else goes through a 1x1 canvas, which converts it to sRGB
+  const filled = [];
+  let created = 0;
+  global.document.createElement = (tag) => {
+    assert.strictEqual(tag, 'canvas');
+    created += 1;
+    const ctx = { clearRect() {}, fillRect() { filled.push(this.fillStyle); }, getImageData: () => ({ data: [51, 102, 153, 255] }) };
+    return { getContext: () => ctx };
+  };
+  assert.ok(near(parseCssColor('oklch(0.6 0.15 250)'), [0.2, 0.4, 0.6, 1]));
+  assert.deepStrictEqual(filled, ['oklch(0.6 0.15 250)']);
+  parseCssColor('lab(50 40 20)');
+  assert.deepStrictEqual([filled, created], [['oklch(0.6 0.15 250)', 'lab(50 40 20)'], 1], 'one canvas, reused');
+}
+
+// ---------------------------------------------------------------- WebGL context restore
+// After a restore the link-highlight buffer is new and empty; a hover kept from before lit the node but not its
+// links. Objects from the lost context must not be deleted on the new one (that only raises GL errors).
+{
+  const { view } = stubView();
+  view.hover = 5;
+  view.hi = new Float32Array(8);
+  view.hi[5] = 1;
+  view.prog = { stale: true };
+  view.buf = { stale: true };
+  view.vaoLine = {};
+  view.vaoNode = {};
+  let labelShown = true;
+  view.label = { toggleClass: (cls, on) => { labelShown = on; } };
+  view.clearMessage = () => {};
+  let seen = null;
+  view.initGL = () => {
+    seen = { prog: view.prog, buf: view.buf, vao: view.vaoLine || view.vaoNode, hover: view.hover, lit: view.hi.reduce((a, b) => a + b, 0) };
+    view.prog = {};
+  };
+  view.restoreGL();
+  assert.deepStrictEqual(seen, { prog: null, buf: null, vao: null, hover: -1, lit: 0 });
+  assert.strictEqual(labelShown, false);
+  assert.ok(view.inputPending, 'redrawn at once, so the hover is picked again under the cursor');
+}
+
+// ---------------------------------------------------------------- the view's own window (popouts)
+// In a popout the canvas lives in another document. Frames, timers, visibility and pixel ratio must come from that
+// window: with the main window's, a minimised main window stopped the popout's graph and DPR was wrong on another display.
+{
+  const { view, calls, rafs, win, doc } = stubView();
+  win.devicePixelRatio = 3;
+  view.kick();
+  assert.strictEqual(rafs.length, 1, 'frames are requested from the view window');
+  view.frame(1000);
+  assert.deepStrictEqual([view.canvas.width, view.canvas.height], [1200, 900], 'canvas follows the view window pixel ratio');
+  doc.hidden = true;
+  const draws = calls.draw;
+  view.frame(1100);
+  assert.strictEqual(calls.draw, draws, 'a hidden view document does not draw');
+  view.touch();
+  view.stopLoop();
+}
+{
+  // onOpen wires its listeners and the resize observer to the view's own document and window
+  const { view, handlers, targets, win, doc } = stubView();
+  const observed = [];
+  win.ResizeObserver = class { constructor(cb) { this.cb = cb; } observe(el) { observed.push(el); } disconnect() {} };
+  const el = (tag) => ({ tag, remove() {}, getContext: () => ({}) });
+  Object.assign(view.contentEl, { empty() {}, addClass() {}, createEl: (tag) => el(tag), createDiv: () => el('div') });
+  view.app = { workspace: { on: () => ({}) } };
+  view.registerEvent = () => {};
+  let built = 0;
+  view.build = async () => { built += 1; };
+  let restored = 0;
+  view.restoreGL = () => { restored += 1; };
+  view.onOpen().then(() => {
+    assert.strictEqual(targets.visibilitychange, doc, 'visibilitychange is watched on the view document');
+    assert.deepStrictEqual([observed.length, observed[0] === view.canvas, built], [1, true, 1]);
+    // the canvas's restore event goes to restoreGL()
+    assert.strictEqual(targets.webglcontextrestored, view.canvas);
+    handlers.webglcontextrestored();
+    assert.strictEqual(restored, 1);
+  });
+}
+
+// ---------------------------------------------------------------- click or drag
+// A click is a press that never moved 5 px or more from where it started (straight-line distance). The old summed
+// |dx|+|dy| turned a 3,3 wobble (4.2 px) into a drag; a drag that comes back to its start is still a drag.
+{
+  const run = (path) => {
+    const { view, calls, pointer } = stubView();
+    view.pick = () => { view.hover = 9; };
+    pointer('pointerdown', 50, 50);
+    for (const [x, y] of path) pointer('pointermove', x, y);
+    const [ex, ey] = path.length ? path[path.length - 1] : [50, 50];
+    pointer('pointerup', ex, ey);
+    return calls.opened.length;
+  };
+  assert.strictEqual(run([]), 1, 'still press opens');
+  assert.strictEqual(run([[53, 53]]), 1, '3,3 wobble (4.2 px) is still a click');
+  assert.strictEqual(run([[54, 52]]), 1, '4.5 px is a click');
+  assert.strictEqual(run([[55, 50]]), 0, '5 px is a drag');
+  assert.strictEqual(run([[80, 50], [60, 50], [51, 50]]), 0, 'a drag that comes back near its start is not a click');
+}
+
+// ---------------------------------------------------------------- a tab restored before the link index is complete
+// At a cold start 'resolved' fires once per batch while the index fills (37 times for a 38-note vault, measured).
+// Rebuilding on the first one left a graph with 1 of 44 links. Rebuild once, when every note is indexed, and never on
+// later edits. A tab restored before the layout is ready waits for it (the file list may still be filling).
+{
+  const { view } = stubView();
+  const files = ['a.md', 'b.md', 'c.md'].map((path) => ({ path, basename: path }));
+  const resolved = {};
+  const listeners = [];
+  let ready = false;
+  const onReady = [];
+  view.app = {
+    vault: { getMarkdownFiles: () => files },
+    metadataCache: {
+      resolvedLinks: resolved,
+      on: (name, cb) => { const ref = { name, cb }; listeners.push(ref); return ref; },
+      offref: (ref) => { listeners.splice(listeners.indexOf(ref), 1); },
+    },
+    workspace: { get layoutReady() { return ready; }, onLayoutReady: (cb) => onReady.push(cb) },
+  };
+  view.registerEvent = () => {};
+  view.readStyle = async () => ({});
+  view.initGL = () => {};
+  view.startLayout = () => {};
+  view.clearMessage = () => {};
+  view.showMessage = () => {};
+  const builds = [];
+  const realBuild = view.build.bind(view);
+  view.build = async () => { builds.push(Object.keys(resolved).length); return realBuild(); };
+  const fire = async () => { for (const ref of listeners.slice()) ref.cb(); await new Promise((r) => setImmediate(r)); };
+
+  (async () => {
+    await view.build();
+    assert.deepStrictEqual([builds.length, view.data, onReady.length], [1, undefined, 1], 'before layout-ready: waits, builds nothing');
+    ready = true;
+    onReady[0]();
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(listeners.length, 1, 'index empty: waits for it');
+    resolved['a.md'] = { 'b.md': 1 };
+    await fire();
+    resolved['b.md'] = {};
+    await fire();
+    assert.deepStrictEqual(builds, [0, 0], 'no rebuild while notes are still being indexed');
+    resolved['c.md'] = { 'a.md': 1 };
+    await fire();
+    assert.deepStrictEqual([builds, listeners.length, view.data.links.length / 2], [[0, 0, 3], 0, 2], 'one rebuild with the whole index');
+    resolved['c.md'] = { 'a.md': 1, 'b.md': 1 };
+    await fire();
+    assert.strictEqual(builds.length, 3, 'a later edit does not rebuild the open graph');
+    // a tab opened with the index already complete never listens
+    const again = stubView().view;
+    again.app = view.app;
+    Object.assign(again, { registerEvent() {}, readStyle: view.readStyle, initGL() {}, startLayout() {}, clearMessage() {}, showMessage() {} });
+    await again.build();
+    assert.strictEqual(listeners.length, 0);
+  })().catch((e) => { console.error(e); process.exit(1); });
+}
 
 // ---------------------------------------------------------------- data extraction
 {
