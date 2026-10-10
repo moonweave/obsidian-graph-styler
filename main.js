@@ -2131,6 +2131,8 @@ class Graph3DView extends ItemView {
         d.x = e.clientX; d.y = e.clientY;
         // 누른 점에서 가장 멀리 간 거리(직선)로 클릭과 드래그를 가른다. 갔다가 돌아온 드래그는 클릭이 아니다.
         d.far = Math.max(d.far, Math.hypot(e.clientX - d.sx, e.clientY - d.sy));
+        // 클릭(노트 열기)은 카메라를 옮긴 것이 아니다. 클릭 문턱을 넘어 끌었을 때부터 옮긴 것으로 친다.
+        if (d.far >= 5) this.userMoved = true;
         if (d.pan) this.panBy(dx, dy);
         else {
           this.cam.theta -= dx * 0.006;
@@ -2173,6 +2175,7 @@ class Graph3DView extends ItemView {
       const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
       const dist = this.cam.dist * Math.exp(dy * (e.ctrlKey ? 0.01 : 0.0015));
       this.cam.dist = Math.max(this.fit.r * 0.05, Math.min(this.fit.r * 12, dist));
+      this.userMoved = true;
       this.touch();
       this.kick(true);
     }, { passive: false });
@@ -2181,7 +2184,6 @@ class Graph3DView extends ItemView {
 
   // 입력이 있으면 회전을 멈추고, IDLE_3D_MS 동안 조용하면 다시 천천히 돌린다.
   touch() {
-    this.userMoved = true;
     this.lastInput = performance.now();
     const win = this.contentEl.win;
     win.clearTimeout(this.resumeTimer);

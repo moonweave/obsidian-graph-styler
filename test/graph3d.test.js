@@ -256,6 +256,52 @@ function stubView() {
   assert.strictEqual(run([[80, 50], [60, 50], [51, 50]]), 0, 'a drag that comes back near its start is not a click');
 }
 
+// ---------------------------------------------------------------- which input moves the camera
+// Dragging past the click threshold, the wheel and a pinch move the camera; a click (opening a note) does not, so a
+// camera the user has not moved keeps fitting the graph when it grows or shrinks. Every input pauses the rotation.
+{
+  const run = (steps) => {
+    const { view, handlers, pointer } = stubView();
+    view.userMoved = false;
+    view.lastInput = 0;
+    for (const step of steps) step(pointer, handlers);
+    return { moved: view.userMoved, paused: view.lastInput > 0 };
+  };
+  const press = (x, y, extra) => (p) => p('pointerdown', x, y, extra);
+  const move = (x, y, extra) => (p) => p('pointermove', x, y, extra);
+  const lift = (x, y, extra) => (p) => p('pointerup', x, y, extra);
+  const wheel = (extra) => (p, h) => h.wheel(Object.assign({ deltaY: -40, deltaMode: 0, ctrlKey: false, preventDefault() {} }, extra));
+  const right = { button: 2 };
+  assert.deepStrictEqual(run([press(50, 50), lift(50, 50)]), { moved: false, paused: true }, 'click');
+  assert.deepStrictEqual(run([press(50, 50), move(53, 53), lift(53, 53)]), { moved: false, paused: true }, 'click with a 4 px wobble');
+  assert.deepStrictEqual(run([press(50, 50), move(80, 60), lift(80, 60)]), { moved: true, paused: true }, 'drag');
+  assert.deepStrictEqual(run([press(50, 50, right), move(80, 60, right), lift(80, 60, right)]), { moved: true, paused: true }, 'right drag (pan)');
+  assert.deepStrictEqual(run([wheel()]), { moved: true, paused: true }, 'wheel');
+  assert.deepStrictEqual(run([wheel({ ctrlKey: true, deltaY: -3 })]), { moved: true, paused: true }, 'pinch');
+}
+{
+  // a resized tab refits an untouched camera and leaves a moved one alone
+  const { view, win } = stubView();
+  let resized = null;
+  win.ResizeObserver = class { constructor(cb) { resized = cb; } observe() {} disconnect() {} };
+  view.app = { workspace: { on: () => ({}) }, vault: { on: () => ({}) } };
+  view.registerEvent = () => {};
+  const el = (tag) => ({ tag, remove() {}, getContext: () => ({}) });
+  Object.assign(view.contentEl, { empty() {}, addClass() {}, createEl: (tag) => el(tag), createDiv: () => el('div') });
+  view.build = async () => {};
+  view.onOpen().then(() => {
+    view.canvas = { width: 800, height: 600, clientWidth: 400, clientHeight: 300 };
+    view.userMoved = false;
+    view.cam.dist = 1;
+    resized();
+    assert.strictEqual(view.cam.dist, view.fitDistance(), 'untouched: refitted');
+    view.userMoved = true;
+    view.cam.dist = 7;
+    resized();
+    assert.strictEqual(view.cam.dist, 7, 'moved: left alone');
+  });
+}
+
 // ---------------------------------------------------------------- a tab restored before the link index is complete
 // At a cold start 'resolved' fires once per batch while the index fills (37 times for a 38-note vault, measured).
 // Rebuilding on the first one left a graph with 1 of 44 links. Rebuild once, when every note is indexed, and never on
@@ -847,6 +893,7 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
     assert.strictEqual(workers[0].sent[0].params.alpha, 1, 'a new tab lays out from scratch');
     workers[0].onmessage({ data: { pos: Float32Array.from([1, 0, 0, -1, 0, 0]), alpha: 0.8, done: false } });
     options = { repelStrength: 15 };
+    view.userMoved = false;
     return view.applyStyle();
   }).then(() => {
     assert.strictEqual(workers.length, 2);
@@ -855,7 +902,7 @@ const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength:
     assert.strictEqual(msg.params.alpha, 0.8, 'changed during the first layout: keeps its heat');
     assert.strictEqual(msg.params.charge, layoutParams3d(options).charge);
     assert.deepStrictEqual(Array.from(msg.pos), [1, 0, 0, -1, 0, 0], 'from the current positions');
-    assert(!view.userMoved, 'a camera the user never moved keeps fitting the layout');
+    assert.strictEqual(view.userMoved, false, 'a camera the user never moved keeps fitting the layout');
     workers[1].onmessage({ data: { pos: Float32Array.from([2, 0, 0, -2, 0, 0]), alpha: 0.0009, done: true } });
     assert(view.layoutDone && workers[1].terminated, 'settled: no worker left');
     view.cam.theta = 1.25;
