@@ -629,6 +629,9 @@ class FakeEl {
   addEventListener(type, listener) { this.listeners = Object.assign(this.listeners || {}, { [type]: listener }); }
   toggleClass(name, on) { if (on) this.cls.add(name); else this.cls.delete(name); }
   walk() { return [this].concat(...this.children.map((child) => child.walk())); }
+  // only the '.class' form the panel code uses
+  querySelector(selector) { return this.walk().find((el) => el.cls.has(selector.slice(1))) || null; }
+  focus() { FakeEl.focused = this; }
 }
 
 global.createFragment = (build) => {
@@ -1555,6 +1558,21 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     await t.plugin.open3d();
     assert.strictEqual(t.leaves3d.length, 1, 'one 3D tab, one WebGL context');
     assert.strictEqual(t.counts.revealed, 2);
+  }
+
+  // The 3D switch keeps the keyboard focus across the panel re-render it triggers, both ways.
+  {
+    const t = await plugin3d();
+    t.panel.render();
+    for (const want of [true, false]) {
+      const before = t.panel.contentEl.querySelector('.gs-3d-switch');
+      before.checked = want;
+      FakeEl.focused = null;
+      await before.onchange();
+      const after = t.panel.contentEl.querySelector('.gs-3d-switch');
+      assert.ok(after !== before && FakeEl.focused === after, `focus moves to the re-rendered switch (${want})`);
+      assert.strictEqual(after.checked, want);
+    }
   }
 
   // The GL texture limit caps the scale.

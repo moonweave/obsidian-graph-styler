@@ -1122,11 +1122,16 @@ class StylerView extends ItemView {
     const plugin = this.plugin;
     const c = this.group(parent, 'graph3d', L.group3d);
     const onRow = c.createEl('label', { cls: 'gs-row gs-check' });
-    const onBox = onRow.createEl('input');
+    const onBox = onRow.createEl('input', { cls: 'gs-3d-switch' });
     onBox.type = 'checkbox';
     onBox.checked = !!plugin.settings.experimental3d;
     // 바로 아래에 열기 버튼이 생기므로 '명령 팔레트에서 여세요' 알림은 띄우지 않는다.
-    onBox.onchange = () => plugin.setExperimental3d(onBox.checked, false);
+    // 켜고 끄면 패널을 다시 그려 이 체크박스가 새로 만들어지므로, 키보드 포커스를 새 체크박스로 옮긴다.
+    onBox.onchange = async () => {
+      await plugin.setExperimental3d(onBox.checked, false);
+      const again = this.contentEl.querySelector('.gs-3d-switch');
+      if (again) again.focus();
+    };
     onRow.createSpan({ text: L.exp3dName });
     c.createEl('p', { text: L.panel3dNote, cls: 'gs-note' });
     if (!plugin.settings.experimental3d) return;
