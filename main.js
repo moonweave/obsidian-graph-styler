@@ -1202,6 +1202,9 @@ const ROTATE_3D_MIN = 0.02; // 한 바퀴 약 5분
 const ROTATE_3D_MAX = 0.6;  // 한 바퀴 약 10초
 const IDLE_3D_MS = 3000;    // 마지막 입력 뒤 회전이 다시 시작될 때까지
 const EASE_3D_MS = 1500;    // 다시 시작한 회전이 제 속도에 이를 때까지
+// 화면에 맞출 반지름의 최솟값(월드 단위). 가장 작은 노드 반지름(2.2)의 열 배 남짓이라, 노트가 하나뿐인 새 vault도
+// 화면을 채우는 원판이 아니라 작은 점으로 보인다.
+const FIT_MIN_3D = 30;
 
 // 노트 경로 목록과 metadataCache.resolvedLinks → 링크 쌍과 이웃 목록(CSR).
 // 자기 링크, 양방향 중복, 노트가 아닌 대상(첨부파일·없는 파일)은 뺀다.
@@ -2069,7 +2072,7 @@ class Graph3DView extends ItemView {
     for (let i = 0; i < n; i++) d[i] = Math.hypot(this.pos[i * 3], this.pos[i * 3 + 1], this.pos[i * 3 + 2]);
     d.sort();
     // 멀리 떠 있는 섬 몇 개 때문에 전체가 작아지지 않게 92% 지점에 맞춘다.
-    return { r: Math.max(d[Math.floor(n * 0.92)] || 1, 1), max: Math.max(d[n - 1] || 1, 1) };
+    return { r: Math.max(d[Math.floor(n * 0.92)] || 0, FIT_MIN_3D), max: Math.max(d[n - 1] || 0, FIT_MIN_3D) };
   }
 
   fitDistance() {

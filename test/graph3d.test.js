@@ -98,6 +98,28 @@ function stubView() {
   assert.deepStrictEqual(calls.opened, [7], 'a tap picks where it lands and opens that note');
 }
 
+// ---------------------------------------------------------------- fitting tiny vaults
+// A fresh vault has one note. With the fit radius floored at 1 world unit that note filled the canvas as one disc.
+{
+  const proto = Graph3DView.prototype;
+  const nodeShare = (positions) => {
+    const n = positions.length / 3;
+    const fit = proto.measureFit.call({ data: { n }, pos: Float32Array.from(positions) });
+    const cam = { fov: 0.9 };
+    const dist = proto.fitDistance.call({ canvas: { clientWidth: 540, clientHeight: 675 }, cam, fit });
+    const pxScale = 1350 / (2 * Math.tan(cam.fov / 2));
+    return { fit, share: 2.2 * pxScale / dist / 1350 };
+  };
+  for (const [name, positions] of [['one note', [0, 0, 0]], ['two linked notes', [-12, 0, 0, 12, 0, 0]]]) {
+    const { fit, share } = nodeShare(positions);
+    assert.ok(fit.r >= 30 && share < 0.06, `${name}: node radius is ${(share * 100).toFixed(1)}% of the canvas height (fit.r ${fit.r})`);
+  }
+  // a real-sized graph keeps its own fit
+  const ring = [];
+  for (let i = 0; i < 100; i++) ring.push(Math.cos(i) * 200, Math.sin(i) * 200, 0);
+  assert.ok(Math.abs(nodeShare(ring).fit.r - 200) < 1, 'graphs larger than the floor are fitted as before');
+}
+
 // ---------------------------------------------------------------- data extraction
 {
   const paths = ['A.md', 'B.md', 'C.md', 'D.md'];
