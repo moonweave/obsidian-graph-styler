@@ -881,7 +881,7 @@ function mixRgb(a, b, t) {
 }
 
 // CSS 색(#rgb, #rrggbb, rgb(), rgba()) → [r, g, b, a]. 읽을 수 없으면 null.
-function parseCssColor(text) {
+function parseCssColorBytes(text) {
   const s = String(text || '').trim();
   let m = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
   if (m) {
@@ -897,7 +897,7 @@ function parseCssColor(text) {
 // 프리셋 배경(makeGlowCss의 radial-gradient)의 세 색. 계산된 background-image 문자열에서 읽는다.
 function gradientStops(backgroundImage) {
   const found = String(backgroundImage || '').match(/rgba?\([^)]*\)|#[0-9a-f]{3,6}\b/gi) || [];
-  const stops = found.map(parseCssColor).filter(Boolean);
+  const stops = found.map(parseCssColorBytes).filter(Boolean);
   return stops.length >= 3 ? stops.slice(0, 3) : null;
 }
 
@@ -1042,7 +1042,7 @@ class GraphEffects {
   morphBegin(preset) {
     if (!this.morphOn() || !preset || !preset.palette) return false;
     const palette = preset.palette;
-    const toBg = [palette.bg1, palette.bg2, palette.bg3].map(parseCssColor);
+    const toBg = [palette.bg1, palette.bg2, palette.bg3].map(parseCssColorBytes);
     if (toBg.some((c) => !c)) return false;
     const toFilter = parseFilter(palette.filter);
     this.endMorphs();
@@ -1059,7 +1059,7 @@ class GraphEffects {
         let el = pane;
         let colour = null;
         while (el && !colour) {
-          const c = parseCssColor(window.getComputedStyle(el).backgroundColor);
+          const c = parseCssColorBytes(window.getComputedStyle(el).backgroundColor);
           if (c && c[3] > 0) colour = c;
           el = el.parentElement;
         }
