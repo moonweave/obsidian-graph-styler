@@ -1920,9 +1920,8 @@ class Graph3DView extends ItemView {
           this.cam.phi = Math.max(-1.45, Math.min(1.45, this.cam.phi + dy * 0.006));
         }
         this.touch();
-      } else {
-        this.mouse = [e.offsetX, e.offsetY];
       }
+      this.mouse = [e.offsetX, e.offsetY];
       this.kick(true);
     });
     this.registerDomEvent(c, 'pointerup', (e) => {
@@ -2108,7 +2107,8 @@ class Graph3DView extends ItemView {
     this.shownDist += (this.cam.dist - this.shownDist) * (1 - Math.exp(-dt * 14));
     const zooming = Math.abs(this.cam.dist - this.shownDist) > this.cam.dist * 1e-3;
     this.draw();
-    this.pick();
+    // 드래그 중에는 화면이 커서 밑에서 돌아가므로 다시 고르지 않는다. 고르면 강조가 노드마다 바뀌며 깜박인다.
+    if (!this.drag) this.pick();
     if (speed > 0 || !this.layoutDone || zooming || interactive) this.kick();
     else {
       this.lastDraw = 0;
@@ -3262,3 +3262,4 @@ module.exports.initialPositions3d = initialPositions3d;
 module.exports.forceLayout3d = forceLayout3d;
 module.exports.LAYOUT_WORKER_3D = LAYOUT_WORKER_3D;
 module.exports.applyCssFilter = applyCssFilter;
+module.exports.Graph3DView = Graph3DView;

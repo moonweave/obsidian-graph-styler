@@ -20,7 +20,58 @@ Module._load = function load(request, parent, isMain) {
 };
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
 Module._load = originalLoad;
-const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter } = GraphStyler;
+const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView } = GraphStyler;
+
+// A Graph3DView with just enough of Obsidian and the DOM stubbed to drive its pointer handlers and frame().
+// draw() and pick() are replaced by recorders; the handlers come from bindInput() through registerDomEvent.
+function stubView() {
+  const rafs = [];
+  const win = {
+    devicePixelRatio: 2,
+    requestAnimationFrame: (cb) => { rafs.push(cb); return rafs.length; },
+    cancelAnimationFrame() {},
+    setTimeout: () => 1,
+    clearTimeout() {},
+  };
+  Object.assign(global.window, win);
+  const view = new Graph3DView({}, { settings: { experimental3d: true }, rotate3d: true, rotate3dSpeed: 0.12 });
+  const handlers = {};
+  view.registerDomEvent = (el, type, cb) => { handlers[type] = cb; };
+  view.canvas = { width: 800, height: 600, clientWidth: 400, clientHeight: 300,
+    setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {} };
+  view.gl = { isContextLost: () => false };
+  view.prog = {};
+  view.layoutDone = true;
+  view.shownDist = view.cam.dist;
+  view.fit = { r: 100, max: 120 };
+  const calls = { pick: 0, draw: 0, opened: [] };
+  view.draw = () => { calls.draw += 1; };
+  view.pick = () => { calls.pick += 1; };
+  view.openNode = (i) => calls.opened.push(i);
+  view.bindInput();
+  const pointer = (type, x, y, extra = {}) => handlers[type](Object.assign({
+    clientX: x, clientY: y, offsetX: x, offsetY: y, button: 0, pointerId: 1, shiftKey: false,
+  }, extra));
+  return { view, handlers, calls, rafs, win, pointer };
+}
+
+// ---------------------------------------------------------------- hover during a drag
+// The scene turns under a still cursor while dragging; re-picking every frame flipped the hover from node to node.
+{
+  const { view, calls, pointer } = stubView();
+  pointer('pointermove', 50, 50);
+  assert.deepStrictEqual(view.mouse, [50, 50]);
+  pointer('pointerdown', 50, 50);
+  pointer('pointermove', 80, 60);
+  assert.deepStrictEqual(view.mouse, [80, 60], 'the cursor point stays current during a drag');
+  const before = calls.pick;
+  view.frame(1000);
+  view.frame(1016);
+  assert.strictEqual(calls.pick, before, 'no re-pick while dragging');
+  pointer('pointerup', 80, 60);
+  view.frame(1032);
+  assert.strictEqual(calls.pick, before + 1, 'picking resumes when the drag ends');
+}
 
 // ---------------------------------------------------------------- data extraction
 {
