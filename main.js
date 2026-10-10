@@ -1685,11 +1685,7 @@ class Graph3DView extends ItemView {
       this.stopLoop();
       this.showMessage(L.lost3d);
     });
-    this.registerDomEvent(this.canvas, 'webglcontextrestored', () => {
-      this.clearMessage();
-      this.initGL();
-      this.kick();
-    });
+    this.registerDomEvent(this.canvas, 'webglcontextrestored', () => this.restoreGL());
     this.registerDomEvent(document, 'visibilitychange', () => this.kick());
     this.registerEvent(this.app.workspace.on('css-change', () => this.applyStyle()));
     this.bindInput();
@@ -1714,6 +1710,18 @@ class Graph3DView extends ItemView {
     this.gl = null;
     this.canvas = null;
     this.contentEl.empty();
+  }
+
+  restoreGL() {
+    this.clearMessage();
+    // 잃기 전의 GPU 객체는 새 문맥에서 무효라, 지우려 하면 GL 오류만 난다. 버리고 새로 만든다.
+    this.prog = this.buf = this.vaoLine = this.vaoNode = null;
+    // 링크 강조 버퍼도 새로 만들어지므로 호버를 처음부터 다시 고르게 한다. 그대로 두면 노드만 밝고 링크는 어두웠다.
+    this.hover = -1;
+    if (this.hi) this.hi.fill(0);
+    this.label.toggleClass('is-shown', false);
+    this.initGL();
+    this.kick(true);
   }
 
   showMessage(text) {

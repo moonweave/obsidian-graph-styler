@@ -162,6 +162,32 @@ function stubView() {
   assert.deepStrictEqual([filled, created], [['oklch(0.6 0.15 250)', 'lab(50 40 20)'], 1], 'one canvas, reused');
 }
 
+// ---------------------------------------------------------------- WebGL context restore
+// After a restore the link-highlight buffer is new and empty; a hover kept from before lit the node but not its
+// links. Objects from the lost context must not be deleted on the new one (that only raises GL errors).
+{
+  const { view } = stubView();
+  view.hover = 5;
+  view.hi = new Float32Array(8);
+  view.hi[5] = 1;
+  view.prog = { stale: true };
+  view.buf = { stale: true };
+  view.vaoLine = {};
+  view.vaoNode = {};
+  let labelShown = true;
+  view.label = { toggleClass: (cls, on) => { labelShown = on; } };
+  view.clearMessage = () => {};
+  let seen = null;
+  view.initGL = () => {
+    seen = { prog: view.prog, buf: view.buf, vao: view.vaoLine || view.vaoNode, hover: view.hover, lit: view.hi.reduce((a, b) => a + b, 0) };
+    view.prog = {};
+  };
+  view.restoreGL();
+  assert.deepStrictEqual(seen, { prog: null, buf: null, vao: null, hover: -1, lit: 0 });
+  assert.strictEqual(labelShown, false);
+  assert.ok(view.inputPending, 'redrawn at once, so the hover is picked again under the cursor');
+}
+
 // ---------------------------------------------------------------- data extraction
 {
   const paths = ['A.md', 'B.md', 'C.md', 'D.md'];
