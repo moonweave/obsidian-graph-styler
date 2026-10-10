@@ -1205,6 +1205,16 @@ const EASE_3D_MS = 1500;    // 다시 시작한 회전이 제 속도에 이를 �
 // 화면에 맞출 반지름의 최솟값(월드 단위). 가장 작은 노드 반지름(2.2)의 열 배 남짓이라, 노트가 하나뿐인 새 vault도
 // 화면을 채우는 원판이 아니라 작은 점으로 보인다.
 const FIT_MIN_3D = 30;
+// Obsidian 그래프 설정의 기본값(1.11.7 app.js의 표시 기본값). 3D는 이 값에 대한 배율로 따라가므로,
+// 기본값이면 지금까지와 똑같이 그린다. 슬라이더 범위는 0.1–5.
+const GRAPH_DISPLAY_DEFAULTS_3D = { nodeSizeMultiplier: 1 };
+
+// 그래프 설정 값 → 기본값에 대한 배율. 숫자가 아니면 1, 손으로 고친 값은 슬라이더 범위로 자른다.
+function displayRatio3d(options, key) {
+  const v = options && options[key];
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 1;
+  return Math.max(0.1, Math.min(5, v)) / GRAPH_DISPLAY_DEFAULTS_3D[key];
+}
 
 // 노트 경로 목록과 metadataCache.resolvedLinks → 링크 쌍과 이웃 목록(CSR).
 // 자기 링크, 양방향 중복, 노트가 아닌 대상(첨부파일·없는 파일)은 뺀다.
@@ -1690,6 +1700,7 @@ class Graph3DView extends ItemView {
     // 메인 창 것을 쓰면 메인 창이 최소화됐을 때 팝아웃의 그래프가 멈추고, 다른 모니터에서는 해상도가 틀린다.
     this.registerDomEvent(el.doc, 'visibilitychange', () => this.kick());
     this.registerEvent(this.app.workspace.on('css-change', () => this.applyStyle()));
+    this.registerEvent(this.app.vault.on('raw', (path) => { if (path === this.plugin.graphPath()) this.scheduleStyle(); }));
     this.bindInput();
     this.resizeObserver = new el.win.ResizeObserver(() => {
       if (!this.userMoved && this.fit) this.cam.dist = this.shownDist = this.fitDistance();
@@ -1703,6 +1714,7 @@ class Graph3DView extends ItemView {
     this.disposed = true;
     this.stopLoop();
     this.contentEl.win.clearTimeout(this.resumeTimer);
+    this.contentEl.win.clearTimeout(this.styleTimer);
     this.stopLayout();
     if (this.resizeObserver) this.resizeObserver.disconnect();
     this.resizeObserver = null;
@@ -1819,13 +1831,14 @@ class Graph3DView extends ItemView {
     return {
       bg,
       light: luminance(bg[2]) > 0.5,
+      nodeSize: displayRatio3d(options, 'nodeSizeMultiplier'),
       fill: applyCssFilter(probe('graph-view color-fill', 'color'), filter),
       line: applyCssFilter(probe('graph-view color-line', 'color'), filter),
       groups,
     };
   }
 
-  // 노드 색과 크기. 크기는 2D 그래프처럼 연결 수의 제곱근을 따른다.
+  // 노드 색과 크기. 크기는 2D 그래프처럼 연결 수의 제곱근을 따르고, 그래프 설정의 노드 크기 배율을 곱한다.
   nodeAttributes() {
     const { n, deg } = this.data;
     const { groups, fill } = this.style;
@@ -1837,7 +1850,7 @@ class Graph3DView extends ItemView {
       const tags = tagged ? (getAllTags(this.app.metadataCache.getFileCache(file) || {}) || []) : [];
       const g = groups.find((group) => group.test(file.path, tags));
       col.set(g ? g.rgb : fill, i * 3);
-      size[i] = 2.2 + Math.sqrt(deg[i]) * 1.1;
+      size[i] = (2.2 + Math.sqrt(deg[i]) * 1.1) * this.style.nodeSize;
     }
     return { col, size };
   }
@@ -1846,11 +1859,21 @@ class Graph3DView extends ItemView {
     if (!this.gl || !this.data || !this.data.n) return;
     this.style = await this.readStyle();
     if (this.disposed || !this.gl) return;
-    const { col } = this.nodeAttributes();
+    const { col, size } = this.nodeAttributes();
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.col);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, col);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.size);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, size);
+    this.size = size;
     this.kick();
+  }
+
+  // 2D 그래프 설정(노드 크기 슬라이더)이 바뀌면 graph.json이 다시 쓰인다. 끄는 동안 여러 번 오므로 묶어서 한 번 반영한다.
+  scheduleStyle() {
+    const win = this.contentEl.win;
+    win.clearTimeout(this.styleTimer);
+    this.styleTimer = win.setTimeout(() => this.applyStyle(), 200);
   }
 
   startLayout() {
@@ -1912,6 +1935,7 @@ class Graph3DView extends ItemView {
       core: compile(GL3D.node, GL3D.core),
     };
     const { col, size } = this.nodeAttributes();
+    this.size = size;
     const buf = (target, data, usage) => {
       const b = gl.createBuffer();
       gl.bindBuffer(target, b);
@@ -2095,7 +2119,7 @@ class Graph3DView extends ItemView {
       if (w <= 0) continue;
       const sx = ((M[0] * x + M[4] * y + M[8] * z + M[12]) / w * 0.5 + 0.5) * c.width;
       const sy = (0.5 - (M[1] * x + M[5] * y + M[9] * z + M[13]) / w * 0.5) * c.height;
-      const r = Math.max((2.2 + Math.sqrt(this.data.deg[i]) * 1.1) * this.pxScale / w, minR);
+      const r = Math.max(this.size[i] * this.pxScale / w, minR);
       const score = Math.hypot(sx - mx, sy - my) / r;
       if (score <= bestScore) { best = i; bestScore = score; }
     }
@@ -3327,3 +3351,4 @@ module.exports.LAYOUT_WORKER_3D = LAYOUT_WORKER_3D;
 module.exports.applyCssFilter = applyCssFilter;
 module.exports.Graph3DView = Graph3DView;
 module.exports.parseCssColor = parseCssColor;
+module.exports.displayRatio3d = displayRatio3d;

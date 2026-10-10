@@ -20,7 +20,8 @@ Module._load = function load(request, parent, isMain) {
 };
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
 Module._load = originalLoad;
-const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor } = GraphStyler;
+const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor,
+  displayRatio3d } = GraphStyler;
 
 // A Graph3DView with just enough of Obsidian and the DOM stubbed to drive its pointer handlers and frame().
 // draw() and pick() are replaced by recorders; the handlers come from bindInput() through registerDomEvent.
@@ -219,7 +220,7 @@ function stubView() {
   win.ResizeObserver = class { constructor(cb) { this.cb = cb; } observe(el) { observed.push(el); } disconnect() {} };
   const el = (tag) => ({ tag, remove() {}, getContext: () => ({}) });
   Object.assign(view.contentEl, { empty() {}, addClass() {}, createEl: (tag) => el(tag), createDiv: () => el('div') });
-  view.app = { workspace: { on: () => ({}) } };
+  view.app = { workspace: { on: () => ({}) }, vault: { on: () => ({}) } };
   view.registerEvent = () => {};
   let built = 0;
   view.build = async () => { built += 1; };
@@ -311,6 +312,99 @@ function stubView() {
     await again.build();
     assert.strictEqual(listeners.length, 0);
   })().catch((e) => { console.error(e); process.exit(1); });
+}
+
+// ---------------------------------------------------------------- node size follows the graph settings
+// Every mapping is a ratio to Obsidian's own default (1), so a vault on the defaults draws exactly as before.
+{
+  assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 1 }, 'nodeSizeMultiplier'), 1);
+  assert.strictEqual(displayRatio3d({}, 'nodeSizeMultiplier'), 1, 'not set = Obsidian default');
+  assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 2.5 }, 'nodeSizeMultiplier'), 2.5);
+  assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 40 }, 'nodeSizeMultiplier'), 5, 'hand-edited values clamp to the slider range');
+  assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 0 }, 'nodeSizeMultiplier'), 0.1);
+  assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 'big' }, 'nodeSizeMultiplier'), 1);
+
+  // node radii: same sqrt(degree) shape, times the node size ratio; default 1 = the old radii
+  const view = new Graph3DView({}, { settings: {} });
+  view.data = { n: 3, deg: Uint32Array.from([0, 4, 9]) };
+  view.files = [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md' }];
+  view.style = { groups: [], fill: [1, 1, 1], nodeSize: 1 };
+  const old = [0, 4, 9].map((d) => 2.2 + Math.sqrt(d) * 1.1);
+  assert.deepStrictEqual(Array.from(view.nodeAttributes().size).map((v) => +v.toFixed(5)), old.map((v) => +v.toFixed(5)));
+  view.style.nodeSize = 2;
+  assert.deepStrictEqual(Array.from(view.nodeAttributes().size).map((v) => +v.toFixed(5)), old.map((v) => +(v * 2).toFixed(5)));
+}
+{
+  // readStyle takes the ratios from the effective graph options (the core graph plugin's live options)
+  const view = new Graph3DView({}, { settings: {}, activePalette: async () => null, readGraphOptions: async () => ({}) });
+  const options = { colorGroups: [], nodeSizeMultiplier: 2 };
+  view.app = { internalPlugins: { plugins: { graph: { instance: { options } } } } };
+  global.document.body = { createDiv: () => ({ style: {}, remove() {} }) };
+  global.getComputedStyle = () => ({ color: 'rgb(10, 20, 30)', backgroundColor: 'rgb(0, 0, 0)' });
+  view.readStyle().then((st) => {
+    assert.strictEqual(st.nodeSize, 2);
+    delete options.nodeSizeMultiplier;
+    return view.readStyle();
+  }).then((st) => assert.strictEqual(st.nodeSize, 1, 'not set → ratio 1'));
+}
+{
+  // the hover radius uses the same sizes as the drawn nodes
+  const { view } = stubView();
+  delete view.pick;
+  view.setHover = (i) => { view.hover = i; };
+  view.label = { style: {} };
+  view.data = { n: 1, deg: Uint32Array.from([0]) };
+  view.pos = new Float32Array([0, 0, 0]);
+  view.mvp = Float32Array.from([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  view.pxScale = 10;
+  view.mouse = [200 + 15, 150];   // node at the canvas centre (400x300 CSS), cursor 15 CSS px = 30 device px away
+  view.size = Float32Array.from([2.2]);
+  view.pick();
+  assert.strictEqual(view.hover, -1, 'small node: 30 px away is a miss');
+  view.size = Float32Array.from([4]);
+  view.pick();
+  assert.strictEqual(view.hover, 0, 'node size x2: the same point now hovers it');
+}
+{
+  // a 2D graph-settings change (graph.json rewritten) reaches an open 3D tab, debounced, without touching the camera
+  const { view, win } = stubView();
+  const timers = [];
+  win.setTimeout = (cb) => { timers.push(cb); return timers.length; };
+  const raw = [];
+  view.app = { workspace: { on: () => ({}) }, vault: { on: (name, cb) => { raw.push(cb); return {}; } } };
+  view.plugin.graphPath = () => '.obsidian/graph.json';
+  view.registerEvent = () => {};
+  const el = (tag) => ({ tag, remove() {}, getContext: () => ({}) });
+  Object.assign(view.contentEl, { empty() {}, addClass() {}, createEl: (tag) => el(tag), createDiv: () => el('div') });
+  win.ResizeObserver = class { observe() {} disconnect() {} };
+  view.build = async () => {};
+  let applied = 0;
+  view.applyStyle = async () => { applied += 1; };
+  view.onOpen().then(() => {
+    const cam = JSON.stringify(view.cam);
+    raw.forEach((cb) => cb('.obsidian/workspace.json'));
+    assert.strictEqual(timers.length, 0, 'other config files are ignored');
+    for (let i = 0; i < 5; i++) raw.forEach((cb) => cb('.obsidian/graph.json'));
+    timers[timers.length - 1]();
+    assert.deepStrictEqual([applied, JSON.stringify(view.cam)], [1, cam], 'one re-style for a burst of writes, camera untouched');
+  });
+}
+{
+  // applyStyle pushes the new sizes to the GPU and to the hover radius
+  const { view } = stubView();
+  const uploads = [];
+  view.gl = { isContextLost: () => false, ARRAY_BUFFER: 1, TEXTURE_2D: 2, RGB: 3, FLOAT: 4,
+    bindBuffer() {}, bufferSubData: (t, o, data) => uploads.push(data), bindTexture() {}, texSubImage2D() {} };
+  view.buf = { col: {}, size: {} };
+  view.tex = { col: {} };
+  view.data = { n: 2, deg: Uint32Array.from([1, 1]) };
+  view.files = [{ path: 'a.md' }, { path: 'b.md' }];
+  view.readStyle = async () => ({ groups: [], fill: [1, 1, 1], nodeSize: 3 });
+  view.applyStyle().then(() => {
+    const want = (2.2 + 1.1) * 3;
+    assert.ok(uploads.some((u) => u.length === 2 && Math.abs(u[0] - want) < 1e-5), 'size buffer re-uploaded');
+    assert.ok(Math.abs(view.size[0] - want) < 1e-5, 'hover radius follows');
+  });
 }
 
 // ---------------------------------------------------------------- data extraction
