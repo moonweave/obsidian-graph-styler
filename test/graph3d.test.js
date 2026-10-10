@@ -21,7 +21,7 @@ Module._load = function load(request, parent, isMain) {
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
 Module._load = originalLoad;
 const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor,
-  displayRatio3d } = GraphStyler;
+  displayRatio3d, lineMode3d } = GraphStyler;
 
 // A Graph3DView with just enough of Obsidian and the DOM stubbed to drive its pointer handlers and frame().
 // draw() and pick() are replaced by recorders; the handlers come from bindInput() through registerDomEvent.
@@ -314,15 +314,18 @@ function stubView() {
   })().catch((e) => { console.error(e); process.exit(1); });
 }
 
-// ---------------------------------------------------------------- node size follows the graph settings
-// Every mapping is a ratio to Obsidian's own default (1), so a vault on the defaults draws exactly as before.
+// ---------------------------------------------------------------- node size and link width follow the graph settings
+// Every mapping is a ratio to Obsidian's own defaults (1 and 1), so a vault on the defaults draws exactly as before.
 {
   assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 1 }, 'nodeSizeMultiplier'), 1);
   assert.strictEqual(displayRatio3d({}, 'nodeSizeMultiplier'), 1, 'not set = Obsidian default');
   assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 2.5 }, 'nodeSizeMultiplier'), 2.5);
-  assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 40 }, 'nodeSizeMultiplier'), 5, 'hand-edited values clamp to the slider range');
-  assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 0 }, 'nodeSizeMultiplier'), 0.1);
+  assert.strictEqual(displayRatio3d({ lineSizeMultiplier: 40 }, 'lineSizeMultiplier'), 5, 'hand-edited values clamp to the slider range');
+  assert.strictEqual(displayRatio3d({ lineSizeMultiplier: 0 }, 'lineSizeMultiplier'), 0.1);
   assert.strictEqual(displayRatio3d({ nodeSizeMultiplier: 'big' }, 'nodeSizeMultiplier'), 1);
+  assert.deepStrictEqual(lineMode3d(1), { thick: false, alpha: 1, width: 1 }, 'default: the 1 px lines as before');
+  assert.deepStrictEqual(lineMode3d(0.3), { thick: false, alpha: 0.3, width: 1 }, 'thinner = fainter 1 px lines');
+  assert.deepStrictEqual(lineMode3d(3), { thick: true, alpha: 1, width: 3 }, 'thicker = 3 px quads');
 
   // node radii: same sqrt(degree) shape, times the node size ratio; default 1 = the old radii
   const view = new Graph3DView({}, { settings: {} });
@@ -337,15 +340,16 @@ function stubView() {
 {
   // readStyle takes the ratios from the effective graph options (the core graph plugin's live options)
   const view = new Graph3DView({}, { settings: {}, activePalette: async () => null, readGraphOptions: async () => ({}) });
-  const options = { colorGroups: [], nodeSizeMultiplier: 2 };
+  const options = { colorGroups: [], nodeSizeMultiplier: 2, lineSizeMultiplier: 3 };
   view.app = { internalPlugins: { plugins: { graph: { instance: { options } } } } };
   global.document.body = { createDiv: () => ({ style: {}, remove() {} }) };
   global.getComputedStyle = () => ({ color: 'rgb(10, 20, 30)', backgroundColor: 'rgb(0, 0, 0)' });
   view.readStyle().then((st) => {
-    assert.strictEqual(st.nodeSize, 2);
-    delete options.nodeSizeMultiplier;
+    assert.deepStrictEqual([st.nodeSize, st.lineSize], [2, 3]);
+    options.nodeSizeMultiplier = 1;
+    delete options.lineSizeMultiplier;
     return view.readStyle();
-  }).then((st) => assert.strictEqual(st.nodeSize, 1, 'not set → ratio 1'));
+  }).then((st) => assert.deepStrictEqual([st.nodeSize, st.lineSize], [1, 1], 'defaults → ratio 1'));
 }
 {
   // the hover radius uses the same sizes as the drawn nodes
@@ -399,7 +403,7 @@ function stubView() {
   view.tex = { col: {} };
   view.data = { n: 2, deg: Uint32Array.from([1, 1]) };
   view.files = [{ path: 'a.md' }, { path: 'b.md' }];
-  view.readStyle = async () => ({ groups: [], fill: [1, 1, 1], nodeSize: 3 });
+  view.readStyle = async () => ({ groups: [], fill: [1, 1, 1], nodeSize: 3, lineSize: 1 });
   view.applyStyle().then(() => {
     const want = (2.2 + 1.1) * 3;
     assert.ok(uploads.some((u) => u.length === 2 && Math.abs(u[0] - want) < 1e-5), 'size buffer re-uploaded');

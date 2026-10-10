@@ -1207,13 +1207,20 @@ const EASE_3D_MS = 1500;    // 다시 시작한 회전이 제 속도에 이를 �
 const FIT_MIN_3D = 30;
 // Obsidian 그래프 설정의 기본값(1.11.7 app.js의 표시 기본값). 3D는 이 값에 대한 배율로 따라가므로,
 // 기본값이면 지금까지와 똑같이 그린다. 슬라이더 범위는 0.1–5.
-const GRAPH_DISPLAY_DEFAULTS_3D = { nodeSizeMultiplier: 1 };
+const GRAPH_DISPLAY_DEFAULTS_3D = { nodeSizeMultiplier: 1, lineSizeMultiplier: 1 };
+const TEX_W_3D = 1024;  // 노드 텍스처 가로 칸 수(WebGL2가 보장하는 최대 크기 2048 안)
 
 // 그래프 설정 값 → 기본값에 대한 배율. 숫자가 아니면 1, 손으로 고친 값은 슬라이더 범위로 자른다.
 function displayRatio3d(options, key) {
   const v = options && options[key];
   if (typeof v !== 'number' || !Number.isFinite(v)) return 1;
   return Math.max(0.1, Math.min(5, v)) / GRAPH_DISPLAY_DEFAULTS_3D[key];
+}
+
+// 링크 굵기. gl.LINES는 늘 1px이라, 1배 이하는 그 선을 옅게 그리고(0.1배 = 10% 불투명) 1배를 넘으면
+// 화면 공간 사각형으로 굵게 그린다(1배 = 장치 1px). 기본값 1은 지금까지의 1px 선 그대로다.
+function lineMode3d(lineSize) {
+  return lineSize > 1 ? { thick: true, alpha: 1, width: lineSize } : { thick: false, alpha: lineSize, width: 1 };
 }
 
 // 노트 경로 목록과 metadataCache.resolvedLinks → 링크 쌍과 이웃 목록(CSR).
@@ -1604,6 +1611,31 @@ in float vA;
 uniform float uLight;
 out vec4 o;
 void main() { o = vec4(vCol * vA, uLight * vA); }`],
+  // 굵은 링크: 링크마다 사각형 하나(인스턴스). 끝점 위치·색은 노드 텍스처에서 읽어, 노드 버퍼를 링크마다 복사하지 않는다.
+  thick: `#version 300 es
+layout(location=4) in vec2 aCorner;
+layout(location=5) in uvec2 aEnds;
+uniform highp sampler2D uPosTex, uColTex;
+uniform int uTexW;
+uniform mat4 uMvp;
+uniform vec2 uView, uFog;
+uniform vec3 uLine;
+uniform float uAlpha, uWidth;
+out vec3 vCol;
+out float vA;
+vec4 node(highp sampler2D t, uint i) { return texelFetch(t, ivec2(int(i) % uTexW, int(i) / uTexW), 0); }
+void main() {
+  vec4 a = uMvp * vec4(node(uPosTex, aEnds.x).xyz, 1.0);
+  vec4 b = uMvp * vec4(node(uPosTex, aEnds.y).xyz, 1.0);
+  if (a.w <= 0.0 || b.w <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vec2 d = b.xy / b.w * uView - a.xy / a.w * uView;
+  vec2 nrm = normalize(vec2(-d.y, d.x) + vec2(0.0, 1e-6));
+  bool atB = aCorner.x > 0.0;
+  vec4 p = atB ? b : a;
+  gl_Position = p + vec4(nrm * aCorner.y * uWidth / uView * p.w, 0.0, 0.0);
+  vCol = mix(uLine, node(uColTex, atB ? aEnds.y : aEnds.x).rgb, 0.55);
+  vA = uAlpha * (1.0 - smoothstep(uFog.x, uFog.y, p.w) * 0.75);
+}`,
   node: `#version 300 es
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aCol;
@@ -1729,7 +1761,7 @@ class Graph3DView extends ItemView {
   restoreGL() {
     this.clearMessage();
     // 잃기 전의 GPU 객체는 새 문맥에서 무효라, 지우려 하면 GL 오류만 난다. 버리고 새로 만든다.
-    this.prog = this.buf = this.vaoLine = this.vaoNode = null;
+    this.prog = this.buf = this.vaoLine = this.vaoNode = this.vaoThick = this.tex = null;
     // 링크 강조 버퍼도 새로 만들어지므로 호버를 처음부터 다시 고르게 한다. 그대로 두면 노드만 밝고 링크는 어두웠다.
     this.hover = -1;
     if (this.hi) this.hi.fill(0);
@@ -1832,6 +1864,7 @@ class Graph3DView extends ItemView {
       bg,
       light: luminance(bg[2]) > 0.5,
       nodeSize: displayRatio3d(options, 'nodeSizeMultiplier'),
+      lineSize: displayRatio3d(options, 'lineSizeMultiplier'),
       fill: applyCssFilter(probe('graph-view color-fill', 'color'), filter),
       line: applyCssFilter(probe('graph-view color-line', 'color'), filter),
       groups,
@@ -1866,14 +1899,26 @@ class Graph3DView extends ItemView {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.size);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, size);
     this.size = size;
+    this.uploadNodeTexture(this.tex.col, col);
     this.kick();
   }
 
-  // 2D 그래프 설정(노드 크기 슬라이더)이 바뀌면 graph.json이 다시 쓰인다. 끄는 동안 여러 번 오므로 묶어서 한 번 반영한다.
+  // 2D 그래프 설정(노드 크기·링크 굵기 슬라이더)이 바뀌면 graph.json이 다시 쓰인다. 끄는 동안 여러 번 오므로 묶어서 한 번 반영한다.
   scheduleStyle() {
     const win = this.contentEl.win;
     win.clearTimeout(this.styleTimer);
     this.styleTimer = win.setTimeout(() => this.applyStyle(), 200);
+  }
+
+  // 노드별 값(위치·색)을 굵은 링크용 텍스처에 올린다. 텍스처는 가로 TEX_W_3D칸으로 접은 RGB32F.
+  uploadNodeTexture(tex, values) {
+    const gl = this.gl;
+    const n = this.data.n;
+    const h = Math.ceil(n / TEX_W_3D);
+    const padded = new Float32Array(TEX_W_3D * h * 3);
+    padded.set(values.subarray(0, n * 3));
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TEX_W_3D, h, gl.RGB, gl.FLOAT, padded);
   }
 
   startLayout() {
@@ -1909,6 +1954,8 @@ class Graph3DView extends ItemView {
     if (this.buf) for (const b of Object.values(this.buf)) gl.deleteBuffer(b);
     if (this.vaoLine) gl.deleteVertexArray(this.vaoLine);
     if (this.vaoNode) gl.deleteVertexArray(this.vaoNode);
+    if (this.vaoThick) gl.deleteVertexArray(this.vaoThick);
+    if (this.tex) for (const t of Object.values(this.tex)) gl.deleteTexture(t);
     const compile = (vs, fs) => {
       const p = gl.createProgram();
       for (const [type, text] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
@@ -1933,6 +1980,7 @@ class Graph3DView extends ItemView {
       line: compile(GL3D.line[0], GL3D.line[1]),
       halo: compile(GL3D.node, GL3D.halo),
       core: compile(GL3D.node, GL3D.core),
+      thick: compile(GL3D.thick, GL3D.line[1]),
     };
     const { col, size } = this.nodeAttributes();
     this.size = size;
@@ -1950,8 +1998,22 @@ class Graph3DView extends ItemView {
       corner: buf(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW),
       links: buf(gl.ELEMENT_ARRAY_BUFFER, this.data.links, gl.STATIC_DRAW),
       hiLinks: buf(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(0), gl.DYNAMIC_DRAW),
+      // 굵은 링크의 인스턴스 속성(끝점 번호 쌍). WebGL은 요소 버퍼를 다른 용도로 묶을 수 없어 따로 둔다.
+      linkPairs: buf(gl.ARRAY_BUFFER, this.data.links, gl.STATIC_DRAW),
+      hiPairs: buf(gl.ARRAY_BUFFER, new Uint32Array(2), gl.DYNAMIC_DRAW),
     };
     this.hiCount = 0;
+    const texture = () => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB32F, TEX_W_3D, Math.ceil(this.data.n / TEX_W_3D), 0, gl.RGB, gl.FLOAT, null);
+      return t;
+    };
+    this.tex = { pos: texture(), col: texture() };
+    this.uploadNodeTexture(this.tex.pos, this.pos);
+    this.uploadNodeTexture(this.tex.col, col);
     const attr = (loc, b, n, divisor) => {
       gl.bindBuffer(gl.ARRAY_BUFFER, b);
       gl.enableVertexAttribArray(loc);
@@ -1969,6 +2031,13 @@ class Graph3DView extends ItemView {
     attr(2, this.buf.size, 1, 1);
     attr(3, this.buf.hi, 1, 1);
     attr(4, this.buf.corner, 2, 0);
+    this.vaoThick = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoThick);
+    attr(4, this.buf.corner, 2, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.linkPairs);
+    gl.enableVertexAttribArray(5);
+    gl.vertexAttribIPointer(5, 2, gl.UNSIGNED_INT, 0, 0);
+    gl.vertexAttribDivisor(5, 1);
     gl.bindVertexArray(null);
   }
 
@@ -2098,6 +2167,8 @@ class Graph3DView extends ItemView {
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.hi);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.hiLinks);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(hiLinks), gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.hiPairs);
+    gl.bufferData(gl.ARRAY_BUFFER, new Uint32Array(hiLinks), gl.DYNAMIC_DRAW);
     this.hiCount = hiLinks.length;
   }
 
@@ -2213,6 +2284,7 @@ class Graph3DView extends ItemView {
       this.posDirty = false;
       gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.pos);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.pos);
+      this.uploadNodeTexture(this.tex.pos, this.pos);
       if (!this.userMoved) {
         this.fit = this.measureFit();
         this.cam.dist = this.shownDist = this.fitDistance();
@@ -2250,20 +2322,44 @@ class Graph3DView extends ItemView {
     gl.enable(gl.BLEND);
     gl.blendEquation(gl.FUNC_ADD);
     gl.blendFunc(gl.ONE, light ? gl.ONE_MINUS_SRC_ALPHA : gl.ONE);
-    P = this.prog.line;
+    const lines = lineMode3d(st.lineSize);
+    const baseAlpha = (light ? 0.35 : 0.22) * lines.alpha;
+    P = lines.thick ? this.prog.thick : this.prog.line;
     gl.useProgram(P.p);
     gl.uniformMatrix4fv(P.u.uMvp, false, this.mvp);
     gl.uniform2fv(P.u.uFog, fog);
     gl.uniform3fv(P.u.uLine, st.line);
     gl.uniform1f(P.u.uLight, light);
-    gl.bindVertexArray(this.vaoLine);
-    gl.uniform1f(P.u.uAlpha, (light ? 0.35 : 0.22) * (hovering ? 0.3 : 1));
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.links);
-    gl.drawElements(gl.LINES, m * 2, gl.UNSIGNED_INT, 0);
-    if (hovering && this.hiCount) {
-      gl.uniform1f(P.u.uAlpha, 0.9);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.hiLinks);
-      gl.drawElements(gl.LINES, this.hiCount, gl.UNSIGNED_INT, 0);
+    gl.uniform1f(P.u.uAlpha, baseAlpha * (hovering ? 0.3 : 1));
+    if (lines.thick) {
+      gl.uniform2f(P.u.uView, c.width, c.height);
+      gl.uniform1f(P.u.uWidth, lines.width);
+      gl.uniform1i(P.u.uTexW, TEX_W_3D);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.tex.pos);
+      gl.uniform1i(P.u.uPosTex, 0);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.tex.col);
+      gl.uniform1i(P.u.uColTex, 1);
+      gl.bindVertexArray(this.vaoThick);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.linkPairs);
+      gl.vertexAttribIPointer(5, 2, gl.UNSIGNED_INT, 0, 0);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, m);
+      if (hovering && this.hiCount) {
+        gl.uniform1f(P.u.uAlpha, 0.9);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.hiPairs);
+        gl.vertexAttribIPointer(5, 2, gl.UNSIGNED_INT, 0, 0);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.hiCount / 2);
+      }
+    } else {
+      gl.bindVertexArray(this.vaoLine);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.links);
+      gl.drawElements(gl.LINES, m * 2, gl.UNSIGNED_INT, 0);
+      if (hovering && this.hiCount) {
+        gl.uniform1f(P.u.uAlpha, 0.9);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buf.hiLinks);
+        gl.drawElements(gl.LINES, this.hiCount, gl.UNSIGNED_INT, 0);
+      }
     }
 
     gl.bindVertexArray(this.vaoNode);
@@ -3352,3 +3448,4 @@ module.exports.applyCssFilter = applyCssFilter;
 module.exports.Graph3DView = Graph3DView;
 module.exports.parseCssColor = parseCssColor;
 module.exports.displayRatio3d = displayRatio3d;
+module.exports.lineMode3d = lineMode3d;
