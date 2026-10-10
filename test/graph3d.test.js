@@ -235,6 +235,26 @@ function stubView() {
   });
 }
 
+// ---------------------------------------------------------------- click or drag
+// A click is a press that never moved 5 px or more from where it started (straight-line distance). The old summed
+// |dx|+|dy| turned a 3,3 wobble (4.2 px) into a drag; a drag that comes back to its start is still a drag.
+{
+  const run = (path) => {
+    const { view, calls, pointer } = stubView();
+    view.pick = () => { view.hover = 9; };
+    pointer('pointerdown', 50, 50);
+    for (const [x, y] of path) pointer('pointermove', x, y);
+    const [ex, ey] = path.length ? path[path.length - 1] : [50, 50];
+    pointer('pointerup', ex, ey);
+    return calls.opened.length;
+  };
+  assert.strictEqual(run([]), 1, 'still press opens');
+  assert.strictEqual(run([[53, 53]]), 1, '3,3 wobble (4.2 px) is still a click');
+  assert.strictEqual(run([[54, 52]]), 1, '4.5 px is a click');
+  assert.strictEqual(run([[55, 50]]), 0, '5 px is a drag');
+  assert.strictEqual(run([[80, 50], [60, 50], [51, 50]]), 0, 'a drag that comes back near its start is not a click');
+}
+
 // ---------------------------------------------------------------- data extraction
 {
   const paths = ['A.md', 'B.md', 'C.md', 'D.md'];

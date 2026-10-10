@@ -1944,7 +1944,7 @@ class Graph3DView extends ItemView {
     this.registerDomEvent(c, 'pointerdown', (e) => {
       c.setPointerCapture(e.pointerId);
       this.mouse = [e.offsetX, e.offsetY];
-      this.drag = { x: e.clientX, y: e.clientY, moved: 0, pan: e.button === 2 || e.shiftKey, button: e.button };
+      this.drag = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, far: 0, pan: e.button === 2 || e.shiftKey, button: e.button };
       this.touch();
     });
     this.registerDomEvent(c, 'pointermove', (e) => {
@@ -1952,7 +1952,8 @@ class Graph3DView extends ItemView {
       if (d) {
         const dx = e.clientX - d.x, dy = e.clientY - d.y;
         d.x = e.clientX; d.y = e.clientY;
-        d.moved += Math.abs(dx) + Math.abs(dy);
+        // 누른 점에서 가장 멀리 간 거리(직선)로 클릭과 드래그를 가른다. 갔다가 돌아온 드래그는 클릭이 아니다.
+        d.far = Math.max(d.far, Math.hypot(e.clientX - d.sx, e.clientY - d.sy));
         if (d.pan) this.panBy(dx, dy);
         else {
           this.cam.theta -= dx * 0.006;
@@ -1970,7 +1971,7 @@ class Graph3DView extends ItemView {
       if (!d) return;
       this.drag = null;
       if (c.hasPointerCapture(e.pointerId)) c.releasePointerCapture(e.pointerId);
-      if (click && d.moved < 5 && d.button === 0) {
+      if (click && d.far < 5 && d.button === 0) {
         // 터치 탭에는 앞선 pointermove가 없어 호버가 없다. 뗀 자리에서 바로 골라 연다.
         this.mouse = [e.offsetX, e.offsetY];
         this.pick();
