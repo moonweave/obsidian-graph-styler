@@ -27,8 +27,25 @@ class Plugin {
 }
 
 class ItemView {}
-class PluginSettingTab {}
-class Setting {}
+class PluginSettingTab {
+  constructor(app, plugin) {
+    this.app = app;
+    this.plugin = plugin;
+  }
+}
+// Chainable like Obsidian's Setting; keeps the toggle so a test can flip it as the Settings tab would.
+class Setting {
+  constructor() { Setting.made.push(this); }
+  setName(name) { this.name = name; return this; }
+  setDesc(desc) { this.desc = desc; return this; }
+  setHeading() { this.heading = true; return this; }
+  addToggle(build) {
+    this.toggle = { setValue(value) { this.value = value; return this; }, onChange(fn) { this.change = fn; return this; } };
+    build(this.toggle);
+    return this;
+  }
+}
+Setting.made = [];
 
 const notices = [];
 // Notices built from a fragment (the export notice with its buttons) are recorded by their first line;
@@ -1386,6 +1403,8 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
       const factories = {};
       plugin.registerView = (type, make) => { factories[type] = make; };
       const saved = [];
+      let settingTab = null;
+      plugin.addSettingTab = (t) => { settingTab = t; };
       plugin.loadData = async () => Object.assign({ custom: [] }, data);
       plugin.saveData = async (settings) => { saved.push(JSON.parse(JSON.stringify(settings))); };
       await plugin.onload();
@@ -1397,11 +1416,12 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
       plugin.views3d = () => tabs;
       view.render();
       const group = () => view.contentEl.children.find((el) => el.tag === 'details' && el.children[0].text.includes('3D'));
-      return { plugin, view, saved, tabs, group, factories };
+      return { plugin, view, saved, tabs, group, factories, settingTab: () => settingTab };
     };
     const inputs = (group) => group.walk().filter((el) => el.tag === 'input');
 
     const off = await render3d(GraphStyler);
+    notices.length = 0;
     let g = off.group();
     assert.ok(!g.open, 'the 3D group starts closed');
     assert.deepStrictEqual(inputs(g).map((el) => [el.type, el.checked]), [['checkbox', false]]);
@@ -1413,6 +1433,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     await inputs(g)[0].onchange();
     assert.strictEqual(off.plugin.settings.experimental3d, true);
     assert.strictEqual(off.saved[off.saved.length - 1].experimental3d, true);
+    assert.deepStrictEqual(notices, [], 'no "use the command palette" notice from the panel: its Open button is right there');
     g = off.group();
     const [onBox, rotateBox, speed] = inputs(g);
     assert.deepStrictEqual([onBox.checked, rotateBox.type, rotateBox.checked, speed.type], [true, 'checkbox', true, 'range']);
@@ -1463,9 +1484,19 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.ok(Math.abs(v.rotationSpeed(t + 1600) - 0.3) < 1e-9, 'reaches the set speed after the ease');
 
     // The Settings tab toggle and the panel toggle are the same setting: turning it off in Settings re-renders
-    // the panel without the controls.
-    await back.plugin.setExperimental3d(false);
+    // the panel without the controls; turning it on there still points to the command.
+    const settingTab = back.settingTab();
+    settingTab.containerEl = new FakeEl('div');
+    Setting.made.length = 0;
+    settingTab.display();
+    const toggleRow = Setting.made.find((row) => row.toggle);
+    assert.deepStrictEqual([toggleRow.name, toggleRow.toggle.value], ['3D graph view', true]);
+    notices.length = 0;
+    await toggleRow.toggle.change(false);
     assert.deepStrictEqual(inputs(back.group()).map((el) => [el.type, el.checked]), [['checkbox', false]]);
+    await toggleRow.toggle.change(true);
+    assert.deepStrictEqual(notices, ['Open it from the command palette: “Graph Styler: Open 3D graph”']);
+    assert.deepStrictEqual(inputs(back.group()).map((el) => el.type), ['checkbox', 'checkbox', 'range']);
 
     // Korean labels.
     const ko = await render3d(loadGraphStylerIn('ko'), { experimental3d: true });

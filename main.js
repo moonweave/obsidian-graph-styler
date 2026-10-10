@@ -1125,7 +1125,8 @@ class StylerView extends ItemView {
     const onBox = onRow.createEl('input');
     onBox.type = 'checkbox';
     onBox.checked = !!plugin.settings.experimental3d;
-    onBox.onchange = () => plugin.setExperimental3d(onBox.checked);
+    // 바로 아래에 열기 버튼이 생기므로 '명령 팔레트에서 여세요' 알림은 띄우지 않는다.
+    onBox.onchange = () => plugin.setExperimental3d(onBox.checked, false);
     onRow.createSpan({ text: L.exp3dName });
     c.createEl('p', { text: L.panel3dNote, cls: 'gs-note' });
     if (!plugin.settings.experimental3d) return;
@@ -2373,10 +2374,11 @@ module.exports = class GraphStyler extends Plugin {
   }
 
   // 설정 탭과 패널 어느 쪽에서 바꿔도 패널을 다시 그려 두 토글이 같은 값을 보인다.
-  async setExperimental3d(on) {
+  // notice=false: 켜는 곳(패널)에 이미 열기 버튼이 있어 명령 안내가 필요 없을 때.
+  async setExperimental3d(on, notice = true) {
     this.settings.experimental3d = on;
     await this.saveData(this.settings);
-    if (on) new Notice(L.exp3dOn);
+    if (on && notice) new Notice(L.exp3dOn);
     else for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_3D)) leaf.detach();
     this.refreshViews();
   }
