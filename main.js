@@ -1261,23 +1261,8 @@ function layoutParams3d(options) {
 
 // 노트 경로 목록과 metadataCache.resolvedLinks → 링크 쌍과 이웃 목록(CSR).
 // 자기 링크, 양방향 중복, 노트가 아닌 대상(첨부파일·없는 파일)은 뺀다.
-function graphData3d(paths, resolvedLinks) {
+function graphDataFromPairs3d(paths, pairs) {
   const n = paths.length;
-  const index = new Map(paths.map((p, i) => [p, i]));
-  const seen = new Set();
-  const pairs = [];
-  for (const src of Object.keys(resolvedLinks || {})) {
-    const a = index.get(src);
-    if (a === undefined) continue;
-    for (const dst of Object.keys(resolvedLinks[src] || {})) {
-      const b = index.get(dst);
-      if (b === undefined || b === a) continue;
-      const key = a < b ? a * n + b : b * n + a;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      pairs.push(a, b);
-    }
-  }
   const links = Uint32Array.from(pairs);
   const deg = new Uint32Array(n);
   for (const i of links) deg[i]++;
@@ -1292,6 +1277,58 @@ function graphData3d(paths, resolvedLinks) {
     adj[next[b]] = a; adjLink[next[b]++] = e;
   }
   return { n, links, deg, start, adj, adjLink };
+}
+
+function graphData3d(paths, resolvedLinks) {
+  const index = new Map(paths.map((p, i) => [p, i]));
+  const seen = new Set();
+  const pairs = [];
+  for (const src of Object.keys(resolvedLinks || {})) {
+    const a = index.get(src);
+    if (a === undefined) continue;
+    for (const dst of Object.keys(resolvedLinks[src] || {})) {
+      const b = index.get(dst);
+      if (b === undefined || b === a) continue;
+      const key = a < b ? a * paths.length + b : b * paths.length + a;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push(a, b);
+    }
+  }
+  return graphDataFromPairs3d(paths, pairs);
+}
+
+// The global graph renderer has already applied Obsidian's search, tag, attachment, unresolved-link and orphan filters.
+// Reuse that visible graph rather than reimplementing its private search-query language.
+function graphDataFromRenderer3d(nodes, renderedLinks) {
+  const paths = [];
+  const index = new Map();
+  for (const node of nodes || []) {
+    if (!node || typeof node.id !== 'string' || index.has(node.id)) continue;
+    index.set(node.id, paths.length);
+    paths.push(node.id);
+  }
+  const seen = new Set();
+  const pairs = [];
+  const idOf = (node) => typeof node === 'string' ? node : node && node.id;
+  for (const link of renderedLinks || []) {
+    const a = index.get(idOf(link && link.source));
+    const b = index.get(idOf(link && link.target));
+    if (a === undefined || b === undefined || a === b) continue;
+    const key = a < b ? a * paths.length + b : b * paths.length + a;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pairs.push(a, b);
+  }
+  return graphDataFromPairs3d(paths, pairs);
+}
+
+function graphRenderer3d(workspace) {
+  const leaf = workspace.getLeavesOfType('graph').find((item) => {
+    const renderer = item.view && item.view.renderer;
+    return renderer && Array.isArray(renderer.nodes) && Array.isArray(renderer.links);
+  });
+  return leaf ? leaf.view.renderer : null;
 }
 
 // Graph Styler가 만드는 색 그룹 쿼리(path:"폴더", tag:#태그)만 해석한다. 그 밖의 검색 문법은 어느 노트와도
@@ -1839,10 +1876,29 @@ class Graph3DView extends ItemView {
       workspace.onLayoutReady(() => { if (!this.disposed) this.build(); });
       return;
     }
-    const files = vault.getMarkdownFiles();
-    const paths = files.map((f) => f.path);
-    this.files = files;
-    this.data = graphData3d(paths, metadataCache.resolvedLinks);
+    const renderer = graphRenderer3d(workspace);
+    let paths;
+    if (renderer) {
+      const renderedNodes = renderer.nodes.filter((node) => node && typeof node.id === 'string');
+      this.files = renderedNodes.map((node) => {
+        const path = node.id;
+        const file = vault.getAbstractFileByPath(path) || null;
+        return {
+          path,
+          basename: (typeof node.text === 'string' && node.text) || (file && file.basename)
+            || path.split('/').pop().replace(/\.[^.]+$/, ''),
+          type: node.type || 'file',
+          file,
+        };
+      });
+      this.data = graphDataFromRenderer3d(renderedNodes, renderer.links);
+      paths = this.files.map((file) => file.path);
+    } else {
+      const files = vault.getMarkdownFiles();
+      paths = files.map((f) => f.path);
+      this.files = files.map((file) => ({ path: file.path, basename: file.basename, type: 'file', file }));
+      this.data = graphData3d(paths, metadataCache.resolvedLinks);
+    }
     // 링크 색인이 덜 된 채 열렸으면, 모든 노트가 색인됐을 때 한 번만 다시 만든다. 'resolved'는 처음 색인하는 동안에도
     // 여러 번 온다(노트 38개 vault를 처음 열 때 37번). 첫 번째에 다시 만들면 링크가 거의 없는 그래프가 그대로 남았다.
     // 색인이 다 차면 resolvedLinks에는 노트마다 항목이 있다(제외 폴더·빈 노트 포함, 실측). 그 뒤의 노트 변경은
@@ -1917,6 +1973,8 @@ class Graph3DView extends ItemView {
       lineSize: displayRatio3d(options, 'lineSizeMultiplier'),
       forces: layoutParams3d(options),
       fill: applyCssFilter(probe('graph-view color-fill', 'color'), filter),
+      tagFill: applyCssFilter(probe('graph-view color-fill-tag', 'color'), filter),
+      unresolvedFill: applyCssFilter(probe('graph-view color-fill-unresolved', 'color'), filter),
       line: applyCssFilter(probe('graph-view color-line', 'color'), filter),
       groups,
     };
@@ -1925,15 +1983,18 @@ class Graph3DView extends ItemView {
   // 노드 색과 크기. 크기는 2D 그래프처럼 연결 수의 제곱근을 따르고, 그래프 설정의 노드 크기 배율을 곱한다.
   nodeAttributes() {
     const { n, deg } = this.data;
-    const { groups, fill } = this.style;
+    const { groups, fill, tagFill, unresolvedFill } = this.style;
     const tagged = groups.some((g) => g.tags);
     const col = new Float32Array(n * 3);
     const size = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       const file = this.files[i];
-      const tags = tagged ? (getAllTags(this.app.metadataCache.getFileCache(file) || {}) || []) : [];
+      const tags = file.type === 'tag'
+        ? [file.path.startsWith('#') ? file.path : `#${file.path}`]
+        : tagged && file.file ? (getAllTags(this.app.metadataCache.getFileCache(file.file) || {}) || []) : [];
       const g = groups.find((group) => group.test(file.path, tags));
-      col.set(g ? g.rgb : fill, i * 3);
+      const base = file.type === 'tag' ? tagFill : file.type === 'unresolved' ? unresolvedFill : fill;
+      col.set(g ? g.rgb : base, i * 3);
       size[i] = (2.2 + Math.sqrt(deg[i]) * 1.1) * this.style.nodeSize;
     }
     return { col, size };
@@ -2216,10 +2277,20 @@ class Graph3DView extends ItemView {
     const file = this.files[i];
     const ws = this.app.workspace;
     const mod = Keymap.isModEvent(evt);
+    if (file.type === 'tag') {
+      const search = this.app.internalPlugins && this.app.internalPlugins.getEnabledPluginById
+        && this.app.internalPlugins.getEnabledPluginById('global-search');
+      if (search) search.openGlobalSearch(`tag:${file.path}`);
+      return;
+    }
+    if (!file.file || file.type === 'attachment') {
+      ws.openLinkText(file.path, '', mod);
+      return;
+    }
     // 3D 탭은 다시 배치하는 데 몇 초가 들어서, 2D 그래프와 달리 자기 탭을 노트로 바꾸지 않는다.
     const leaf = mod ? ws.getLeaf(mod)
       : ws.getLeavesOfType('markdown').find((l) => l.getRoot() === ws.rootSplit) || ws.getLeaf('tab');
-    leaf.openFile(file);
+    leaf.openFile(file.file);
   }
 
   setHover(i) {
@@ -2235,7 +2306,7 @@ class Graph3DView extends ItemView {
         const e = adjLink[p];
         hiLinks.push(links[e * 2], links[e * 2 + 1]);
       }
-      this.label.setText(this.files[i].basename);
+      this.label.setText(this.files[i].basename || this.files[i].path);
     }
     this.label.toggleClass('is-shown', i >= 0);
     const gl = this.gl;
@@ -2455,7 +2526,9 @@ class Graph3DView extends ItemView {
       gl.uniform1f(P.u.uHover, hovering);
       gl.uniform2fv(P.u.uFog, fog);
       if (name === 'halo') {
-        gl.uniform1f(P.u.uScale, light ? 3 : 4.8);
+        // 3D perspective already changes apparent size with depth. Keep the glow close to the node core so hubs
+        // do not read as several times larger than their 2D counterparts.
+        gl.uniform1f(P.u.uScale, light ? 2.4 : 3.0);
         gl.uniform1f(P.u.uGain, light ? 0.18 : 0.7);
         gl.uniform1f(P.u.uLight, light);
         if (light) gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -3521,6 +3594,8 @@ module.exports.encodeShareCode = encodeShareCode;
 module.exports.decodeShareCode = decodeShareCode;
 module.exports.presetFromRaw = presetFromRaw;
 module.exports.graphData3d = graphData3d;
+module.exports.graphDataFromRenderer3d = graphDataFromRenderer3d;
+module.exports.graphRenderer3d = graphRenderer3d;
 module.exports.colorGroupTest3d = colorGroupTest3d;
 module.exports.initialPositions3d = initialPositions3d;
 module.exports.forceLayout3d = forceLayout3d;

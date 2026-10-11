@@ -20,7 +20,7 @@ Module._load = function load(request, parent, isMain) {
 };
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
 Module._load = originalLoad;
-const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor,
+const { graphData3d, graphDataFromRenderer3d, graphRenderer3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor,
   displayRatio3d, lineMode3d, forceCurve3d, layoutParams3d } = GraphStyler;
 
 // A Graph3DView with just enough of Obsidian and the DOM stubbed to drive its pointer handlers and frame().
@@ -320,7 +320,7 @@ function stubView() {
       on: (name, cb) => { const ref = { name, cb }; listeners.push(ref); return ref; },
       offref: (ref) => { listeners.splice(listeners.indexOf(ref), 1); },
     },
-    workspace: { get layoutReady() { return ready; }, onLayoutReady: (cb) => onReady.push(cb) },
+    workspace: { get layoutReady() { return ready; }, onLayoutReady: (cb) => onReady.push(cb), getLeavesOfType: () => [] },
   };
   view.registerEvent = () => {};
   view.readStyle = async () => ({});
@@ -606,6 +606,7 @@ function uploads(calls) {
   view.posDirty = true;
   frame(-1, 0);
   assert.deepStrictEqual([view.fit.r, view.cam.dist], [30, view.shownDist], 'camera held, but fog and zoom limits follow the layout size');
+  assert.deepStrictEqual(uniform(pass('halo'), 'uScale'), [3], 'dark-theme halo stays close to the 3D node core');
   const held = view.cam.dist;
   view.userMoved = false;
   view.posDirty = true;
@@ -674,6 +675,31 @@ function uploads(calls) {
   assert.strictEqual(empty.n, 0);
   assert.strictEqual(empty.links.length, 0);
   assert.strictEqual(graphData3d(['A.md'], undefined).links.length, 0, 'missing resolvedLinks is an empty graph');
+}
+
+// ---------------------------------------------------------------- filtered renderer snapshot
+{
+  const rendered = graphDataFromRenderer3d([
+    { id: 'A.md', type: 'file' }, { id: '#paper', type: 'tag' }, { id: 'image.png', type: 'attachment' },
+    { id: 'missing.md', type: 'unresolved' }, { id: 'hidden.md', type: 'file' },
+  ], [
+    { source: { id: 'A.md' }, target: { id: '#paper' } },
+    { source: '#paper', target: 'A.md' },
+    { source: 'A.md', target: 'image.png' },
+    { source: 'missing.md', target: 'hidden.md' },
+    { source: 'A.md', target: 'outside.md' },
+    { source: 'A.md', target: 'A.md' },
+  ]);
+  assert.strictEqual(rendered.n, 5, 'visible files, tags, attachments and unresolved nodes are retained');
+  assert.deepStrictEqual(Array.from(rendered.links), [0, 1, 0, 2, 3, 4], 'only visible, unique non-self links survive');
+  assert.deepStrictEqual(Array.from(rendered.deg), [2, 1, 1, 1, 1]);
+  const dedupedNodes = graphDataFromRenderer3d([{ id: 'A.md' }, { id: 'A.md' }, null], []);
+  assert.strictEqual(dedupedNodes.n, 1, 'invalid and duplicate renderer nodes are ignored');
+  const emptyRenderer = { nodes: [], links: [] };
+  assert.strictEqual(graphRenderer3d({ getLeavesOfType: () => [{ view: { renderer: emptyRenderer } }] }), emptyRenderer,
+    'an initialized global graph with zero visible nodes stays an empty snapshot instead of falling back to all notes');
+  assert.strictEqual(graphRenderer3d({ getLeavesOfType: () => [{ view: { renderer: { nodes: [] } } }] }), null,
+    'an incomplete renderer without its link list is not treated as a published snapshot');
 }
 
 // ---------------------------------------------------------------- colour groups (the queries Graph Styler writes)
