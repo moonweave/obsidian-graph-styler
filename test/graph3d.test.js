@@ -20,8 +20,8 @@ Module._load = function load(request, parent, isMain) {
 };
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
 Module._load = originalLoad;
-const { graphData3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor,
-  displayRatio3d, lineMode3d } = GraphStyler;
+const { graphData3d, graphDataFromRenderer3d, graphRenderer3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor,
+  displayRatio3d, lineMode3d, forceCurve3d, layoutParams3d } = GraphStyler;
 
 // A Graph3DView with just enough of Obsidian and the DOM stubbed to drive its pointer handlers and frame().
 // draw() and pick() are replaced by recorders; the handlers come from bindInput() through registerDomEvent.
@@ -256,6 +256,52 @@ function stubView() {
   assert.strictEqual(run([[80, 50], [60, 50], [51, 50]]), 0, 'a drag that comes back near its start is not a click');
 }
 
+// ---------------------------------------------------------------- which input moves the camera
+// Dragging past the click threshold, the wheel and a pinch move the camera; a click (opening a note) does not, so a
+// camera the user has not moved keeps fitting the graph when it grows or shrinks. Every input pauses the rotation.
+{
+  const run = (steps) => {
+    const { view, handlers, pointer } = stubView();
+    view.userMoved = false;
+    view.lastInput = 0;
+    for (const step of steps) step(pointer, handlers);
+    return { moved: view.userMoved, paused: view.lastInput > 0 };
+  };
+  const press = (x, y, extra) => (p) => p('pointerdown', x, y, extra);
+  const move = (x, y, extra) => (p) => p('pointermove', x, y, extra);
+  const lift = (x, y, extra) => (p) => p('pointerup', x, y, extra);
+  const wheel = (extra) => (p, h) => h.wheel(Object.assign({ deltaY: -40, deltaMode: 0, ctrlKey: false, preventDefault() {} }, extra));
+  const right = { button: 2 };
+  assert.deepStrictEqual(run([press(50, 50), lift(50, 50)]), { moved: false, paused: true }, 'click');
+  assert.deepStrictEqual(run([press(50, 50), move(53, 53), lift(53, 53)]), { moved: false, paused: true }, 'click with a 4 px wobble');
+  assert.deepStrictEqual(run([press(50, 50), move(80, 60), lift(80, 60)]), { moved: true, paused: true }, 'drag');
+  assert.deepStrictEqual(run([press(50, 50, right), move(80, 60, right), lift(80, 60, right)]), { moved: true, paused: true }, 'right drag (pan)');
+  assert.deepStrictEqual(run([wheel()]), { moved: true, paused: true }, 'wheel');
+  assert.deepStrictEqual(run([wheel({ ctrlKey: true, deltaY: -3 })]), { moved: true, paused: true }, 'pinch');
+}
+{
+  // a resized tab refits an untouched camera and leaves a moved one alone
+  const { view, win } = stubView();
+  let resized = null;
+  win.ResizeObserver = class { constructor(cb) { resized = cb; } observe() {} disconnect() {} };
+  view.app = { workspace: { on: () => ({}) }, vault: { on: () => ({}) } };
+  view.registerEvent = () => {};
+  const el = (tag) => ({ tag, remove() {}, getContext: () => ({}) });
+  Object.assign(view.contentEl, { empty() {}, addClass() {}, createEl: (tag) => el(tag), createDiv: () => el('div') });
+  view.build = async () => {};
+  view.onOpen().then(() => {
+    view.canvas = { width: 800, height: 600, clientWidth: 400, clientHeight: 300 };
+    view.userMoved = false;
+    view.cam.dist = 1;
+    resized();
+    assert.strictEqual(view.cam.dist, view.fitDistance(), 'untouched: refitted');
+    view.userMoved = true;
+    view.cam.dist = 7;
+    resized();
+    assert.strictEqual(view.cam.dist, 7, 'moved: left alone');
+  });
+}
+
 // ---------------------------------------------------------------- a tab restored before the link index is complete
 // At a cold start 'resolved' fires once per batch while the index fills (37 times for a 38-note vault, measured).
 // Rebuilding on the first one left a graph with 1 of 44 links. Rebuild once, when every note is indexed, and never on
@@ -274,7 +320,7 @@ function stubView() {
       on: (name, cb) => { const ref = { name, cb }; listeners.push(ref); return ref; },
       offref: (ref) => { listeners.splice(listeners.indexOf(ref), 1); },
     },
-    workspace: { get layoutReady() { return ready; }, onLayoutReady: (cb) => onReady.push(cb) },
+    workspace: { get layoutReady() { return ready; }, onLayoutReady: (cb) => onReady.push(cb), getLeavesOfType: () => [] },
   };
   view.registerEvent = () => {};
   view.readStyle = async () => ({});
@@ -373,12 +419,13 @@ function uploads(calls) {
 {
   // readStyle takes the ratios from the effective graph options (the core graph plugin's live options)
   const view = new Graph3DView({}, { settings: {}, activePalette: async () => null, readGraphOptions: async () => ({}) });
-  const options = { colorGroups: [], nodeSizeMultiplier: 2, lineSizeMultiplier: 3 };
+  const options = { colorGroups: [], nodeSizeMultiplier: 2, lineSizeMultiplier: 3, repelStrength: 15 };
   view.app = { internalPlugins: { plugins: { graph: { instance: { options } } } } };
   global.document.body = { createDiv: () => ({ style: {}, remove() {} }) };
   global.getComputedStyle = () => ({ color: 'rgb(10, 20, 30)', backgroundColor: 'rgb(0, 0, 0)' });
   view.readStyle().then((st) => {
     assert.deepStrictEqual([st.nodeSize, st.lineSize], [2, 3]);
+    assert.deepStrictEqual(st.forces, layoutParams3d({ repelStrength: 15 }), 'forces from the same graph options');
     options.nodeSizeMultiplier = 1;
     delete options.lineSizeMultiplier;
     return view.readStyle();
@@ -558,6 +605,17 @@ function uploads(calls) {
 
   view.posDirty = true;
   frame(-1, 0);
+  assert.deepStrictEqual([view.fit.r, view.cam.dist], [30, view.shownDist], 'camera held, but fog and zoom limits follow the layout size');
+  assert.deepStrictEqual(uniform(pass('halo'), 'uScale'), [3], 'dark-theme halo stays close to the 3D node core');
+  const held = view.cam.dist;
+  view.userMoved = false;
+  view.posDirty = true;
+  frame(-1, 0);
+  view.userMoved = true;
+  assert(view.cam.dist !== held && view.cam.dist === view.fitDistance(), 'an untouched camera keeps fitting the layout');
+
+  view.posDirty = true;
+  frame(-1, 0);
   assert.deepStrictEqual(draws(pass('line')), [['drawElements', 'LINES', 6, 'UNSIGNED_INT', 0]]);
   assert.deepStrictEqual(uniform(pass('line'), 'uAlpha'), [0.22 * 0.4], 'thinner = fainter');
   assert.deepStrictEqual([pass('thick').length, posUploads().length], [0, 0], 'no thick pass, no position texture');
@@ -617,6 +675,31 @@ function uploads(calls) {
   assert.strictEqual(empty.n, 0);
   assert.strictEqual(empty.links.length, 0);
   assert.strictEqual(graphData3d(['A.md'], undefined).links.length, 0, 'missing resolvedLinks is an empty graph');
+}
+
+// ---------------------------------------------------------------- filtered renderer snapshot
+{
+  const rendered = graphDataFromRenderer3d([
+    { id: 'A.md', type: 'file' }, { id: '#paper', type: 'tag' }, { id: 'image.png', type: 'attachment' },
+    { id: 'missing.md', type: 'unresolved' }, { id: 'hidden.md', type: 'file' },
+  ], [
+    { source: { id: 'A.md' }, target: { id: '#paper' } },
+    { source: '#paper', target: 'A.md' },
+    { source: 'A.md', target: 'image.png' },
+    { source: 'missing.md', target: 'hidden.md' },
+    { source: 'A.md', target: 'outside.md' },
+    { source: 'A.md', target: 'A.md' },
+  ]);
+  assert.strictEqual(rendered.n, 5, 'visible files, tags, attachments and unresolved nodes are retained');
+  assert.deepStrictEqual(Array.from(rendered.links), [0, 1, 0, 2, 3, 4], 'only visible, unique non-self links survive');
+  assert.deepStrictEqual(Array.from(rendered.deg), [2, 1, 1, 1, 1]);
+  const dedupedNodes = graphDataFromRenderer3d([{ id: 'A.md' }, { id: 'A.md' }, null], []);
+  assert.strictEqual(dedupedNodes.n, 1, 'invalid and duplicate renderer nodes are ignored');
+  const emptyRenderer = { nodes: [], links: [] };
+  assert.strictEqual(graphRenderer3d({ getLeavesOfType: () => [{ view: { renderer: emptyRenderer } }] }), emptyRenderer,
+    'an initialized global graph with zero visible nodes stays an empty snapshot instead of falling back to all notes');
+  assert.strictEqual(graphRenderer3d({ getLeavesOfType: () => [{ view: { renderer: { nodes: [] } } }] }), null,
+    'an incomplete renderer without its link list is not treated as a published snapshot');
 }
 
 // ---------------------------------------------------------------- colour groups (the queries Graph Styler writes)
@@ -731,6 +814,177 @@ function run(paths, links, params) {
   assert(none.done, 'an empty graph is done at once');
 }
 
+// ---------------------------------------------------------------- forces follow the graph settings
+// graph.json stores slider positions. Obsidian 1.11.7 (app.js) turns the centre / link force positions into forces with
+// L1(e, .01) = (0.01^(1-e) - 0.01) / 0.99, the repel position into its cube (at least 1), and uses link distance as is.
+// Its defaults: centre I1(.1, .01) (force 0.1), repel 10 (1000), link force 1 (1), link distance 250.
+const obsidianDefaultCentre = 1 - Math.log(0.1 * 0.99 + 0.01) / Math.log(0.01);
+const obsidianDefaults = { centerStrength: obsidianDefaultCentre, repelStrength: 10, linkStrength: 1, linkDistance: 250 };
+{
+  assert.strictEqual(forceCurve3d(0), 0);
+  assert.strictEqual(forceCurve3d(1), 1);
+  assert(Math.abs(forceCurve3d(obsidianDefaultCentre) - 0.1) < 1e-12);
+  const before = { gravity: 0.06, charge: -30, linkStrength: 1, linkDistance: 24 };
+  assert.deepStrictEqual(layoutParams3d({}), before, 'no force settings: the layout as before');
+  assert.deepStrictEqual(layoutParams3d(JSON.parse(JSON.stringify(obsidianDefaults))), before,
+    "Obsidian's defaults as graph.json stores them: exactly the layout as before");
+  const p = (o) => layoutParams3d(o);
+  assert.strictEqual(p({ repelStrength: 20 }).charge, -240, 'repel 20 = 8000 against 1000: 8x');
+  for (const low of [0, 2, 5, 7.5]) assert.strictEqual(p({ repelStrength: low }).charge, -30 * 0.44, `repel ${low}: held at 0.44x (2D stops shrinking there)`);
+  assert.strictEqual(p({ repelStrength: 8 }).charge, -30 * 0.512, 'above the floor: the plain ratio');
+  assert.strictEqual(p({ centerStrength: 0 }).gravity, 0);
+  assert.strictEqual(p({ centerStrength: 1 }).gravity, 0.6, 'centre 1 = force 1 against 0.1: 10x');
+  assert.strictEqual(p({ linkStrength: 0 }).linkStrength, 0);
+  assert.strictEqual(p({ linkDistance: 500 }).linkDistance, 24 * Math.pow(2, 1.5), 'link distance 2x: 2^1.5 (calibrated against 2D)');
+  assert.strictEqual(p({ linkDistance: 9999 }).linkDistance, 24 * Math.pow(2, 1.5), 'hand-edited values clamp to the slider range');
+  assert.strictEqual(p({ linkDistance: 'far' }).linkDistance, 24, 'not a number: the default');
+  // hand-edited values outside the sliders clamp to their ends
+  assert.deepStrictEqual([p({ centerStrength: -1 }).gravity, p({ centerStrength: 2 }).gravity], [0, 0.6]);
+  assert.deepStrictEqual([p({ repelStrength: -5 }).charge, p({ repelStrength: 25 }).charge], [-30 * 0.44, -240]);
+  assert.deepStrictEqual([p({ linkStrength: -1 }).linkStrength, p({ linkStrength: 2 }).linkStrength], [0, 1]);
+  assert.strictEqual(p({ linkDistance: 0 }).linkDistance, 24 * Math.pow(30 / 250, 1.5));
+  for (const bad of [NaN, Infinity, -Infinity, null, true, [2], '250', undefined]) {
+    assert.deepStrictEqual(p({ centerStrength: bad, repelStrength: bad, linkStrength: bad, linkDistance: bad }), before, `${String(bad)}: the defaults`);
+  }
+}
+{
+  // Obsidian's defaults lay out bit for bit as without force settings
+  const { paths, links } = clustered(5);
+  assert.deepStrictEqual(Array.from(run(paths, links, layoutParams3d(obsidianDefaults)).positions), Array.from(run(paths, links).positions));
+}
+{
+  // a restart at alpha 0.3 (what Obsidian does on a change) starts from the given positions and cools in ~248 ticks
+  const { paths, links } = clustered(5);
+  const settled = run(paths, links).positions;
+  const restart = forceLayout3d(paths.length, links, settled.slice(), { alpha: 0.3 });
+  assert.strictEqual(restart.alpha, 0.3);
+  while (!restart.done) restart.tick();
+  assert(restart.ticks >= 246 && restart.ticks <= 250, `${restart.ticks} ticks`);
+  const n = paths.length;
+  let moved = 0;
+  for (let i = 0; i < n; i++) moved += Math.hypot(...[0, 1, 2].map((k) => restart.positions[i * 3 + k] - settled[i * 3 + k]));
+  const radius = Math.max(...Array.from({ length: n }, (_, i) => Math.hypot(settled[i * 3], settled[i * 3 + 1], settled[i * 3 + 2])));
+  assert(moved / n < radius * 0.1, `same forces: the settled layout barely moves (${(moved / n).toFixed(1)} of ${radius.toFixed(0)})`);
+}
+{
+  // each slider changes the layout the way it changes Obsidian's 2D graph (settled default, restarted at alpha 0.3)
+  const { paths, links } = clustered(11);
+  const base = run(paths, links).positions;
+  const n = paths.length;
+  const m = links.length / 2;
+  const at = (o) => {
+    const L = forceLayout3d(n, links, base.slice(), Object.assign(layoutParams3d(Object.assign({}, obsidianDefaults, o)), { alpha: 0.3 }));
+    while (!L.done) L.tick();
+    const pos = L.positions;
+    let link = 0;
+    for (let e = 0; e < m; e++) {
+      const a = links[e * 2] * 3, b = links[e * 2 + 1] * 3;
+      link += Math.hypot(pos[a] - pos[b], pos[a + 1] - pos[b + 1], pos[a + 2] - pos[b + 2]);
+    }
+    const d = Float32Array.from({ length: n }, (_, i) => Math.hypot(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2])).sort();
+    return { link: link / m, radius: d[Math.floor(n * 0.92)] };
+  };
+  const series = (key, values, field) => values.map((v) => at({ [key]: v })[field]);
+  const rising = (a) => a.every((x, i) => !i || x > a[i - 1]);
+  const falling = (a) => a.every((x, i) => !i || x < a[i - 1]);
+  assert(rising(series('repelStrength', [5, 10, 20], 'radius')), 'more repel force: wider');
+  assert(falling(series('centerStrength', [0, obsidianDefaultCentre, 1], 'radius')), 'more centre force: tighter');
+  assert(falling(series('linkStrength', [0, 0.5, 1], 'link')), 'more link force: shorter links');
+  assert(rising(series('linkDistance', [30, 250, 500], 'link')), 'longer link distance: longer links');
+  // weak repel: like Obsidian's 2D graph (held by its collision force) the layout stops shrinking instead of
+  // collapsing into an overlapping lump, even with the strongest centre force
+  const def = at({});
+  const low = at({ repelStrength: 0 });
+  const lump = at({ repelStrength: 0, centerStrength: 1 });
+  // (without the floor: 0.31 and 0.04 of the default radius; with it 0.71 and 0.24)
+  assert(low.radius > def.radius * 0.5 && lump.radius > def.radius * 0.15, `no collapse (${low.radius.toFixed(0)}, ${lump.radius.toFixed(0)} of ${def.radius.toFixed(0)})`);
+}
+{
+  // in the view: a forces change restarts the layout from where the nodes are, keeps the camera, ends the old worker
+  // (fast slider moves leave one worker) and ignores positions an ended worker sent before it stopped
+  const workers = [];
+  global.Worker = class {
+    constructor() { this.sent = []; this.terminated = false; workers.push(this); }
+    // like a real worker: transferred arrays are moved, the sender's copies are left empty
+    postMessage(msg, transfer) { this.sent.push(structuredClone(msg, { transfer })); }
+    terminate() { this.terminated = true; }
+  };
+  const { view } = stubView();
+  view.gl = { isContextLost: () => false, ARRAY_BUFFER: 1, bindBuffer() {}, bufferSubData() {}, bindTexture() {}, texSubImage2D() {} };
+  view.buf = { col: {}, size: {} };
+  view.tex = { col: {} };
+  view.data = view.glData = { n: 2, deg: Uint32Array.from([1, 1]), links: Uint32Array.from([0, 1]) };
+  view.files = [{ path: 'a.md' }, { path: 'b.md' }];
+  view.pos = Float32Array.from([1, 2, 3, 4, 5, 6]);
+  let options = {};
+  view.readStyle = async () => ({ groups: [], fill: [1, 1, 1], nodeSize: 1, lineSize: 1, forces: layoutParams3d(options) });
+  const live = () => workers.filter((w) => !w.terminated);
+  view.readStyle().then((st) => {
+    view.style = st;
+    view.startLayout();
+    assert.strictEqual(workers[0].sent[0].params.alpha, 1, 'a new tab lays out from scratch');
+    assert.deepStrictEqual([view.pos.length, view.data.links.length], [6, 2], 'the view keeps its own positions and links');
+    view.raf = 0;
+    workers[0].onmessage({ data: { pos: Float32Array.from([1, 0, 0, -1, 0, 0]), alpha: 0.8, done: false } });
+    assert(view.posDirty && view.raf, 'a layout step is drawn');
+    options = { repelStrength: 15 };
+    view.userMoved = false;
+    view.raf = 0;
+    return view.applyStyle();
+  }).then(() => {
+    assert.strictEqual(workers.length, 2);
+    assert(workers[0].terminated, 'the running layout is ended');
+    const msg = workers[1].sent[0];
+    assert.strictEqual(msg.params.alpha, 0.8, 'changed during the first layout: keeps its heat');
+    assert.strictEqual(msg.params.charge, layoutParams3d(options).charge);
+    assert.deepStrictEqual(Array.from(msg.pos), [1, 0, 0, -1, 0, 0], 'from the current positions');
+    assert.strictEqual(view.userMoved, false, 'a camera the user never moved keeps fitting the layout');
+    assert(view.raf, 'and a frame is requested');
+    assert.deepStrictEqual([view.pos.length, view.data.links.length], [6, 2], 'still its own positions and links after a restart');
+    workers[1].onmessage({ data: { pos: Float32Array.from([2, 0, 0, -2, 0, 0]), alpha: 0.0009, done: true } });
+    assert(view.layoutDone && workers[1].terminated, 'settled: no worker left');
+    view.cam.theta = 1.25;
+    view.cam.dist = 333;
+    view.userMoved = true;
+    return view.applyStyle();
+  }).then(() => {
+    assert.strictEqual(workers.length, 2, 'same forces (a colour or size change): no new layout');
+    options = { repelStrength: 16 };
+    return view.applyStyle();
+  }).then(() => {
+    assert.strictEqual(workers[2].sent[0].params.alpha, 0.3, 'settled graph: restarts at 0.3 like Obsidian');
+    assert.deepStrictEqual(Array.from(workers[2].sent[0].pos), [2, 0, 0, -2, 0, 0]);
+    assert.deepStrictEqual([view.cam.theta, view.cam.dist, view.userMoved], [1.25, 333, true], 'a camera the user moved stays where it is');
+    options = { repelStrength: 17 };
+    return view.applyStyle().then(() => { options = { repelStrength: 18 }; return view.applyStyle(); });
+  }).then(() => {
+    assert.strictEqual(live().length, 1, 'fast slider moves: one live worker');
+    assert.strictEqual(live()[0], workers[4]);
+    assert.strictEqual(workers[4].sent[0].params.charge, layoutParams3d({ repelStrength: 18 }).charge, 'the latest value wins');
+    const pos = view.pos;
+    workers[3].onmessage({ data: { pos: Float32Array.from([9, 9, 9, 9, 9, 9]), alpha: 0.2, done: false } });
+    assert.strictEqual(view.pos, pos, 'a late message from an ended worker is ignored');
+    // each force on its own restarts the layout (one more setting changed at a time, the others kept)
+    let chain = Promise.resolve();
+    for (const change of [{ centerStrength: 0.8 }, { linkStrength: 0.5 }, { linkDistance: 400 }]) {
+      chain = chain.then(() => {
+        const before = workers.length;
+        options = Object.assign({}, options, change);
+        return view.applyStyle().then(() => assert.strictEqual(workers.length, before + 1, `${Object.keys(change)[0]} alone restarts`));
+      });
+    }
+    return chain;
+  }).then(() => {
+    // closing the tab ends a running layout
+    const running = live()[0];
+    view.gl = null;
+    Object.assign(view.contentEl, { empty() {} });
+    return view.onClose().then(() => assert(running.terminated, 'closing ends the layout'));
+  }).then(() => {
+    delete global.Worker;
+  });
+}
+
 // ---------------------------------------------------------------- the worker source runs on its own
 (async () => {
   const messages = [];
@@ -747,6 +1001,17 @@ function run(paths, links, params) {
   assert(messages.length > 1, 'positions arrive in steps, so the view can draw the layout settling');
   assert.strictEqual(last.pos.length, paths.length * 3);
   assert.deepStrictEqual(Array.from(last.pos), Array.from(run(paths, links).positions), 'the worker computes the same layout');
+  // with forces and a restart heat from the view: the worker lays out exactly what forceLayout3d does with them
+  const params = Object.assign(layoutParams3d({ repelStrength: 15, centerStrength: 0.8, linkStrength: 0.5, linkDistance: 400 }), { alpha: 0.3 });
+  messages.length = 0;
+  self.onmessage({ data: { n: paths.length, links, pos: initialPositions3d(paths), params } });
+  for (let i = 0; i < 400 && !(messages.length && messages[messages.length - 1].done); i++) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  const withForces = messages[messages.length - 1];
+  assert(withForces && withForces.done);
+  assert.deepStrictEqual(Array.from(withForces.pos), Array.from(run(paths, links, params).positions), 'the worker uses the forces and the heat');
+  assert.notDeepStrictEqual(Array.from(withForces.pos), Array.from(last.pos), 'and they change the layout');
 })().catch((e) => {
   console.error(e);
   process.exit(1);

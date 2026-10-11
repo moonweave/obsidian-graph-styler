@@ -1223,25 +1223,46 @@ function lineMode3d(lineSize) {
   return lineSize > 1 ? { thick: true, alpha: 1, width: lineSize } : { thick: false, alpha: lineSize, width: 1 };
 }
 
+// Obsidian 그래프의 장력 기본값을 힘으로 쓴 것(1.11.7 app.js). graph.json에는 슬라이더 위치가 저장되고, Obsidian은
+// 중심·링크 장력 위치(0–1)를 forceCurve3d로, 반발력 위치(0–20)를 세제곱으로 힘으로 바꾸며, 링크 거리(30–500)는 그대로 쓴다.
+const GRAPH_FORCE_DEFAULTS_3D = { centerStrength: 0.1, repelStrength: 1000, linkStrength: 1, linkDistance: 250 };
+// 3D 배치가 위 기본값에서 쓰는 값. 3D는 각 힘을 기본값에 대한 배율로 따라가므로, 기본값이면 지금까지와 똑같이 배치한다.
+const LAYOUT_DEFAULTS_3D = { gravity: 0.06, charge: -30, linkStrength: 1, linkDistance: 24 };
+
+// Obsidian의 장력 슬라이더 곡선: 위치 0 → 0, 1 → 1, 그 사이는 로그 눈금(기본 위치 0.5187 → 0.1).
+function forceCurve3d(slider) {
+  return (Math.pow(0.01, 1 - slider) - 0.01) / 0.99;
+}
+
+// 그래프 설정의 장력 → 3D 배치 값.
+function layoutParams3d(options) {
+  const o = options || {};
+  const ratio = (key, lo, hi, toForce) => {
+    const v = o[key];
+    if (typeof v !== 'number' || !Number.isFinite(v)) return 1;
+    const r = toForce(Math.max(lo, Math.min(hi, v))) / GRAPH_FORCE_DEFAULTS_3D[key];
+    // 저장된 기본 위치(0.5187…)를 곡선에 넣으면 끝자리만 어긋난다. 그 차이로 배치가 달라지지 않게 정확히 1로 둔다.
+    return Math.abs(r - 1) < 1e-9 ? 1 : r;
+  };
+  const D = LAYOUT_DEFAULTS_3D;
+  return {
+    gravity: D.gravity * ratio('centerStrength', 0, 1, forceCurve3d),
+    // 반발력은 기본값의 0.44배(슬라이더 약 7.6) 밑으로 내리지 않는다. 2D는 반발력이 약해져도 collide 힘(노드 반지름 60)이
+    // 노드 사이를 벌려 두어 그 근처에서 더 오그라들지 않는데, 3D 배치에는 그 힘이 없어 끝까지 오그라들어 노드가 한 덩어리로
+    // 겹쳤다. 0.44는 Obsidian의 실제 2D 시뮬레이션과 평균 링크 길이를 맞춰 고른 값이다(1보다 약한 반발력을 1로 올리는
+    // Obsidian의 처리도 이 아래라 따로 하지 않는다).
+    charge: D.charge * Math.max(0.44, ratio('repelStrength', 0, 20, (v) => v * v * v)),
+    linkStrength: D.linkStrength * ratio('linkStrength', 0, 1, forceCurve3d),
+    // 링크 길이는 2D·3D 모두 반발력이 정하는 몫이 커서(3D는 쉬는 길이의 약 4배, 2D는 약 2배까지 늘어난다), 같은 배율로는
+    // 3D가 덜 반응한다. 1.5제곱이면 링크 거리 30–500에서 평균 링크 길이의 변화가 2D와 몇 % 안에서 맞는다.
+    linkDistance: D.linkDistance * Math.pow(ratio('linkDistance', 30, 500, (v) => v), 1.5),
+  };
+}
+
 // 노트 경로 목록과 metadataCache.resolvedLinks → 링크 쌍과 이웃 목록(CSR).
 // 자기 링크, 양방향 중복, 노트가 아닌 대상(첨부파일·없는 파일)은 뺀다.
-function graphData3d(paths, resolvedLinks) {
+function graphDataFromPairs3d(paths, pairs) {
   const n = paths.length;
-  const index = new Map(paths.map((p, i) => [p, i]));
-  const seen = new Set();
-  const pairs = [];
-  for (const src of Object.keys(resolvedLinks || {})) {
-    const a = index.get(src);
-    if (a === undefined) continue;
-    for (const dst of Object.keys(resolvedLinks[src] || {})) {
-      const b = index.get(dst);
-      if (b === undefined || b === a) continue;
-      const key = a < b ? a * n + b : b * n + a;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      pairs.push(a, b);
-    }
-  }
   const links = Uint32Array.from(pairs);
   const deg = new Uint32Array(n);
   for (const i of links) deg[i]++;
@@ -1256,6 +1277,58 @@ function graphData3d(paths, resolvedLinks) {
     adj[next[b]] = a; adjLink[next[b]++] = e;
   }
   return { n, links, deg, start, adj, adjLink };
+}
+
+function graphData3d(paths, resolvedLinks) {
+  const index = new Map(paths.map((p, i) => [p, i]));
+  const seen = new Set();
+  const pairs = [];
+  for (const src of Object.keys(resolvedLinks || {})) {
+    const a = index.get(src);
+    if (a === undefined) continue;
+    for (const dst of Object.keys(resolvedLinks[src] || {})) {
+      const b = index.get(dst);
+      if (b === undefined || b === a) continue;
+      const key = a < b ? a * paths.length + b : b * paths.length + a;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push(a, b);
+    }
+  }
+  return graphDataFromPairs3d(paths, pairs);
+}
+
+// The global graph renderer has already applied Obsidian's search, tag, attachment, unresolved-link and orphan filters.
+// Reuse that visible graph rather than reimplementing its private search-query language.
+function graphDataFromRenderer3d(nodes, renderedLinks) {
+  const paths = [];
+  const index = new Map();
+  for (const node of nodes || []) {
+    if (!node || typeof node.id !== 'string' || index.has(node.id)) continue;
+    index.set(node.id, paths.length);
+    paths.push(node.id);
+  }
+  const seen = new Set();
+  const pairs = [];
+  const idOf = (node) => typeof node === 'string' ? node : node && node.id;
+  for (const link of renderedLinks || []) {
+    const a = index.get(idOf(link && link.source));
+    const b = index.get(idOf(link && link.target));
+    if (a === undefined || b === undefined || a === b) continue;
+    const key = a < b ? a * paths.length + b : b * paths.length + a;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pairs.push(a, b);
+  }
+  return graphDataFromPairs3d(paths, pairs);
+}
+
+function graphRenderer3d(workspace) {
+  const leaf = workspace.getLeavesOfType('graph').find((item) => {
+    const renderer = item.view && item.view.renderer;
+    return renderer && Array.isArray(renderer.nodes) && Array.isArray(renderer.links);
+  });
+  return leaf ? leaf.view.renderer : null;
 }
 
 // Graph Styler가 만드는 색 그룹 쿼리(path:"폴더", tag:#태그)만 해석한다. 그 밖의 검색 문법은 어느 노트와도
@@ -1306,7 +1379,8 @@ function initialPositions3d(paths) {
 // 이 함수의 소스를 그대로 Worker에 넣으므로 바깥 이름을 쓰면 안 된다.
 function forceLayout3d(n, links, pos, params) {
   const P = Object.assign({
-    charge: -30, theta: 0.9, linkDistance: 24, gravity: 0.06, velocityKeep: 0.6, alphaMin: 0.001, ticks: 300,
+    charge: -30, theta: 0.9, linkDistance: 24, gravity: 0.06, linkStrength: 1, velocityKeep: 0.6, alphaMin: 0.001, ticks: 300,
+    alpha: 1,
   }, params);
   const EMPTY = -1;
   const INTERNAL = -2;
@@ -1320,7 +1394,7 @@ function forceLayout3d(n, links, pos, params) {
   for (let e = 0; e < m; e++) {
     const a = deg[links[e * 2]], b = deg[links[e * 2 + 1]];
     bias[e] = a / (a + b);
-    strength[e] = 1 / Math.min(a, b);
+    strength[e] = P.linkStrength / Math.min(a, b);
   }
   // 팔진 트리는 평평한 배열에 둔다. 칸이 모자라면 두 배로 늘린다.
   let cap = 0;
@@ -1431,7 +1505,7 @@ function forceLayout3d(n, links, pos, params) {
     }
   };
   alloc(n * 4 + 64);
-  let alpha = 1;
+  let alpha = P.alpha;
   let ticks = 0;
   return {
     positions: pos,
@@ -1802,10 +1876,29 @@ class Graph3DView extends ItemView {
       workspace.onLayoutReady(() => { if (!this.disposed) this.build(); });
       return;
     }
-    const files = vault.getMarkdownFiles();
-    const paths = files.map((f) => f.path);
-    this.files = files;
-    this.data = graphData3d(paths, metadataCache.resolvedLinks);
+    const renderer = graphRenderer3d(workspace);
+    let paths;
+    if (renderer) {
+      const renderedNodes = renderer.nodes.filter((node) => node && typeof node.id === 'string');
+      this.files = renderedNodes.map((node) => {
+        const path = node.id;
+        const file = vault.getAbstractFileByPath(path) || null;
+        return {
+          path,
+          basename: (typeof node.text === 'string' && node.text) || (file && file.basename)
+            || path.split('/').pop().replace(/\.[^.]+$/, ''),
+          type: node.type || 'file',
+          file,
+        };
+      });
+      this.data = graphDataFromRenderer3d(renderedNodes, renderer.links);
+      paths = this.files.map((file) => file.path);
+    } else {
+      const files = vault.getMarkdownFiles();
+      paths = files.map((f) => f.path);
+      this.files = files.map((file) => ({ path: file.path, basename: file.basename, type: 'file', file }));
+      this.data = graphData3d(paths, metadataCache.resolvedLinks);
+    }
     // 링크 색인이 덜 된 채 열렸으면, 모든 노트가 색인됐을 때 한 번만 다시 만든다. 'resolved'는 처음 색인하는 동안에도
     // 여러 번 온다(노트 38개 vault를 처음 열 때 37번). 첫 번째에 다시 만들면 링크가 거의 없는 그래프가 그대로 남았다.
     // 색인이 다 차면 resolvedLinks에는 노트마다 항목이 있다(제외 폴더·빈 노트 포함, 실측). 그 뒤의 노트 변경은
@@ -1878,7 +1971,10 @@ class Graph3DView extends ItemView {
       light: luminance(bg[2]) > 0.5,
       nodeSize: displayRatio3d(options, 'nodeSizeMultiplier'),
       lineSize: displayRatio3d(options, 'lineSizeMultiplier'),
+      forces: layoutParams3d(options),
       fill: applyCssFilter(probe('graph-view color-fill', 'color'), filter),
+      tagFill: applyCssFilter(probe('graph-view color-fill-tag', 'color'), filter),
+      unresolvedFill: applyCssFilter(probe('graph-view color-fill-unresolved', 'color'), filter),
       line: applyCssFilter(probe('graph-view color-line', 'color'), filter),
       groups,
     };
@@ -1887,15 +1983,18 @@ class Graph3DView extends ItemView {
   // 노드 색과 크기. 크기는 2D 그래프처럼 연결 수의 제곱근을 따르고, 그래프 설정의 노드 크기 배율을 곱한다.
   nodeAttributes() {
     const { n, deg } = this.data;
-    const { groups, fill } = this.style;
+    const { groups, fill, tagFill, unresolvedFill } = this.style;
     const tagged = groups.some((g) => g.tags);
     const col = new Float32Array(n * 3);
     const size = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       const file = this.files[i];
-      const tags = tagged ? (getAllTags(this.app.metadataCache.getFileCache(file) || {}) || []) : [];
+      const tags = file.type === 'tag'
+        ? [file.path.startsWith('#') ? file.path : `#${file.path}`]
+        : tagged && file.file ? (getAllTags(this.app.metadataCache.getFileCache(file.file) || {}) || []) : [];
       const g = groups.find((group) => group.test(file.path, tags));
-      col.set(g ? g.rgb : fill, i * 3);
+      const base = file.type === 'tag' ? tagFill : file.type === 'unresolved' ? unresolvedFill : fill;
+      col.set(g ? g.rgb : base, i * 3);
       size[i] = (2.2 + Math.sqrt(deg[i]) * 1.1) * this.style.nodeSize;
     }
     return { col, size };
@@ -1919,6 +2018,11 @@ class Graph3DView extends ItemView {
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, size);
     this.size = size;
     this.uploadNodeTexture(this.tex.col, col);
+    // 장력이 바뀌면 Obsidian처럼 지금 자리에서 다시 푼다(alpha 0.3). 카메라는 건드리지 않는다: 사용자가 옮긴 카메라는
+    // 그 자리에 있고, 옮기지 않았다면 처음 배치 때처럼 거리만 그래프 크기를 따라간다.
+    if (JSON.stringify(this.style.forces) !== JSON.stringify(this.layoutForces)) {
+      this.startLayout(Math.max(0.3, this.layoutDone ? 0 : this.layoutAlpha));
+    }
     this.kick();
   }
 
@@ -1941,15 +2045,21 @@ class Graph3DView extends ItemView {
     if (rest) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, rows, rest, 1, gl.RGB, gl.FLOAT, values, rows * TEX_W_3D * 3);
   }
 
-  startLayout() {
+  // 지금 위치(this.pos)에서 배치를 시작한다. 돌던 배치는 끝내므로, 슬라이더를 빨리 끌어도 워커는 늘 하나다.
+  startLayout(alpha = 1) {
     this.stopLayout();
     this.layoutDone = false;
+    this.layoutAlpha = alpha;
+    this.layoutForces = this.style.forces;
     const url = URL.createObjectURL(new Blob([LAYOUT_WORKER_3D], { type: 'text/javascript' }));
-    this.worker = new Worker(url);
+    const worker = this.worker = new Worker(url);
     URL.revokeObjectURL(url);
-    this.worker.onmessage = (event) => {
+    worker.onmessage = (event) => {
+      // 끝낸 워커가 그 전에 보낸 위치가 늦게 도착해도 새 배치를 덮지 않게 한다.
+      if (worker !== this.worker) return;
       this.pos = event.data.pos;
       this.posDirty = true;
+      this.layoutAlpha = event.data.alpha;
       if (event.data.done) {
         this.layoutDone = true;
         this.stopLayout();
@@ -1958,7 +2068,8 @@ class Graph3DView extends ItemView {
     };
     const pos = this.pos.slice();
     const links = this.data.links.slice();
-    this.worker.postMessage({ n: this.data.n, links, pos }, [pos.buffer, links.buffer]);
+    const params = Object.assign({}, this.style.forces, { alpha });
+    worker.postMessage({ n: this.data.n, links, pos, params }, [pos.buffer, links.buffer]);
   }
 
   stopLayout() {
@@ -2081,6 +2192,8 @@ class Graph3DView extends ItemView {
         d.x = e.clientX; d.y = e.clientY;
         // 누른 점에서 가장 멀리 간 거리(직선)로 클릭과 드래그를 가른다. 갔다가 돌아온 드래그는 클릭이 아니다.
         d.far = Math.max(d.far, Math.hypot(e.clientX - d.sx, e.clientY - d.sy));
+        // 클릭(노트 열기)은 카메라를 옮긴 것이 아니다. 클릭 문턱을 넘어 끌었을 때부터 옮긴 것으로 친다.
+        if (d.far >= 5) this.userMoved = true;
         if (d.pan) this.panBy(dx, dy);
         else {
           this.cam.theta -= dx * 0.006;
@@ -2123,6 +2236,7 @@ class Graph3DView extends ItemView {
       const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
       const dist = this.cam.dist * Math.exp(dy * (e.ctrlKey ? 0.01 : 0.0015));
       this.cam.dist = Math.max(this.fit.r * 0.05, Math.min(this.fit.r * 12, dist));
+      this.userMoved = true;
       this.touch();
       this.kick(true);
     }, { passive: false });
@@ -2131,7 +2245,6 @@ class Graph3DView extends ItemView {
 
   // 입력이 있으면 회전을 멈추고, IDLE_3D_MS 동안 조용하면 다시 천천히 돌린다.
   touch() {
-    this.userMoved = true;
     this.lastInput = performance.now();
     const win = this.contentEl.win;
     win.clearTimeout(this.resumeTimer);
@@ -2164,10 +2277,20 @@ class Graph3DView extends ItemView {
     const file = this.files[i];
     const ws = this.app.workspace;
     const mod = Keymap.isModEvent(evt);
+    if (file.type === 'tag') {
+      const search = this.app.internalPlugins && this.app.internalPlugins.getEnabledPluginById
+        && this.app.internalPlugins.getEnabledPluginById('global-search');
+      if (search) search.openGlobalSearch(`tag:${file.path}`);
+      return;
+    }
+    if (!file.file || file.type === 'attachment') {
+      ws.openLinkText(file.path, '', mod);
+      return;
+    }
     // 3D 탭은 다시 배치하는 데 몇 초가 들어서, 2D 그래프와 달리 자기 탭을 노트로 바꾸지 않는다.
     const leaf = mod ? ws.getLeaf(mod)
       : ws.getLeavesOfType('markdown').find((l) => l.getRoot() === ws.rootSplit) || ws.getLeaf('tab');
-    leaf.openFile(file);
+    leaf.openFile(file.file);
   }
 
   setHover(i) {
@@ -2183,7 +2306,7 @@ class Graph3DView extends ItemView {
         const e = adjLink[p];
         hiLinks.push(links[e * 2], links[e * 2 + 1]);
       }
-      this.label.setText(this.files[i].basename);
+      this.label.setText(this.files[i].basename || this.files[i].path);
     }
     this.label.toggleClass('is-shown', i >= 0);
     const gl = this.gl;
@@ -2310,10 +2433,9 @@ class Graph3DView extends ItemView {
       gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.pos);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.pos);
       this.posTexStale = true;
-      if (!this.userMoved) {
-        this.fit = this.measureFit();
-        this.cam.dist = this.shownDist = this.fitDistance();
-      }
+      // 카메라를 사용자가 옮겼거나 장력이 바뀐 뒤에도, 안개와 확대 한계는 그래프 크기를 따라간다.
+      this.fit = this.measureFit();
+      if (!this.userMoved) this.cam.dist = this.shownDist = this.fitDistance();
     }
     const cam = this.cam;
     const dist = this.shownDist;
@@ -2404,7 +2526,9 @@ class Graph3DView extends ItemView {
       gl.uniform1f(P.u.uHover, hovering);
       gl.uniform2fv(P.u.uFog, fog);
       if (name === 'halo') {
-        gl.uniform1f(P.u.uScale, light ? 3 : 4.8);
+        // 3D perspective already changes apparent size with depth. Keep the glow close to the node core so hubs
+        // do not read as several times larger than their 2D counterparts.
+        gl.uniform1f(P.u.uScale, light ? 2.4 : 3.0);
         gl.uniform1f(P.u.uGain, light ? 0.18 : 0.7);
         gl.uniform1f(P.u.uLight, light);
         if (light) gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -3470,6 +3594,8 @@ module.exports.encodeShareCode = encodeShareCode;
 module.exports.decodeShareCode = decodeShareCode;
 module.exports.presetFromRaw = presetFromRaw;
 module.exports.graphData3d = graphData3d;
+module.exports.graphDataFromRenderer3d = graphDataFromRenderer3d;
+module.exports.graphRenderer3d = graphRenderer3d;
 module.exports.colorGroupTest3d = colorGroupTest3d;
 module.exports.initialPositions3d = initialPositions3d;
 module.exports.forceLayout3d = forceLayout3d;
@@ -3478,4 +3604,6 @@ module.exports.applyCssFilter = applyCssFilter;
 module.exports.Graph3DView = Graph3DView;
 module.exports.parseCssColor = parseCssColor;
 module.exports.displayRatio3d = displayRatio3d;
+module.exports.forceCurve3d = forceCurve3d;
+module.exports.layoutParams3d = layoutParams3d;
 module.exports.lineMode3d = lineMode3d;
