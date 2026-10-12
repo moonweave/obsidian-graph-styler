@@ -26,7 +26,7 @@ class Plugin {
   registerEvent() {}
 }
 
-class ItemView {}
+class ItemView { constructor() { this.contentEl = { win: { performance } }; } }
 class PluginSettingTab {
   constructor(app, plugin) {
     this.app = app;
@@ -1474,8 +1474,11 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.strictEqual(off.saved[off.saved.length - 1].experimental3d, true);
     assert.deepStrictEqual(notices, [], 'no "use the command palette" notice from the panel: its Open button is right there');
     g = off.group();
-    const [onBox, rotateBox, speed] = inputs(g);
-    assert.deepStrictEqual([onBox.checked, rotateBox.type, rotateBox.checked, speed.type], [true, 'checkbox', true, 'range']);
+    const [onBox, center, rotateBox, speed] = inputs(g);
+    assert.deepStrictEqual([onBox.checked, center.type, center.disabled, rotateBox.type, rotateBox.checked, speed.type],
+      [true, 'search', true, 'checkbox', true, 'range']);
+    const selects = g.walk().filter((el) => el.tag === 'select');
+    assert.deepStrictEqual(selects.map((el) => el.value), ['original', 'force'], 'Look and Layout default to the current appearance');
     assert.deepStrictEqual([speed.min, speed.max, speed.step, speed.value, speed.disabled], ['0.02', '0.6', '0.01', '0.12', false]);
     let opened = 0;
     off.plugin.open3d = () => { opened += 1; };
@@ -1504,8 +1507,9 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
 
     // Round trip: a new plugin instance reads the saved values back into the same controls.
     const back = await render3d(GraphStyler, off.saved[off.saved.length - 1]);
-    const [onAgain, rotateAgain, speedAgain] = inputs(back.group());
+    const [onAgain, centerAgain, rotateAgain, speedAgain] = inputs(back.group());
     assert.deepStrictEqual([onAgain.checked, rotateAgain.checked, speedAgain.value, speedAgain.disabled], [true, false, '0.3', true]);
+    assert.strictEqual(centerAgain.disabled, true);
     // Damaged values fall back to the defaults.
     const damaged = await render3d(GraphStyler, { experimental3d: true, rotate3d: 'no', rotate3dSpeed: 'fast' });
     assert.deepStrictEqual([damaged.plugin.rotate3d, damaged.plugin.rotate3dSpeed], [true, 0.12]);
@@ -1535,12 +1539,12 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.deepStrictEqual(inputs(back.group()).map((el) => [el.type, el.checked]), [['checkbox', false]]);
     await toggleRow.toggle.change(true);
     assert.deepStrictEqual(notices, ['Open it from the command palette: “Graph Styler: Open 3D graph”']);
-    assert.deepStrictEqual(inputs(back.group()).map((el) => el.type), ['checkbox', 'checkbox', 'range']);
+    assert.deepStrictEqual(inputs(back.group()).map((el) => el.type), ['checkbox', 'search', 'checkbox', 'range']);
 
     // Korean labels.
     const ko = await render3d(loadGraphStylerIn('ko'), { experimental3d: true });
     const koTexts = ko.group().walk().map((el) => el.text).filter(Boolean);
-    for (const text of ['🧊 3D (실험)', '3D 그래프 보기', '3D 그래프 열기', '자동 회전', '회전 속도']) assert.ok(koTexts.includes(text), `missing ko text: ${text}`);
+    for (const text of ['🧊 3D (실험)', '3D 그래프 보기', '3D 그래프 열기', '화면 분위기', '노드 배치', '궤도 중심 노트', '자동 회전', '회전 속도']) assert.ok(koTexts.includes(text), `missing ko text: ${text}`);
   }
 
   // Switching 3D on never closes an open (restored) 3D tab, from the panel (no notice) or from the Settings tab
@@ -1567,6 +1571,31 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     drawing.onOpen = async () => { reopened.push('drawing'); };
     await t.plugin.setExperimental3d(true, false);
     assert.deepStrictEqual([reopened, t.leaves3d.length, t.counts.detached], [['restored'], 2, 1]);
+  }
+
+  // Graph 3D controls merge and serialize vault settings, then synchronize every open 3D view.
+  {
+    const settings = { custom: [{ id: 'keep-me' }], graph3dLayout: 'force', unrelated: true };
+    const saves = [];
+    const updates = [];
+    const plugin = {
+      settings,
+      views3d: () => [{ applyGraph3dOptions: (options) => updates.push(options) }, { applyGraph3dOptions: (options) => updates.push(options) }],
+      saveData: async (value) => { saves.push(JSON.parse(JSON.stringify(value))); },
+    };
+    const set = GraphStyler.prototype.setGraph3dOptions;
+    await Promise.all([
+      set.call(plugin, { look: 'deep-space' }),
+      set.call(plugin, { layout: 'orbital' }),
+      set.call(plugin, { centerPath: 'Notes/A.md' }),
+    ]);
+    assert.deepStrictEqual([settings.graph3dLook, settings.graph3dLayout, settings.orbitalCenterPath],
+      ['deep-space', 'orbital', 'Notes/A.md'], 'overlapping selector changes merge instead of overwriting one another');
+    assert.deepStrictEqual([settings.unrelated, settings.custom[0].id], [true, 'keep-me'], 'other vault settings are preserved');
+    assert.strictEqual(updates.length, 6, 'each update reaches every open 3D view');
+    assert.deepStrictEqual([updates[5].look, updates[5].layout, updates[5].centerPath], ['deep-space', 'orbital', 'Notes/A.md']);
+    await set.call(plugin, { centerPath: '' });
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(settings, 'orbitalCenterPath'), false, 'clearing center removes the optional setting');
   }
 
   // Open (button or command) keeps one 3D tab: a double click opens one, a later click brings it to the front.
