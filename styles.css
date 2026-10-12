@@ -290,6 +290,12 @@
   flex: 1;
 }
 
+.graph-styler-panel .gs-row select,
+.graph-styler-panel .gs-3d-center {
+  flex: 1;
+  min-width: 0;
+}
+
 .graph-styler-panel .gs-export-check {
   display: inline-flex;
   align-items: center;

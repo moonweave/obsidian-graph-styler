@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graph Styler — 공간 성단 시안</title>
+<link rel="stylesheet" href="style.css">
+<body>
+  <main>
+    <canvas id="space" aria-label="드래그로 회전하는 3D 샘플 노트 그래프"></canvas>
+    <header><div class="brand"><span class="mark">✧</span> Graph Styler <span class="badge">인터랙티브 시안</span></div><button id="reset">시점 초기화 ↺</button></header>
+    <section class="intro"><h1>노트 사이의 공간.</h1><p>평면 궤도 대신, 서로 다른 깊이에 놓인 다섯 무리.</p></section>
+    <div id="labels" aria-hidden="true"></div>
+    <aside id="detail" hidden><span id="category"></span><h2 id="note-title"></h2><p id="note-detail"></p><button id="unfocus">전체로 돌아가기</button></aside>
+    <div class="legend"><span><i style="--c:#a6c9da"></i>연구</span><span><i style="--c:#c2b5d4"></i>제품</span><span><i style="--c:#c6c2a7"></i>아이디어</span><span><i style="--c:#96bcb0"></i>운영</span><span><i style="--c:#b5bfd1"></i>기록</span></div>
+    <footer><div class="instructions">드래그 회전 <span>/</span> 휠 확대 <span>/</span> 노드 클릭해 진입<br><small>샘플 노트 240개 · 원본 Vault와 연결되지 않은 독립 시안</small></div><div class="options"><label><input id="rotate" type="checkbox"> 천천히 회전</label><button id="tour">공간 이동 재생</button></div></footer>
+    <nav class="views" aria-label="비교할 카메라 시점"><span>성단형</span><button data-view="overview" aria-pressed="true">전체</button><button data-view="side" aria-pressed="false">측면</button><button data-view="inside" aria-pressed="false">무리 사이</button></nav>
+    <div id="hint" role="status">가까운 노드와 먼 노드가 다르게 움직이는지 확인해 보세요.</div>
+    <div id="failure" hidden>이 브라우저에서 WebGL 2를 시작하지 못했습니다.</div>
+  </main>
+  <script type="module" src="scene.js"></script>
+</body>
+</html>

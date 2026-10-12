@@ -106,6 +106,15 @@ const STRINGS = {
     panel3dNote: 'A new tab with your notes and links in 3D, in the colours of the current preset.',
     rotate3d: 'Auto-rotate',
     rotate3dSpeed: 'Rotation speed',
+    look3d: 'Look',
+    layout3d: 'Layout',
+    center3d: 'Orbital center',
+    center3dAuto: 'Automatic (highest-degree note)',
+    look3dOriginal: 'Original',
+    look3dDeepSpace: 'Deep Space',
+    layout3dForce: 'Force graph',
+    layout3dOrbital: 'Orbital',
+    layout3dGlobe: 'Globe',
     f: {
       colors: 'Group colors', bg: 'Background', glow: 'Glow',
       repel: 'Repel', dist: 'Link distance', center: 'Center', linkS: 'Link force',
@@ -192,6 +201,15 @@ const STRINGS = {
     panel3dNote: '새 탭에 노트와 링크를 지금 프리셋의 색으로 입체로 보여 줘요.',
     rotate3d: '자동 회전',
     rotate3dSpeed: '회전 속도',
+    look3d: '화면 분위기',
+    layout3d: '노드 배치',
+    center3d: '궤도 중심 노트',
+    center3dAuto: '자동 (연결이 가장 많은 노트)',
+    look3dOriginal: '기본',
+    look3dDeepSpace: '딥 스페이스',
+    layout3dForce: '힘 기반 그래프',
+    layout3dOrbital: '궤도',
+    layout3dGlobe: '지구본',
     f: {
       colors: '그룹 색', bg: '배경', glow: '글로우',
       repel: '반발력', dist: '링크 거리', center: '중심력', linkS: '링크력',
@@ -1138,6 +1156,42 @@ class StylerView extends ItemView {
 
     const openBtn = c.createEl('button', { cls: 'gs-open-3d', text: L.open3dCmd });
     openBtn.onclick = () => plugin.open3d();
+    const appearance = validGraph3dOptions(plugin.settings);
+    const lookRow = c.createDiv({ cls: 'gs-row' });
+    lookRow.createSpan({ cls: 'gs-row-label', text: L.look3d });
+    const look = lookRow.createEl('select', { cls: 'dropdown' });
+    look.createEl('option', { value: 'original', text: L.look3dOriginal });
+    look.createEl('option', { value: 'deep-space', text: L.look3dDeepSpace });
+    look.value = appearance.look;
+    look.onchange = () => plugin.setGraph3dOptions({ look: look.value });
+    const layoutRow = c.createDiv({ cls: 'gs-row' });
+    layoutRow.createSpan({ cls: 'gs-row-label', text: L.layout3d });
+    const layout = layoutRow.createEl('select', { cls: 'dropdown' });
+    layout.createEl('option', { value: 'force', text: L.layout3dForce });
+    layout.createEl('option', { value: 'orbital', text: L.layout3dOrbital });
+    layout.createEl('option', { value: 'globe', text: L.layout3dGlobe });
+    layout.value = appearance.layout;
+    layout.onchange = () => {
+      centerInput.disabled = layout.value !== 'orbital';
+      plugin.setGraph3dOptions({ layout: layout.value });
+    };
+    const centerRow = c.createDiv({ cls: 'gs-row gs-3d-center-row' });
+    centerRow.createSpan({ cls: 'gs-row-label', text: L.center3d });
+    const centerInput = centerRow.createEl('input', { cls: 'gs-3d-center' });
+    centerInput.type = 'search';
+    centerInput.placeholder = L.center3dAuto;
+    centerInput.value = appearance.centerPath;
+    centerInput.setAttr('list', 'gs-3d-center-options');
+    const candidates = plugin.graph3dCenterCandidates();
+    const options = centerRow.createEl('datalist', { attr: { id: 'gs-3d-center-options' } });
+    for (const file of candidates) options.createEl('option', { value: file.path, label: file.basename || file.path });
+    centerInput.disabled = appearance.layout !== 'orbital';
+    centerInput.onchange = () => {
+      const selected = candidates.find((file) => file.path === centerInput.value);
+      if (!centerInput.value.trim()) plugin.setGraph3dOptions({ centerPath: '' });
+      else if (selected) plugin.setGraph3dOptions({ centerPath: selected.path });
+      else centerInput.value = validGraph3dOptions(plugin.settings).centerPath;
+    };
     const rotateRow = c.createEl('label', { cls: 'gs-row gs-check' });
     const rotateBox = rotateRow.createEl('input');
     rotateBox.type = 'checkbox';
@@ -1324,11 +1378,240 @@ function graphDataFromRenderer3d(nodes, renderedLinks) {
 }
 
 function graphRenderer3d(workspace) {
-  const leaf = workspace.getLeavesOfType('graph').find((item) => {
+  const leaves = workspace.getLeavesOfType('graph').filter((item) => {
     const renderer = item.view && item.view.renderer;
     return renderer && Array.isArray(renderer.nodes) && Array.isArray(renderer.links);
   });
+  const visible = leaves.filter((leaf) => {
+    const el = leaf.view && leaf.view.contentEl;
+    return !el || typeof el.clientWidth !== 'number' || el.clientWidth > 0;
+  });
+  const candidates = visible.length ? visible : leaves;
+  const leaf = candidates.reduce((best, item) => {
+    if (!best) return item;
+    const time = (candidate) => typeof candidate.activeTime === 'number' ? candidate.activeTime : 0;
+    return time(item) > time(best) ? item : best;
+  }, null);
   return leaf ? leaf.view.renderer : null;
+}
+
+function validGraph3dOptions(settings) {
+  const s = settings || {};
+  return {
+    look: s.graph3dLook === 'deep-space' ? 'deep-space' : 'original',
+    layout: ['orbital', 'globe'].includes(s.graph3dLayout) ? s.graph3dLayout : 'force',
+    centerPath: typeof s.orbitalCenterPath === 'string' ? s.orbitalCenterPath : '',
+  };
+}
+
+function comparePath3d(a, b) {
+  const left = String(a || ''), right = String(b || '');
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function orbitalCenterIndex3d(files, data, preferredPath) {
+  const markdown = (file) => file && file.type === 'file' && /\.md$/i.test(file.path || '');
+  if (preferredPath) {
+    const selected = files.findIndex((file) => file.path === preferredPath && markdown(file));
+    if (selected >= 0) return selected;
+  }
+  const choose = (indices) => indices.sort((a, b) => data.deg[b] - data.deg[a] || comparePath3d(files[a].path, files[b].path))[0];
+  const notes = files.map((file, i) => markdown(file) ? i : -1).filter((i) => i >= 0);
+  if (notes.length) return choose(notes);
+  return files.length ? choose(files.map((_, i) => i)) : -1;
+}
+
+function orbitalPositions3d(data, paths, centerIndex) {
+  const n = data.n;
+  const pos = new Float32Array(n * 3);
+  if (!n) return pos;
+  const center = centerIndex >= 0 && centerIndex < n ? centerIndex : 0;
+  const hops = new Int32Array(n).fill(-1);
+  const queue = new Uint32Array(n);
+  let head = 0, tail = 0;
+  hops[center] = 0;
+  queue[tail++] = center;
+  while (head < tail) {
+    const node = queue[head++];
+    for (let p = data.start[node]; p < data.start[node + 1]; p++) {
+      const next = data.adj[p];
+      if (hops[next] >= 0) continue;
+      hops[next] = hops[node] + 1;
+      queue[tail++] = next;
+    }
+  }
+  const reachableBands = new Map();
+  const disconnected = [];
+  let maxHop = 0;
+  for (let i = 0; i < n; i++) {
+    const hop = hops[i];
+    if (hop < 0) disconnected.push(i);
+    else if (hop > 0) {
+      if (!reachableBands.has(hop)) reachableBands.set(hop, []);
+      reachableBands.get(hop).push(i);
+      if (hop > maxHop) maxHop = hop;
+    }
+  }
+  const bands = Array.from(reachableBands.entries()).sort((a, b) => a[0] - b[0]);
+  bands.forEach(([, members]) => members.sort((a, b) => comparePath3d(paths[a], paths[b])));
+  disconnected.sort((a, b) => comparePath3d(paths[a], paths[b]));
+  pos.set([0, 0, 0], center * 3);
+  const spacing = 24;
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const placeBand = (members, baseRadius) => {
+    let remaining = members.slice();
+    let ring = 0;
+    let lastRadius = 0;
+    while (remaining.length) {
+      const radius = baseRadius + ring * spacing;
+      const capacity = Math.max(8, Math.floor(4 * Math.PI * radius * radius / (spacing * spacing)));
+      const members = remaining.splice(0, capacity);
+      members.forEach((index, slot) => {
+        const y = 1 - 2 * (slot + 0.5) / members.length;
+        const planar = Math.sqrt(Math.max(0, 1 - y * y));
+        const angle = slot * goldenAngle;
+        pos.set([Math.cos(angle) * planar * radius, y * radius, Math.sin(angle) * planar * radius], index * 3);
+      });
+      lastRadius = radius;
+      ring++;
+    }
+    return lastRadius;
+  };
+  let lastReachableRadius = 0;
+  for (const [hop, members] of bands) {
+    const baseRadius = Math.max(hop * 36, lastReachableRadius + 36);
+    lastReachableRadius = placeBand(members, baseRadius);
+  }
+  if (disconnected.length) placeBand(disconnected, Math.max(144, (maxHop + 1) * 36, lastReachableRadius + 36));
+  return pos;
+}
+
+function globePositions3d(paths, groupIndexes, radius = 140) {
+  const pos = new Float32Array(paths.length * 3);
+  if (!paths.length) return pos;
+  const groups = new Map();
+  for (let i = 0; i < paths.length; i++) {
+    const group = Number.isInteger(groupIndexes && groupIndexes[i]) ? groupIndexes[i] : -1;
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(i);
+  }
+  const ordered = Array.from(groups.entries()).sort((a, b) => a[0] - b[0]);
+  let start = 0;
+  const golden = 0.6180339887498949;
+  for (const [, members] of ordered) {
+    members.sort((a, b) => comparePath3d(paths[a], paths[b]));
+    const width = 2 * Math.PI * members.length / paths.length;
+    members.forEach((index, slot) => {
+      const fraction = (slot + 0.5) / members.length;
+      const longitude = start + fraction * width;
+      const latitudeBand = ((slot + 0.5) * golden) % 1;
+      const y = 1 - 2 * latitudeBand;
+      const planar = Math.sqrt(Math.max(0, 1 - y * y));
+      pos.set([radius * planar * Math.cos(longitude), radius * y, radius * planar * Math.sin(longitude)], index * 3);
+    });
+    start += width;
+  }
+  return pos;
+}
+
+function globeLineGeometry3d(positions, links, colors, segments = 36, radius = 140) {
+  const edgeCount = links.length / 2;
+  const maxSteps = Math.max(1, Math.floor(segments));
+  const edgeOffsets = new Uint32Array(edgeCount + 1);
+  const angles = new Float64Array(edgeCount);
+  const normalize = (v) => {
+    const len = Math.hypot(v[0], v[1], v[2]) || 1;
+    return v.map((x) => x / len);
+  };
+  // Five-degree turns keep long links smooth. Short links need fewer samples, rather than paying the
+  // full cost of a half-circle; the old six segments (three on large graphs) formed visible corners.
+  for (let edge = 0; edge < edgeCount; edge++) {
+    const a = normalize(Array.from(positions.slice(links[edge * 2] * 3, links[edge * 2] * 3 + 3)));
+    const b = normalize(Array.from(positions.slice(links[edge * 2 + 1] * 3, links[edge * 2 + 1] * 3 + 3)));
+    angles[edge] = Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])));
+    edgeOffsets[edge + 1] = edgeOffsets[edge] + Math.max(1, Math.ceil(angles[edge] / Math.PI * maxSteps)) * 2;
+  }
+  const outPos = new Float32Array(edgeOffsets[edgeCount] * 3);
+  const outCol = new Float32Array(outPos.length);
+  for (let edge = 0; edge < edgeCount; edge++) {
+    const aIndex = links[edge * 2], bIndex = links[edge * 2 + 1];
+    const a = normalize(Array.from(positions.slice(aIndex * 3, aIndex * 3 + 3)));
+    const b = normalize(Array.from(positions.slice(bIndex * 3, bIndex * 3 + 3)));
+    const dot = Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
+    const angle = angles[edge];
+    let tangent = b.map((v, k) => v - a[k] * dot);
+    if (Math.hypot(...tangent) < 1e-6) {
+      const ref = Math.abs(a[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+      tangent = [a[1] * ref[2] - a[2] * ref[1], a[2] * ref[0] - a[0] * ref[2], a[0] * ref[1] - a[1] * ref[0]];
+    }
+    tangent = normalize(tangent);
+    const colorA = colors.slice(aIndex * 3, aIndex * 3 + 3);
+    const colorB = colors.slice(bIndex * 3, bIndex * 3 + 3);
+    const steps = (edgeOffsets[edge + 1] - edgeOffsets[edge]) / 2;
+    let previous = a.map((v) => v * radius);
+    let previousColor = colorA;
+    for (let step = 1; step <= steps; step++) {
+      const t = step / steps;
+      // Nearly opposite nodes use their actual tangent. Only exact opposites need a fallback plane;
+      // the last sample lands on b instead of the old fallback's -a.
+      const point = step === steps ? b : angle < 1e-5
+        ? normalize(a.map((v, k) => v + (b[k] - v) * t))
+        : a.map((v, k) => v * Math.cos(angle * t) + tangent[k] * Math.sin(angle * t));
+      const p = point.map((v) => v * radius);
+      const color = colorA.map((v, k) => v + (colorB[k] - v) * t);
+      const offset = (edgeOffsets[edge] + (step - 1) * 2) * 3;
+      outPos.set(previous, offset); outPos.set(p, offset + 3);
+      outCol.set(previousColor, offset); outCol.set(color, offset + 3);
+      previous = p;
+      previousColor = color;
+    }
+  }
+  return { positions: outPos, colors: outCol, edgeOffsets };
+}
+
+function globeGuideGeometry3d(radius = 140, guideColor = [0.25, 0.32, 0.52]) {
+  const positions = [], colors = [];
+  const add = (a, b) => {
+    positions.push(...a, ...b);
+    colors.push(...guideColor, ...guideColor);
+  };
+  const steps = 72;
+  for (const degrees of [-60, -30, 0, 30, 60]) {
+    const latitude = degrees * Math.PI / 180;
+    for (let i = 0; i < steps; i++) {
+      const a = 2 * Math.PI * i / steps, b = 2 * Math.PI * (i + 1) / steps;
+      add([radius * Math.cos(latitude) * Math.cos(a), radius * Math.sin(latitude), radius * Math.cos(latitude) * Math.sin(a)],
+        [radius * Math.cos(latitude) * Math.cos(b), radius * Math.sin(latitude), radius * Math.cos(latitude) * Math.sin(b)]);
+    }
+  }
+  for (let meridian = 0; meridian < 12; meridian++) {
+    const longitude = 2 * Math.PI * meridian / 12;
+    for (let i = 0; i < steps; i++) {
+      const a = -Math.PI / 2 + Math.PI * i / steps, b = -Math.PI / 2 + Math.PI * (i + 1) / steps;
+      add([radius * Math.cos(a) * Math.cos(longitude), radius * Math.sin(a), radius * Math.cos(a) * Math.sin(longitude)],
+        [radius * Math.cos(b) * Math.cos(longitude), radius * Math.sin(b), radius * Math.cos(b) * Math.sin(longitude)]);
+    }
+  }
+  return { positions: Float32Array.from(positions), colors: Float32Array.from(colors) };
+}
+
+function packGlobeThickPairs3d(geometry, edgeIndexes) {
+  const edges = edgeIndexes || Array.from({ length: geometry.edgeOffsets.length - 1 }, (_, i) => i);
+  let segments = 0;
+  for (const edge of edges) segments += (geometry.edgeOffsets[edge + 1] - geometry.edgeOffsets[edge]) / 2;
+  const packed = new Float32Array(segments * 12);
+  let out = 0;
+  for (const edge of edges) {
+    for (let vertex = geometry.edgeOffsets[edge]; vertex < geometry.edgeOffsets[edge + 1]; vertex += 2) {
+      const a = vertex * 3, b = a + 3;
+      packed.set(geometry.positions.subarray(a, a + 3), out);
+      packed.set(geometry.positions.subarray(b, b + 3), out + 3);
+      packed.set(geometry.colors.subarray(a, a + 3), out + 6);
+      packed.set(geometry.colors.subarray(b, b + 3), out + 9);
+      out += 12;
+    }
+  }
+  return packed;
 }
 
 // Graph Styler가 만드는 색 그룹 쿼리(path:"폴더", tag:#태그)만 해석한다. 그 밖의 검색 문법은 어느 노트와도
@@ -1656,12 +1939,20 @@ precision highp float;
 in vec2 vUv;
 uniform vec3 uC1, uC2, uC3;
 uniform vec2 uRes;
+uniform float uDeepSpace;
 out vec4 o;
 void main() {
   vec2 d = (vUv - vec2(0.5, 0.58)) * uRes;
   float r = length(d) / length(vec2(0.5, 0.58) * uRes);
   vec3 c = r < 0.48 ? mix(uC1, uC2, r / 0.48) : mix(uC2, uC3, (r - 0.48) / 0.52);
   float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  vec2 cell = floor(gl_FragCoord.xy / 72.0);
+  float seed = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+  vec2 local = fract(gl_FragCoord.xy / 72.0) - vec2(fract(seed * 19.19), fract(seed * 71.73));
+  float star = (1.0 - smoothstep(0.012, 0.045, length(local))) * step(0.965, seed);
+  vec3 space = mix(vec3(0.012, 0.018, 0.055), vec3(0.055, 0.035, 0.12), smoothstep(0.0, 1.0, r));
+  c = mix(c, space, uDeepSpace);
+  c += vec3(0.62, 0.72, 1.0) * star * uDeepSpace * 0.8;
   o = vec4(c + (n - 0.5) / 255.0, 1.0);
 }`],
   line: [`#version 300 es
@@ -1670,21 +1961,26 @@ layout(location=1) in vec3 aCol;
 uniform mat4 uMvp;
 uniform vec2 uFog;
 uniform vec3 uLine;
+uniform vec3 uEye, uCenter;
 uniform float uAlpha;
+uniform float uGlobe;
 out vec3 vCol;
-out float vA;
+out float vA, vFade;
 void main() {
   vec4 c = uMvp * vec4(aPos, 1.0);
   vCol = mix(uLine, aCol, 0.55);
   vA = uAlpha * (1.0 - smoothstep(uFog.x, uFog.y, c.w) * 0.75);
+  vec3 normal = aPos - uCenter;
+  float side = length(normal) < 1e-5 ? 1.0 : dot(normalize(normal), normalize(uEye - uCenter));
+  vFade = mix(1.0, mix(0.12, 1.0, smoothstep(-0.2, 0.2, side)), uGlobe);
   gl_Position = c;
 }`, `#version 300 es
 precision mediump float;
 in vec3 vCol;
-in float vA;
+in float vA, vFade;
 uniform float uLight;
 out vec4 o;
-void main() { o = vec4(vCol * vA, uLight * vA); }`],
+void main() { float a = vA * vFade; o = vec4(vCol * a, uLight * a); }`],
   // 굵은 링크: 링크마다 사각형 하나(인스턴스). 끝점 위치·색은 노드 텍스처에서 읽어, 노드 버퍼를 링크마다 복사하지 않는다.
   thick: `#version 300 es
 layout(location=4) in vec2 aCorner;
@@ -1696,7 +1992,7 @@ uniform vec2 uView, uFog;
 uniform vec3 uLine;
 uniform float uAlpha, uWidth;
 out vec3 vCol;
-out float vA;
+out float vA, vFade;
 vec4 node(highp sampler2D t, uint i) { return texelFetch(t, ivec2(int(i) % uTexW, int(i) / uTexW), 0); }
 void main() {
   vec4 a = uMvp * vec4(node(uPosTex, aEnds.x).xyz, 1.0);
@@ -1722,6 +2018,37 @@ void main() {
   gl_Position = p + vec4(nrm * aCorner.y * uWidth / uView * p.w, 0.0, 0.0);
   vCol = mix(uLine, atB ? cb : ca, 0.55);
   vA = uAlpha * (1.0 - smoothstep(uFog.x, uFog.y, p.w) * 0.75);
+  vFade = 1.0;
+}`,
+  globeThick: `#version 300 es
+layout(location=4) in vec2 aCorner;
+layout(location=5) in vec3 aStart;
+layout(location=6) in vec3 aEnd;
+layout(location=7) in vec3 aStartCol;
+layout(location=8) in vec3 aEndCol;
+uniform mat4 uMvp;
+uniform vec2 uView, uFog;
+uniform vec3 uLine, uEye, uCenter;
+uniform float uAlpha, uWidth;
+out vec3 vCol;
+out float vA, vFade;
+void main() {
+  vec4 a = uMvp * vec4(aStart, 1.0), b = uMvp * vec4(aEnd, 1.0);
+  vec3 ca = aStartCol, cb = aEndCol;
+  float da = a.z + a.w, db = b.z + b.w;
+  if (da < 0.0 && db < 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vFade = 0.0; return; }
+  if (da < 0.0) { float t = da / (da - db); a = mix(a, b, t); ca = mix(ca, cb, t); }
+  else if (db < 0.0) { float t = db / (db - da); b = mix(b, a, t); cb = mix(cb, ca, t); }
+  vec2 d = b.xy / b.w * uView - a.xy / a.w * uView;
+  vec2 nrm = normalize(vec2(-d.y, d.x) + vec2(0.0, 1e-6));
+  bool atB = aCorner.x > 0.0;
+  vec4 p = atB ? b : a;
+  vec3 world = atB ? aEnd : aStart;
+  float side = dot(normalize(world - uCenter), normalize(uEye - uCenter));
+  vFade = mix(0.12, 1.0, smoothstep(-0.2, 0.2, side));
+  vCol = mix(uLine, atB ? cb : ca, 0.55);
+  vA = uAlpha * (1.0 - smoothstep(uFog.x, uFog.y, p.w) * 0.75);
+  gl_Position = p + vec4(nrm * aCorner.y * uWidth / uView * p.w, 0.0, 0.0);
 }`,
   node: `#version 300 es
 layout(location=0) in vec3 aPos;
@@ -1731,10 +2058,12 @@ layout(location=3) in float aHi;
 layout(location=4) in vec2 aCorner;
 uniform mat4 uMvp;
 uniform vec2 uView, uFog;
+uniform vec3 uEye, uCenter;
 uniform float uPx, uScale, uMinPx, uHover;
+uniform float uGlobe;
 out vec2 vUv;
 out vec3 vCol;
-out float vMix, vPx, vHi;
+out float vMix, vPx, vHi, vFade;
 void main() {
   vec4 c = uMvp * vec4(aPos, 1.0);
   if (c.w <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
@@ -1743,6 +2072,9 @@ void main() {
   vUv = aCorner;
   vCol = aCol;
   vHi = aHi;
+  vec3 normal = aPos - uCenter;
+  float side = length(normal) < 1e-5 ? 1.0 : dot(normalize(normal), normalize(uEye - uCenter));
+  vFade = mix(1.0, mix(0.12, 1.0, smoothstep(-0.2, 0.2, side)), uGlobe);
   float fog = smoothstep(uFog.x, uFog.y, c.w) * 0.4;
   vMix = max(fog, uHover * (1.0 - aHi) * 0.7);
   gl_Position = c + vec4(aCorner * px * uScale / uView * 2.0 * c.w, 0.0, 0.0);
@@ -1751,27 +2083,27 @@ void main() {
 precision mediump float;
 in vec2 vUv;
 in vec3 vCol;
-in float vMix, vPx, vHi;
+in float vMix, vPx, vHi, vFade;
 uniform float uGain, uLight;
 out vec4 o;
 void main() {
   float d2 = dot(vUv, vUv);
   if (d2 > 1.0) discard;
-  float g = (exp(-d2 * 5.0) - 0.0067) * uGain * (1.0 - vMix);
+  float g = (exp(-d2 * 5.0) - 0.0067) * uGain * (1.0 - vMix) * vFade;
   o = vec4(vCol * g, uLight * g);
 }`,
   core: `#version 300 es
 precision mediump float;
 in vec2 vUv;
 in vec3 vCol;
-in float vMix, vPx, vHi;
+in float vMix, vPx, vHi, vFade;
 uniform vec3 uFogColor;
 uniform float uSheen, uOnlyHi;
 out vec4 o;
 void main() {
   if (uOnlyHi > 0.5 && vHi < 0.5) discard;
   float d = length(vUv);
-  float a = 1.0 - smoothstep(1.0 - 1.5 / max(vPx, 1.0), 1.0, d);
+  float a = (1.0 - smoothstep(1.0 - 1.5 / max(vPx, 1.0), 1.0, d)) * vFade;
   if (a <= 0.01) discard;
   vec3 c = mix(mix(vCol, vec3(1.0), uSheen * (1.0 - d * d)), uFogColor, vMix);
   o = vec4(c * a, a);
@@ -1812,6 +2144,8 @@ class Graph3DView extends ItemView {
     this.registerDomEvent(this.canvas, 'webglcontextlost', (e) => {
       e.preventDefault();
       this.stopLoop();
+      if (this.graphLayout === 'force') this.forcePos = this.pos.slice();
+      this.stopLayout();
       this.showMessage(L.lost3d);
     });
     this.registerDomEvent(this.canvas, 'webglcontextrestored', () => this.restoreGL());
@@ -1848,12 +2182,14 @@ class Graph3DView extends ItemView {
   restoreGL() {
     this.clearMessage();
     // 잃기 전의 GPU 객체는 새 문맥에서 무효라, 지우려 하면 GL 오류만 난다. 버리고 새로 만든다.
-    this.prog = this.buf = this.vaoLine = this.vaoNode = this.vaoThick = this.tex = this.glData = null;
+    this.prog = this.buf = this.vaoLine = this.vaoNode = this.vaoThick = this.vaoGlobe = this.vaoGlobeHi = this.vaoGlobeGuide = this.vaoGlobeThick = this.vaoGlobeThickHi = this.tex = this.glData = null;
     // 링크 강조 버퍼도 새로 만들어지므로 호버를 처음부터 다시 고르게 한다. 그대로 두면 노드만 밝고 링크는 어두웠다.
     this.hover = -1;
     if (this.hi) this.hi.fill(0);
+    this.hiGlobeCount = 0;
     this.label.toggleClass('is-shown', false);
     this.initGL();
+    if (this.graphLayout === 'force' && !this.layoutDone) this.startLayout(Math.max(0.3, this.layoutAlpha || 1));
     this.kick(true);
   }
 
@@ -1879,7 +2215,12 @@ class Graph3DView extends ItemView {
     const renderer = graphRenderer3d(workspace);
     let paths;
     if (renderer) {
-      const renderedNodes = renderer.nodes.filter((node) => node && typeof node.id === 'string');
+      const seen = new Set();
+      const renderedNodes = renderer.nodes.filter((node) => {
+        if (!node || typeof node.id !== 'string' || seen.has(node.id)) return false;
+        seen.add(node.id);
+        return true;
+      });
       this.files = renderedNodes.map((node) => {
         const path = node.id;
         const file = vault.getAbstractFileByPath(path) || null;
@@ -1914,22 +2255,71 @@ class Graph3DView extends ItemView {
       this.registerEvent(ref);
     }
     if (!this.data.n) {
+      this.stopLayout();
       this.showMessage(L.empty3d);
       return;
     }
     this.clearMessage();
-    this.pos = initialPositions3d(paths);
-    this.hi = new Float32Array(this.data.n);
-    this.hover = -1;
+    this.stopLayout();
     this.style = await this.readStyle();
     if (this.disposed) return;
+    const options = validGraph3dOptions(this.plugin.settings);
+    this.graphLook = options.look;
+    this.graphLayout = options.layout;
+    this.centerPath = options.centerPath;
+    this.paths = paths;
+    this.forcePos = initialPositions3d(paths);
+    this.groupIndex = this.nodeAttributes().groupIndex;
+    this.pos = this.positionsForLayout(options.layout, options.centerPath);
+    this.hi = new Float32Array(this.data.n);
+    this.hover = -1;
     this.initGL();
     this.fit = this.measureFit();
     this.cam.target = [0, 0, 0];
     this.cam.dist = this.shownDist = this.fitDistance();
     this.userMoved = false;
-    this.startLayout();
+    if (this.graphLayout === 'force') this.startLayout();
+    else this.layoutDone = true;
     this.kick();
+  }
+
+  positionsForLayout(layout, centerPath) {
+    if (layout === 'orbital') {
+      const center = orbitalCenterIndex3d(this.files, this.data, centerPath);
+      this.orbitalCenter = center;
+      return orbitalPositions3d(this.data, this.paths, center);
+    }
+    if (layout === 'globe') return globePositions3d(this.paths, this.groupIndex);
+    this.orbitalCenter = -1;
+    return this.forcePos ? this.forcePos.slice() : initialPositions3d(this.paths);
+  }
+
+  applyGraph3dOptions(options) {
+    const oldLayout = this.graphLayout;
+    const oldCenter = this.centerPath;
+    this.graphLook = options.look;
+    this.graphLayout = options.layout;
+    this.centerPath = options.centerPath;
+    const layoutChanged = oldLayout !== this.graphLayout;
+    const centerChanged = oldCenter !== this.centerPath && this.graphLayout === 'orbital';
+    if (!this.data || !this.data.n) return;
+    if (!layoutChanged && !centerChanged) { this.kick(true); return; }
+    if (oldLayout === 'force') this.forcePos = this.pos.slice();
+    this.stopLayout();
+    this.pos = this.positionsForLayout(this.graphLayout, this.centerPath);
+    if (this.hover >= 0) this.setHover(-1);
+    this.hi.fill(0);
+    this.hover = -1;
+    this.label.toggleClass('is-shown', false);
+    this.layoutDone = this.graphLayout !== 'force';
+    this.fit = this.measureFit();
+    this.cam.target = [0, 0, 0];
+    this.userMoved = false;
+    this.cam.dist = this.shownDist = this.fitDistance();
+    if (!this.gl || this.gl.isContextLost()) return;
+    this.initGL();
+    if (this.graphLayout === 'force') this.startLayout();
+    this.kick(true);
   }
 
   // 색은 지금 화면의 2D 그래프와 같은 곳에서 읽는다: 노드·선 기본색은 테마/프리셋이 칠하는 .graph-view.color-*,
@@ -1944,6 +2334,10 @@ class Graph3DView extends ItemView {
       return color;
     };
     const filter = palette ? palette.filter : 'none';
+    const backgroundEl = document.body.createDiv();
+    backgroundEl.style.backgroundColor = 'var(--background-primary)';
+    const themeBg = parseCssColor(getComputedStyle(backgroundEl).backgroundColor).slice(0, 3);
+    backgroundEl.remove();
     let bg;
     if (palette) {
       const base = parseCssColor(palette.bg3);
@@ -1968,7 +2362,8 @@ class Graph3DView extends ItemView {
       }));
     return {
       bg,
-      light: luminance(bg[2]) > 0.5,
+      themeBg,
+      light: luminance(themeBg) > 0.5,
       nodeSize: displayRatio3d(options, 'nodeSizeMultiplier'),
       lineSize: displayRatio3d(options, 'lineSizeMultiplier'),
       forces: layoutParams3d(options),
@@ -1983,21 +2378,27 @@ class Graph3DView extends ItemView {
   // 노드 색과 크기. 크기는 2D 그래프처럼 연결 수의 제곱근을 따르고, 그래프 설정의 노드 크기 배율을 곱한다.
   nodeAttributes() {
     const { n, deg } = this.data;
-    const { groups, fill, tagFill, unresolvedFill } = this.style;
+    const groups = Array.isArray(this.style.groups) ? this.style.groups : [];
+    const fill = this.style.fill || [1, 1, 1];
+    const tagFill = this.style.tagFill || fill;
+    const unresolvedFill = this.style.unresolvedFill || fill;
     const tagged = groups.some((g) => g.tags);
     const col = new Float32Array(n * 3);
     const size = new Float32Array(n);
+    const groupIndex = new Int32Array(n).fill(-1);
     for (let i = 0; i < n; i++) {
       const file = this.files[i];
       const tags = file.type === 'tag'
         ? [file.path.startsWith('#') ? file.path : `#${file.path}`]
         : tagged && file.file ? (getAllTags(this.app.metadataCache.getFileCache(file.file) || {}) || []) : [];
-      const g = groups.find((group) => group.test(file.path, tags));
+      const group = groups.findIndex((candidate) => candidate.test(file.path, tags));
+      const g = group >= 0 ? groups[group] : null;
       const base = file.type === 'tag' ? tagFill : file.type === 'unresolved' ? unresolvedFill : fill;
       col.set(g ? g.rgb : base, i * 3);
+      groupIndex[i] = group;
       size[i] = (2.2 + Math.sqrt(deg[i]) * 1.1) * this.style.nodeSize;
     }
-    return { col, size };
+    return { col, size, groupIndex };
   }
 
   async applyStyle() {
@@ -2010,7 +2411,8 @@ class Graph3DView extends ItemView {
       this.restyleAfterInit = true;
       return;
     }
-    const { col, size } = this.nodeAttributes();
+    const { col, size, groupIndex } = this.nodeAttributes();
+    this.groupIndex = groupIndex;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.col);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, col);
@@ -2020,7 +2422,16 @@ class Graph3DView extends ItemView {
     this.uploadNodeTexture(this.tex.col, col);
     // 장력이 바뀌면 Obsidian처럼 지금 자리에서 다시 푼다(alpha 0.3). 카메라는 건드리지 않는다: 사용자가 옮긴 카메라는
     // 그 자리에 있고, 옮기지 않았다면 처음 배치 때처럼 거리만 그래프 크기를 따라간다.
-    if (JSON.stringify(this.style.forces) !== JSON.stringify(this.layoutForces)) {
+    if (this.graphLayout === 'globe') {
+      this.pos = globePositions3d(this.paths, this.groupIndex);
+      if (this.hover >= 0) this.setHover(-1);
+      this.initGL();
+      this.fit = this.measureFit();
+      if (!this.userMoved) {
+        this.cam.target = [0, 0, 0];
+        this.cam.dist = this.shownDist = this.fitDistance();
+      }
+    } else if ((!this.graphLayout || this.graphLayout === 'force') && JSON.stringify(this.style.forces) !== JSON.stringify(this.layoutForces)) {
       this.startLayout(Math.max(0.3, this.layoutDone ? 0 : this.layoutAlpha));
     }
     this.kick();
@@ -2047,6 +2458,7 @@ class Graph3DView extends ItemView {
 
   // 지금 위치(this.pos)에서 배치를 시작한다. 돌던 배치는 끝내므로, 슬라이더를 빨리 끌어도 워커는 늘 하나다.
   startLayout(alpha = 1) {
+    if (this.graphLayout && this.graphLayout !== 'force') return;
     this.stopLayout();
     this.layoutDone = false;
     this.layoutAlpha = alpha;
@@ -2058,6 +2470,7 @@ class Graph3DView extends ItemView {
       // 끝낸 워커가 그 전에 보낸 위치가 늦게 도착해도 새 배치를 덮지 않게 한다.
       if (worker !== this.worker) return;
       this.pos = event.data.pos;
+      this.forcePos = this.pos;
       this.posDirty = true;
       this.layoutAlpha = event.data.alpha;
       if (event.data.done) {
@@ -2086,6 +2499,11 @@ class Graph3DView extends ItemView {
     if (this.vaoLine) gl.deleteVertexArray(this.vaoLine);
     if (this.vaoNode) gl.deleteVertexArray(this.vaoNode);
     if (this.vaoThick) gl.deleteVertexArray(this.vaoThick);
+    if (this.vaoGlobe) gl.deleteVertexArray(this.vaoGlobe);
+    if (this.vaoGlobeHi) gl.deleteVertexArray(this.vaoGlobeHi);
+    if (this.vaoGlobeGuide) gl.deleteVertexArray(this.vaoGlobeGuide);
+    if (this.vaoGlobeThick) gl.deleteVertexArray(this.vaoGlobeThick);
+    if (this.vaoGlobeThickHi) gl.deleteVertexArray(this.vaoGlobeThickHi);
     if (this.tex) for (const t of Object.values(this.tex)) gl.deleteTexture(t);
     const compile = (vs, fs) => {
       const p = gl.createProgram();
@@ -2112,9 +2530,16 @@ class Graph3DView extends ItemView {
       halo: compile(GL3D.node, GL3D.halo),
       core: compile(GL3D.node, GL3D.core),
       thick: compile(GL3D.thick, GL3D.line[1]),
+      globeThick: compile(GL3D.globeThick, GL3D.line[1]),
     };
-    const { col, size } = this.nodeAttributes();
+    const { col, size, groupIndex } = this.nodeAttributes();
+    this.groupIndex = groupIndex;
     this.size = size;
+    this.globeGeometry = this.graphLayout === 'globe'
+      ? globeLineGeometry3d(this.pos, this.data.links, col)
+      : null;
+    const globeThickPairs = this.globeGeometry ? packGlobeThickPairs3d(this.globeGeometry) : new Float32Array(0);
+    this.globeGuides = this.graphLayout === 'globe' ? globeGuideGeometry3d() : null;
     const buf = (target, data, usage) => {
       const b = gl.createBuffer();
       gl.bindBuffer(target, b);
@@ -2132,8 +2557,18 @@ class Graph3DView extends ItemView {
       // 굵은 링크의 인스턴스 속성(끝점 번호 쌍). WebGL은 요소 버퍼를 다른 용도로 묶을 수 없어 따로 둔다.
       linkPairs: buf(gl.ARRAY_BUFFER, this.data.links, gl.STATIC_DRAW),
       hiPairs: buf(gl.ARRAY_BUFFER, new Uint32Array(2), gl.DYNAMIC_DRAW),
+      globePos: buf(gl.ARRAY_BUFFER, this.globeGeometry ? this.globeGeometry.positions : new Float32Array(0), gl.STATIC_DRAW),
+      globeCol: buf(gl.ARRAY_BUFFER, this.globeGeometry ? this.globeGeometry.colors : new Float32Array(0), gl.STATIC_DRAW),
+      globeHiPos: buf(gl.ARRAY_BUFFER, new Float32Array(0), gl.DYNAMIC_DRAW),
+      globeHiCol: buf(gl.ARRAY_BUFFER, new Float32Array(0), gl.DYNAMIC_DRAW),
+      globeThick: buf(gl.ARRAY_BUFFER, globeThickPairs, gl.STATIC_DRAW),
+      globeHiThick: buf(gl.ARRAY_BUFFER, new Float32Array(0), gl.DYNAMIC_DRAW),
+      globeGuidePos: buf(gl.ARRAY_BUFFER, this.globeGuides ? this.globeGuides.positions : new Float32Array(0), gl.STATIC_DRAW),
+      globeGuideCol: buf(gl.ARRAY_BUFFER, this.globeGuides ? this.globeGuides.colors : new Float32Array(0), gl.STATIC_DRAW),
     };
     this.hiCount = 0;
+    this.hiGlobeCount = 0;
+    this.hiGlobeThickCount = 0;
     const texture = () => {
       const t = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
@@ -2169,6 +2604,35 @@ class Graph3DView extends ItemView {
     gl.enableVertexAttribArray(5);
     gl.vertexAttribIPointer(5, 2, gl.UNSIGNED_INT, 0, 0);
     gl.vertexAttribDivisor(5, 1);
+    this.vaoGlobe = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoGlobe);
+    attr(0, this.buf.globePos, 3, 0);
+    attr(1, this.buf.globeCol, 3, 0);
+    this.vaoGlobeHi = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoGlobeHi);
+    attr(0, this.buf.globeHiPos, 3, 0);
+    attr(1, this.buf.globeHiCol, 3, 0);
+    this.vaoGlobeGuide = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoGlobeGuide);
+    attr(0, this.buf.globeGuidePos, 3, 0);
+    attr(1, this.buf.globeGuideCol, 3, 0);
+    const thickVao = (vao, buffer) => {
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.corner);
+      gl.enableVertexAttribArray(4);
+      gl.vertexAttribPointer(4, 2, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribDivisor(4, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      for (const [location, offset] of [[5, 0], [6, 12], [7, 24], [8, 36]]) {
+        gl.enableVertexAttribArray(location);
+        gl.vertexAttribPointer(location, 3, gl.FLOAT, false, 48, offset);
+        gl.vertexAttribDivisor(location, 1);
+      }
+    };
+    this.vaoGlobeThick = gl.createVertexArray();
+    thickVao(this.vaoGlobeThick, this.buf.globeThick);
+    this.vaoGlobeThickHi = gl.createVertexArray();
+    thickVao(this.vaoGlobeThickHi, this.buf.globeHiThick);
     gl.bindVertexArray(null);
     this.glData = this.data;
     if (this.restyleAfterInit) {
@@ -2245,8 +2709,8 @@ class Graph3DView extends ItemView {
 
   // 입력이 있으면 회전을 멈추고, IDLE_3D_MS 동안 조용하면 다시 천천히 돌린다.
   touch() {
-    this.lastInput = performance.now();
     const win = this.contentEl.win;
+    this.lastInput = win.performance.now();
     win.clearTimeout(this.resumeTimer);
     this.resumeTimer = win.setTimeout(() => this.kick(), IDLE_3D_MS + 50);
   }
@@ -2261,7 +2725,7 @@ class Graph3DView extends ItemView {
 
   // 자동 회전을 다시 켜면 멈춰 있던 그래프가 툭 출발하지 않게, 입력이 끝난 뒤처럼 천천히 속도를 올린다.
   resumeRotation() {
-    if (this.plugin.rotate3d && !this.drag) this.lastInput = performance.now() - IDLE_3D_MS;
+    if (this.plugin.rotate3d && !this.drag) this.lastInput = this.contentEl.win.performance.now() - IDLE_3D_MS;
     this.kick();
   }
 
@@ -2299,12 +2763,14 @@ class Graph3DView extends ItemView {
     const { start, adj, adjLink, links } = this.data;
     this.hi.fill(0);
     const hiLinks = [];
+    const hiEdges = [];
     if (i >= 0) {
       this.hi[i] = 1;
       for (let p = start[i]; p < start[i + 1]; p++) {
         this.hi[adj[p]] = 1;
         const e = adjLink[p];
         hiLinks.push(links[e * 2], links[e * 2 + 1]);
+        hiEdges.push(e);
       }
       this.label.setText(this.files[i].basename || this.files[i].path);
     }
@@ -2318,6 +2784,28 @@ class Graph3DView extends ItemView {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.hiPairs);
     gl.bufferData(gl.ARRAY_BUFFER, new Uint32Array(hiLinks), gl.DYNAMIC_DRAW);
     this.hiCount = hiLinks.length;
+    if (this.graphLayout === 'globe' && this.globeGeometry) {
+      const vertexCount = hiEdges.reduce((sum, edge) => sum + this.globeGeometry.edgeOffsets[edge + 1] - this.globeGeometry.edgeOffsets[edge], 0);
+      const positions = new Float32Array(vertexCount * 3), colors = new Float32Array(vertexCount * 3);
+      let offset = 0;
+      for (const edge of hiEdges) {
+        const from = this.globeGeometry.edgeOffsets[edge] * 3;
+        const to = this.globeGeometry.edgeOffsets[edge + 1] * 3;
+        positions.set(this.globeGeometry.positions.subarray(from, to), offset);
+        colors.set(this.globeGeometry.colors.subarray(from, to), offset);
+        offset += to - from;
+      }
+      const hiPos = positions, hiCol = colors;
+      const hiThick = packGlobeThickPairs3d(this.globeGeometry, hiEdges);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.globeHiPos);
+      gl.bufferData(gl.ARRAY_BUFFER, hiPos, gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.globeHiCol);
+      gl.bufferData(gl.ARRAY_BUFFER, hiCol, gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.globeHiThick);
+      gl.bufferData(gl.ARRAY_BUFFER, hiThick, gl.DYNAMIC_DRAW);
+      this.hiGlobeCount = hiPos.length / 3;
+      this.hiGlobeThickCount = hiThick.length / 12;
+    }
   }
 
   // 마우스 아래 노드를 CPU에서 투영해 고른다(5,000개에 0.1ms 안팎). 반경에 대한 거리 비율이 가장 작은 노드라,
@@ -2338,7 +2826,7 @@ class Graph3DView extends ItemView {
       if (w <= 0) continue;
       const sx = ((M[0] * x + M[4] * y + M[8] * z + M[12]) / w * 0.5 + 0.5) * c.width;
       const sy = (0.5 - (M[1] * x + M[5] * y + M[9] * z + M[13]) / w * 0.5) * c.height;
-      const r = Math.max(this.size[i] * this.pxScale / w, minR);
+      const r = Math.max(this.size[i] * this.pxScale * 0.72 / w, minR);
       const score = Math.hypot(sx - mx, sy - my) / r;
       if (score <= bestScore) { best = i; bestScore = score; }
     }
@@ -2362,8 +2850,9 @@ class Graph3DView extends ItemView {
     const d = new Float32Array(n);
     for (let i = 0; i < n; i++) d[i] = Math.hypot(this.pos[i * 3], this.pos[i * 3 + 1], this.pos[i * 3 + 2]);
     d.sort();
-    // 멀리 떠 있는 섬 몇 개 때문에 전체가 작아지지 않게 92% 지점에 맞춘다.
-    return { r: Math.max(d[Math.floor(n * 0.92)] || 0, FIT_MIN_3D), max: Math.max(d[n - 1] || 0, FIT_MIN_3D) };
+    // Orbital의 바깥 hop 층도 놓치지 않게 모두 맞춘다. Force의 외딴 섬은 기존처럼 92% 지점에 맞춘다.
+    const fitRadius = this.graphLayout === 'orbital' ? d[n - 1] : d[Math.floor(n * 0.92)];
+    return { r: Math.max(fitRadius || 0, FIT_MIN_3D), max: Math.max(d[n - 1] || 0, FIT_MIN_3D) };
   }
 
   fitDistance() {
@@ -2450,7 +2939,9 @@ class Graph3DView extends ItemView {
     this.pxScale = c.height / (2 * Math.tan(cam.fov / 2));
     const fog = [dist - this.fit.r * 0.5, dist + this.fit.r * 1.3];
     const hovering = this.hover >= 0 ? 1 : 0;
-    const light = st.light ? 1 : 0;
+    const deepSpace = this.graphLook === 'deep-space' ? 1 : 0;
+    const globe = this.graphLayout === 'globe' ? 1 : 0;
+    const light = st.light && !deepSpace ? 1 : 0;
 
     gl.viewport(0, 0, c.width, c.height);
     gl.disable(gl.DEPTH_TEST);
@@ -2459,10 +2950,13 @@ class Graph3DView extends ItemView {
     gl.clear(gl.DEPTH_BUFFER_BIT);
     let P = this.prog.bg;
     gl.useProgram(P.p);
-    gl.uniform3fv(P.u.uC1, st.bg[0]);
-    gl.uniform3fv(P.u.uC2, st.bg[1]);
-    gl.uniform3fv(P.u.uC3, st.bg[2]);
+    // Match the background used by the live 2D graph (active preset when present, theme otherwise).
+    const background = st.bg;
+    gl.uniform3fv(P.u.uC1, background[0]);
+    gl.uniform3fv(P.u.uC2, background[1]);
+    gl.uniform3fv(P.u.uC3, background[2]);
     gl.uniform2f(P.u.uRes, c.width, c.height);
+    gl.uniform1f(P.u.uDeepSpace, deepSpace);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     // 선: 어두운 배경에서는 빛처럼 더하고, 밝은 배경에서는 옅게 덮는다.
@@ -2471,14 +2965,45 @@ class Graph3DView extends ItemView {
     gl.blendFunc(gl.ONE, light ? gl.ONE_MINUS_SRC_ALPHA : gl.ONE);
     const lines = lineMode3d(st.lineSize);
     const baseAlpha = (light ? 0.35 : 0.22) * lines.alpha;
-    P = lines.thick ? this.prog.thick : this.prog.line;
-    gl.useProgram(P.p);
-    gl.uniformMatrix4fv(P.u.uMvp, false, this.mvp);
-    gl.uniform2fv(P.u.uFog, fog);
-    gl.uniform3fv(P.u.uLine, st.line);
-    gl.uniform1f(P.u.uLight, light);
-    gl.uniform1f(P.u.uAlpha, baseAlpha * (hovering ? 0.3 : 1));
-    if (lines.thick) {
+    P = globe ? (lines.thick ? this.prog.globeThick : this.prog.line) : lines.thick ? this.prog.thick : this.prog.line;
+    const lineUniforms = (program, alpha) => {
+      gl.useProgram(program.p);
+      gl.uniformMatrix4fv(program.u.uMvp, false, this.mvp);
+      gl.uniform2fv(program.u.uFog, fog);
+      gl.uniform3fv(program.u.uLine, st.line);
+      gl.uniform3fv(program.u.uEye, eye);
+      gl.uniform3fv(program.u.uCenter, cam.target);
+      gl.uniform1f(program.u.uGlobe, globe);
+      gl.uniform1f(program.u.uLight, light);
+      gl.uniform1f(program.u.uAlpha, alpha);
+    };
+    lineUniforms(P, baseAlpha * (hovering ? 0.3 : 1));
+    if (globe) {
+      const guideAlpha = baseAlpha * 0.24;
+      lineUniforms(this.prog.line, guideAlpha);
+      gl.bindVertexArray(this.vaoGlobeGuide);
+      gl.drawArrays(gl.LINES, 0, this.globeGuides ? this.globeGuides.positions.length / 3 : 0);
+      lineUniforms(P, baseAlpha * (hovering ? 0.3 : 1));
+      if (lines.thick) {
+        gl.uniform2f(P.u.uView, c.width, c.height);
+        gl.uniform1f(P.u.uWidth, lines.width);
+        gl.bindVertexArray(this.vaoGlobeThick);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.globeGeometry ? this.globeGeometry.positions.length / 6 : 0);
+        if (hovering && this.hiGlobeThickCount) {
+          gl.uniform1f(P.u.uAlpha, 0.9);
+          gl.bindVertexArray(this.vaoGlobeThickHi);
+          gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.hiGlobeThickCount);
+        }
+      } else {
+        gl.bindVertexArray(this.vaoGlobe);
+        gl.drawArrays(gl.LINES, 0, this.globeGeometry ? this.globeGeometry.positions.length / 3 : 0);
+        if (hovering && this.hiGlobeCount) {
+          gl.uniform1f(P.u.uAlpha, 0.9);
+          gl.bindVertexArray(this.vaoGlobeHi);
+          gl.drawArrays(gl.LINES, 0, this.hiGlobeCount);
+        }
+      }
+    } else if (lines.thick) {
       // 위치 텍스처는 굵은 선에만 쓰므로, 기본 굵기에서는 배치가 도는 동안에도 올리지 않는다.
       if (this.posTexStale) {
         this.posTexStale = false;
@@ -2521,15 +3046,19 @@ class Graph3DView extends ItemView {
       gl.useProgram(P.p);
       gl.uniformMatrix4fv(P.u.uMvp, false, this.mvp);
       gl.uniform2f(P.u.uView, c.width, c.height);
-      gl.uniform1f(P.u.uPx, this.pxScale);
+      // The same world-space radius reads much larger in perspective than in Obsidian's flat graph.
+      gl.uniform1f(P.u.uPx, this.pxScale * 0.72);
       gl.uniform1f(P.u.uMinPx, 1.6 * dpr);
       gl.uniform1f(P.u.uHover, hovering);
       gl.uniform2fv(P.u.uFog, fog);
+      gl.uniform3fv(P.u.uEye, eye);
+      gl.uniform3fv(P.u.uCenter, cam.target);
+      gl.uniform1f(P.u.uGlobe, globe);
       if (name === 'halo') {
         // 3D perspective already changes apparent size with depth. Keep the glow close to the node core so hubs
         // do not read as several times larger than their 2D counterparts.
         gl.uniform1f(P.u.uScale, light ? 2.4 : 3.0);
-        gl.uniform1f(P.u.uGain, light ? 0.18 : 0.7);
+        gl.uniform1f(P.u.uGain, deepSpace ? (light ? 0.08 : 0.22) : 0);
         gl.uniform1f(P.u.uLight, light);
         if (light) gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         else gl.blendEquation(gl.MAX);
@@ -2538,7 +3067,7 @@ class Graph3DView extends ItemView {
         gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         gl.enable(gl.DEPTH_TEST);
         gl.uniform1f(P.u.uScale, 1);
-        gl.uniform3fv(P.u.uFogColor, st.bg[1]);
+        gl.uniform3fv(P.u.uFogColor, deepSpace ? [0.02, 0.028, 0.07] : st.bg[1]);
         gl.uniform1f(P.u.uSheen, light ? 0 : 0.15);
         gl.uniform1f(P.u.uOnlyHi, 0);
       }
@@ -2614,6 +3143,11 @@ module.exports = class GraphStyler extends Plugin {
     this.openAfterExport = this.settings.openAfterExport !== false;
     this.rotate3d = this.settings.rotate3d !== false;
     this.rotate3dSpeed = finiteRange(this.settings.rotate3dSpeed, ROTATE_3D, ROTATE_3D_MIN, ROTATE_3D_MAX);
+    const graph3d = validGraph3dOptions(this.settings);
+    this.settings.graph3dLook = graph3d.look;
+    this.settings.graph3dLayout = graph3d.layout;
+    if (graph3d.centerPath) this.settings.orbitalCenterPath = graph3d.centerPath;
+    else delete this.settings.orbitalCenterPath;
     this.currentPreset = null;
 
     // 업데이트/재활성화 때 onunload가 끈 글로우 스니펫을 복원 (레지스트리 로드 후)
@@ -2666,8 +3200,14 @@ module.exports = class GraphStyler extends Plugin {
     // 폴더 구조가 바뀌면 색-그룹 캐시 무효화
     const invalidate = () => { this._queries = null; };
     this.registerEvent(this.app.vault.on('create', invalidate));
-    this.registerEvent(this.app.vault.on('delete', invalidate));
-    this.registerEvent(this.app.vault.on('rename', invalidate));
+    this.registerEvent(this.app.vault.on('delete', (file) => {
+      invalidate();
+      if (file && file.path === this.settings.orbitalCenterPath) this.setGraph3dOptions({ centerPath: '' });
+    }));
+    this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+      invalidate();
+      if (oldPath && oldPath === this.settings.orbitalCenterPath) this.setGraph3dOptions({ centerPath: '' });
+    }));
   }
 
   async onunload() {
@@ -2758,6 +3298,39 @@ module.exports = class GraphStyler extends Plugin {
     this.settings.rotate3dSpeed = this.rotate3dSpeed;
     for (const view of this.views3d()) view.kick();
     if (save) await this.saveData(this.settings);
+  }
+
+  async setGraph3dOptions(patch) {
+    const current = validGraph3dOptions(this.settings);
+    const next = validGraph3dOptions({
+      graph3dLook: Object.prototype.hasOwnProperty.call(patch, 'look') ? patch.look : current.look,
+      graph3dLayout: Object.prototype.hasOwnProperty.call(patch, 'layout') ? patch.layout : current.layout,
+      orbitalCenterPath: Object.prototype.hasOwnProperty.call(patch, 'centerPath') ? patch.centerPath : current.centerPath,
+    });
+    this.settings.graph3dLook = next.look;
+    this.settings.graph3dLayout = next.layout;
+    if (next.centerPath) this.settings.orbitalCenterPath = next.centerPath;
+    else delete this.settings.orbitalCenterPath;
+    for (const view of this.views3d()) view.applyGraph3dOptions(next);
+    const prior = this._save3dSettings || Promise.resolve();
+    this._save3dSettings = prior.catch(() => {}).then(() => this.saveData(this.settings));
+    await this._save3dSettings;
+  }
+
+  graph3dCenterCandidates() {
+    const active3d = this.views3d().find((view) => Array.isArray(view.files));
+    let files = active3d && active3d.files;
+    if (!files) {
+      const renderer = graphRenderer3d(this.app.workspace);
+      if (renderer) files = renderer.nodes.map((node) => {
+        const path = node && node.id;
+        const file = typeof path === 'string' ? this.app.vault.getAbstractFileByPath(path) : null;
+        return file ? { path, basename: file.basename, type: node.type || 'file' } : null;
+      }).filter(Boolean);
+    }
+    if (!files) files = this.app.vault.getMarkdownFiles().map((file) => ({ path: file.path, basename: file.basename, type: 'file' }));
+    return files.filter((file) => file.type === 'file' && /\.md$/i.test(file.path || ''))
+      .sort((a, b) => comparePath3d(a.path, b.path));
   }
 
   views3d() {
@@ -3596,6 +4169,13 @@ module.exports.presetFromRaw = presetFromRaw;
 module.exports.graphData3d = graphData3d;
 module.exports.graphDataFromRenderer3d = graphDataFromRenderer3d;
 module.exports.graphRenderer3d = graphRenderer3d;
+module.exports.validGraph3dOptions = validGraph3dOptions;
+module.exports.orbitalCenterIndex3d = orbitalCenterIndex3d;
+module.exports.orbitalPositions3d = orbitalPositions3d;
+module.exports.globePositions3d = globePositions3d;
+module.exports.globeLineGeometry3d = globeLineGeometry3d;
+module.exports.globeGuideGeometry3d = globeGuideGeometry3d;
+module.exports.packGlobeThickPairs3d = packGlobeThickPairs3d;
 module.exports.colorGroupTest3d = colorGroupTest3d;
 module.exports.initialPositions3d = initialPositions3d;
 module.exports.forceLayout3d = forceLayout3d;

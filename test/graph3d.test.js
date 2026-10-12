@@ -21,7 +21,7 @@ Module._load = function load(request, parent, isMain) {
 const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
 Module._load = originalLoad;
 const { graphData3d, graphDataFromRenderer3d, graphRenderer3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor,
-  displayRatio3d, lineMode3d, forceCurve3d, layoutParams3d } = GraphStyler;
+  displayRatio3d, lineMode3d, forceCurve3d, layoutParams3d, validGraph3dOptions, orbitalCenterIndex3d, orbitalPositions3d, globePositions3d, globeLineGeometry3d, globeGuideGeometry3d, packGlobeThickPairs3d } = GraphStyler;
 
 // A Graph3DView with just enough of Obsidian and the DOM stubbed to drive its pointer handlers and frame().
 // draw() and pick() are replaced by recorders; the handlers come from bindInput() through registerDomEvent.
@@ -33,6 +33,7 @@ Object.assign(global.window, { requestAnimationFrame: mainWindowUse, cancelAnima
 function stubView() {
   const rafs = [];
   const win = {
+    performance: { now: () => performance.now() },
     devicePixelRatio: 2,
     requestAnimationFrame: (cb) => { rafs.push(cb); return rafs.length; },
     cancelAnimationFrame() {},
@@ -126,6 +127,12 @@ function stubView() {
   const ring = [];
   for (let i = 0; i < 100; i++) ring.push(Math.cos(i) * 200, Math.sin(i) * 200, 0);
   assert.ok(Math.abs(nodeShare(ring).fit.r - 200) < 1, 'graphs larger than the floor are fitted as before');
+
+  const remoteShells = new Float32Array(100 * 3);
+  for (let i = 0; i < 100; i++) remoteShells[i * 3] = i < 93 ? 100 : 500;
+  const measured = (graphLayout) => proto.measureFit.call({ data: { n: 100 }, pos: remoteShells, graphLayout });
+  assert.strictEqual(measured('force').r, 100, 'force layout keeps the distant-island fit policy');
+  assert.strictEqual(measured('orbital').r, 500, 'orbital fits every hop shell so its outer notes remain in view');
 }
 
 // ---------------------------------------------------------------- wheel over the "no notes" message
@@ -212,6 +219,15 @@ function stubView() {
   assert.strictEqual(calls.draw, draws, 'a hidden view document does not draw');
   view.touch();
   view.stopLoop();
+}
+{
+  const { view, win } = stubView();
+  win.performance.now = () => 10000;
+  view.touch();
+  assert.strictEqual(view.lastInput, 10000, 'input uses the popout time origin');
+  view.resumeRotation();
+  assert.strictEqual(view.lastInput, 7000, 'rotation resumes against the popout RAF clock');
+  assert.ok(view.rotationSpeed(11500) > 0, 'rotation cannot wait for the main window clock');
 }
 {
   // onOpen wires its listeners and the resize observer to the view's own document and window
@@ -425,6 +441,7 @@ function uploads(calls) {
   global.getComputedStyle = () => ({ color: 'rgb(10, 20, 30)', backgroundColor: 'rgb(0, 0, 0)' });
   view.readStyle().then((st) => {
     assert.deepStrictEqual([st.nodeSize, st.lineSize], [2, 3]);
+    assert.deepStrictEqual(st.themeBg, [0, 0, 0], 'native graph look reads Obsidian theme background');
     assert.deepStrictEqual(st.forces, layoutParams3d({ repelStrength: 15 }), 'forces from the same graph options');
     options.nodeSizeMultiplier = 1;
     delete options.lineSizeMultiplier;
@@ -432,7 +449,7 @@ function uploads(calls) {
   }).then((st) => assert.deepStrictEqual([st.nodeSize, st.lineSize], [1, 1], 'defaults → ratio 1'));
 }
 {
-  // the hover radius uses the same sizes as the drawn nodes
+  // the pick radius follows the 72% perspective size used by the node shader
   const { view } = stubView();
   delete view.pick;
   view.setHover = (i) => { view.hover = i; };
@@ -447,7 +464,10 @@ function uploads(calls) {
   assert.strictEqual(view.hover, -1, 'small node: 30 px away is a miss');
   view.size = Float32Array.from([4]);
   view.pick();
-  assert.strictEqual(view.hover, 0, 'node size x2: the same point now hovers it');
+  assert.strictEqual(view.hover, -1, 'the unscaled radius would incorrectly catch this point');
+  view.mouse = [200 + 14, 150];   // 28 device px, inside the 28.8 px rendered radius
+  view.pick();
+  assert.strictEqual(view.hover, 0, 'the rendered 72% node radius remains selectable');
 }
 {
   // a 2D graph-settings change (graph.json rewritten) reaches an open 3D tab: a burst of writes leaves one re-style
@@ -605,8 +625,17 @@ function uploads(calls) {
 
   view.posDirty = true;
   frame(-1, 0);
+  assert.deepStrictEqual(uniform(pass('bg'), 'uC1'), [view.style.bg[0]], 'Original uses the active graph background, not only the Obsidian pane background');
+  assert.deepStrictEqual(uniform(pass('bg'), 'uC2'), [view.style.bg[1]], 'the graph background gradient follows the active preset');
   assert.deepStrictEqual([view.fit.r, view.cam.dist], [30, view.shownDist], 'camera held, but fog and zoom limits follow the layout size');
   assert.deepStrictEqual(uniform(pass('halo'), 'uScale'), [3], 'dark-theme halo stays close to the 3D node core');
+  assert.deepStrictEqual(uniform(pass('halo'), 'uGain'), [0], 'native look has no ornamental glow');
+  assert.deepStrictEqual(uniform(pass('core'), 'uPx'), [view.pxScale * 0.72], 'perspective node size is reduced for a flatter Obsidian-like read');
+  view.graphLook = 'deep-space';
+  view.posDirty = true;
+  frame(-1, 0);
+  assert.deepStrictEqual(uniform(pass('halo'), 'uGain'), [0.22], 'Deep Space retains only a restrained glow');
+  view.graphLook = 'original';
   const held = view.cam.dist;
   view.userMoved = false;
   view.posDirty = true;
@@ -700,6 +729,157 @@ function uploads(calls) {
     'an initialized global graph with zero visible nodes stays an empty snapshot instead of falling back to all notes');
   assert.strictEqual(graphRenderer3d({ getLeavesOfType: () => [{ view: { renderer: { nodes: [] } } }] }), null,
     'an incomplete renderer without its link list is not treated as a published snapshot');
+  const recentVisible = { nodes: [], links: [] };
+  const oldVisible = { nodes: [{ id: 'old.md' }], links: [] };
+  const hiddenNewer = { nodes: [{ id: 'hidden.md' }], links: [] };
+  const renderer = graphRenderer3d({ getLeavesOfType: () => [
+    { activeTime: 4, view: { renderer: oldVisible, contentEl: { clientWidth: 500 } } },
+    { activeTime: 9, view: { renderer: hiddenNewer, contentEl: { clientWidth: 0 } } },
+    { activeTime: 7, view: { renderer: recentVisible, contentEl: { clientWidth: 300 } } },
+  ] });
+  assert.strictEqual(renderer, recentVisible, 'most recently used visible graph wins over a newer hidden tab');
+  assert.strictEqual(graphRenderer3d({ getLeavesOfType: () => [
+    { activeTime: 1, view: { renderer: hiddenNewer, contentEl: { clientWidth: 0 } } },
+  ] }), hiddenNewer, 'when none are visible, the most recent valid renderer remains a usable fallback');
+}
+
+// ---------------------------------------------------------------- 3D settings and deterministic layouts
+{
+  assert.deepStrictEqual(validGraph3dOptions({}), { look: 'original', layout: 'force', centerPath: '' });
+  assert.deepStrictEqual(validGraph3dOptions({ graph3dLook: 'bad', graph3dLayout: 'bad', orbitalCenterPath: 42 }),
+    { look: 'original', layout: 'force', centerPath: '' }, 'invalid persisted values fall back without throwing');
+  assert.deepStrictEqual(validGraph3dOptions({ graph3dLook: 'deep-space', graph3dLayout: 'globe', orbitalCenterPath: 'A.md' }),
+    { look: 'deep-space', layout: 'globe', centerPath: 'A.md' });
+
+  const paths = ['A.md', 'B.md', 'C.md', 'D.md', 'E.md', 'F.md'];
+  const graph = graphData3d(paths, {
+    'A.md': { 'B.md': 1 }, 'B.md': { 'C.md': 1 }, 'C.md': { 'D.md': 1 }, 'E.md': { 'F.md': 1 },
+  });
+  const files = paths.map((path) => ({ path, type: 'file' }));
+  assert.strictEqual(orbitalCenterIndex3d(files, graph, 'missing.md'), 1, 'highest-degree Markdown center; path tie-break is stable');
+  assert.strictEqual(orbitalCenterIndex3d(files, graph, 'D.md'), 3, 'manual center path wins when present');
+  assert.strictEqual(orbitalCenterIndex3d([], graph, ''), -1, 'empty graph has no center');
+  const orbital = orbitalPositions3d(graph, paths, 0);
+  assert.deepStrictEqual(Array.from(orbital.slice(0, 3)), [0, 0, 0], 'selected center is at the origin');
+  assert(Math.hypot(...orbital.slice(3, 6)) < Math.hypot(...orbital.slice(6, 9)), 'shorter hop bands sit inside longer ones');
+  assert.notStrictEqual(orbital[13], 0, 'nodes on the disconnected outer shell occupy real 3D latitude, not a flattened ring');
+  assert(Math.hypot(...orbital.slice(12, 15)) > 100, 'disconnected nodes occupy the separate outer band');
+  assert(Array.from(orbital).every(Number.isFinite), 'orbital positions remain finite');
+  assert.deepStrictEqual(Array.from(orbital), Array.from(orbitalPositions3d(graph, paths, 0)), 'orbital positions are deterministic');
+  assert.strictEqual(orbitalPositions3d(graphData3d([], {}), [], -1).length, 0, 'empty orbital graph is safe');
+
+  const longPaths = ['A.md', 'B.md', 'C.md', 'D.md', 'E.md', 'F.md', 'G.md', 'Z.md'];
+  const longLinks = Object.fromEntries(longPaths.slice(0, 6).map((path, i) => [path, { [longPaths[i + 1]]: 1 }]));
+  const longGraph = graphData3d(longPaths, longLinks);
+  const longOrbital = orbitalPositions3d(longGraph, longPaths, 0);
+  const longRadii = longPaths.map((_, i) => Math.hypot(...longOrbital.slice(i * 3, i * 3 + 3)));
+  for (let i = 1; i < 6; i++) assert(longRadii[i] > longRadii[i - 1], `hop ${i + 1} is outside hop ${i}`);
+  assert(longRadii[7] > longRadii[6], 'disconnected nodes remain outside the furthest reachable hop');
+
+  const crowdedPaths = ['center.md', 'next.md', 'after.md', ...Array.from({ length: 40 }, (_, i) => `leaf-${i}.md`)];
+  const crowdedLinks = {
+    'center.md': { 'next.md': 1, ...Object.fromEntries(crowdedPaths.slice(3).map((path) => [path, 1])) },
+    'next.md': { 'after.md': 1 },
+  };
+  const crowdedGraph = graphData3d(crowdedPaths, crowdedLinks);
+  const crowdedOrbital = orbitalPositions3d(crowdedGraph, crowdedPaths, 0);
+  const crowdedRadii = crowdedPaths.map((_, i) => Math.hypot(...crowdedOrbital.slice(i * 3, i * 3 + 3)));
+  assert(crowdedRadii[2] > Math.max(...crowdedRadii.slice(3)), 'a crowded nearer band cannot push nodes past the next hop band');
+
+  const gp = globePositions3d(paths, [0, 0, 1, 1, -1, -1]);
+  const reversePaths = paths.slice().reverse();
+  const reversePos = globePositions3d(reversePaths, [-1, -1, 1, 1, 0, 0]);
+  for (let i = 0; i < paths.length; i++) {
+    const j = reversePaths.indexOf(paths[i]);
+    assert.deepStrictEqual(Array.from(gp.slice(i * 3, i * 3 + 3)), Array.from(reversePos.slice(j * 3, j * 3 + 3)),
+      `${paths[i]} keeps its globe position if input order changes`);
+  }
+  for (let i = 0; i < paths.length; i++) {
+    const r = Math.hypot(gp[i * 3], gp[i * 3 + 1], gp[i * 3 + 2]);
+    assert(Math.abs(r - 140) < 1e-4, `globe node ${i} lies on the sphere`);
+  }
+  assert.strictEqual(globePositions3d([], []).length, 0, 'empty globe graph is safe');
+  const antipodalPos = Float32Array.from([140, 0, 0, -140, 0, 0]);
+  const arc = globeLineGeometry3d(antipodalPos, Uint32Array.from([0, 1]), Float32Array.from([1, 0, 0, 0, 0, 1]), 6);
+  assert.strictEqual(arc.positions.length, 36, 'six geodesic segments produce twelve line vertices');
+  assert.strictEqual(arc.edgeOffsets[1], 12, 'edge offsets map to the twelve segment vertices');
+  assert(Array.from(arc.positions).every(Number.isFinite), 'antipodal links have a deterministic finite fallback arc');
+  for (let i = 0; i < arc.positions.length; i += 3) {
+    assert(Math.abs(Math.hypot(...arc.positions.slice(i, i + 3)) - 140) < 1e-3, 'geodesic samples stay on the globe');
+  }
+  const guides = globeGuideGeometry3d();
+  assert.strictEqual(guides.positions.length, guides.colors.length);
+  assert(Array.from(guides.positions).every(Number.isFinite), 'guide lines remain finite');
+  const thick = packGlobeThickPairs3d(arc);
+  const highlighted = packGlobeThickPairs3d(arc, [0]);
+  assert.strictEqual(thick.length, 72, 'each of six geodesic segments has its own thick-line quad endpoints and colours');
+  assert.deepStrictEqual(Array.from(highlighted), Array.from(thick), 'hover geometry selects the same geodesic segments');
+}
+{
+  const angle = 179 * Math.PI / 180;
+  const positions = Float32Array.from([140, 0, 0, 140 * Math.cos(angle), 140 * Math.sin(angle), 0]);
+  const colors = Float32Array.from([1, 0, 0, 0, 0, 1]);
+  const links = Uint32Array.from([0, 1]);
+  const arc = globeLineGeometry3d(positions, links, colors);
+  assert(Math.hypot(...arc.positions.slice(-3).map((v, k) => v - positions[k + 3])) < 1e-4,
+    'a nearly antipodal arc still terminates at its actual destination node');
+  for (let vertex = 0; vertex < arc.positions.length; vertex += 6) {
+    const midpoint = [0, 1, 2].map(k => (arc.positions[vertex + k] + arc.positions[vertex + k + 3]) / 2);
+    assert(140 - Math.hypot(...midpoint) < 0.15, 'long globe links stay smooth instead of forming six visible corners');
+    if (vertex) assert.deepStrictEqual(Array.from(arc.positions.slice(vertex, vertex + 3)),
+      Array.from(arc.positions.slice(vertex - 3, vertex)), 'adjacent arc segments meet without gaps');
+  }
+  const short = 10 * Math.PI / 180;
+  const mixed = globeLineGeometry3d(Float32Array.from([140, 0, 0, 140 * Math.cos(short), 140 * Math.sin(short), 0, -140, 0, 0]),
+    Uint32Array.from([0, 1, 0, 2]), Float32Array.from([1, 0, 0, 0, 1, 0, 0, 0, 1]));
+  assert(mixed.edgeOffsets[1] < mixed.edgeOffsets[2] - mixed.edgeOffsets[1], 'short links use fewer segments than long links');
+  const second = packGlobeThickPairs3d(mixed, [1]);
+  assert.strictEqual(second.length, (mixed.edgeOffsets[2] - mixed.edgeOffsets[1]) * 6,
+    'thick hover selects all and only the segments of a variable-length arc');
+  assert.deepStrictEqual(Array.from(second.slice(0, 3)), [140, 0, 0]);
+  assert.deepStrictEqual(Array.from(second.slice(-9, -6)), [-140, 0, 0]);
+  const empty = globeLineGeometry3d(new Float32Array(0), new Uint32Array(0), new Float32Array(0));
+  assert.deepStrictEqual([empty.positions.length, empty.colors.length, ...empty.edgeOffsets], [0, 0, 0]);
+}
+{
+  const paths = ['A.md', 'B.md', 'C.md'];
+  const view = Object.create(Graph3DView.prototype);
+  view.data = graphData3d(paths, { 'A.md': { 'B.md': 1 }, 'B.md': { 'C.md': 1 } });
+  view.files = paths.map((path) => ({ path, type: 'file' }));
+  view.paths = paths;
+  view.groupIndex = Int32Array.from([0, 0, -1]);
+  view.graphLayout = 'force';
+  view.graphLook = 'original';
+  view.centerPath = '';
+  view.pos = Float32Array.from([4, 0, 0, -4, 0, 0, 0, 4, 0]);
+  view.forcePos = view.pos.slice();
+  view.hi = new Float32Array(3);
+  view.hover = -1;
+  view.layoutDone = false;
+  view.layoutAlpha = 0.4;
+  view.gl = { isContextLost: () => false };
+  view.cam = { theta: 1.2, phi: 0.3, dist: 200, target: [8, 9, 10] };
+  view.label = { toggleClass() {} };
+  const calls = { stopped: 0, initialized: 0, force: 0, kicked: 0 };
+  view.stopLayout = () => { calls.stopped++; view.worker = null; };
+  view.initGL = () => { calls.initialized++; };
+  view.measureFit = () => ({ r: 100, max: 140 });
+  view.fitDistance = () => 300;
+  view.startLayout = () => { calls.force++; };
+  view.kick = () => { calls.kicked++; };
+  view.applyGraph3dOptions({ look: 'deep-space', layout: 'orbital', centerPath: 'B.md' });
+  assert.strictEqual(view.graphLook, 'deep-space');
+  assert.strictEqual(view.graphLayout, 'orbital');
+  assert.deepStrictEqual([view.cam.theta, view.cam.phi], [1.2, 0.3], 'camera orientation survives layout changes');
+  assert.deepStrictEqual(view.cam.target, [0, 0, 0], 'layout change recenters the camera');
+  assert.strictEqual(view.pos[3], 0, 'manual orbital center is placed at the origin');
+  assert.strictEqual(calls.force, 0, 'static layout does not start the force worker');
+  view.applyGraph3dOptions({ look: 'deep-space', layout: 'globe', centerPath: 'B.md' });
+  assert(Math.abs(Math.hypot(view.pos[0], view.pos[1], view.pos[2]) - 140) < 1e-4, 'globe mode switches to spherical coordinates');
+  view.applyGraph3dOptions({ look: 'original', layout: 'force', centerPath: 'B.md' });
+  assert.deepStrictEqual(Array.from(view.pos), Array.from(view.forcePos), 'returning to force restores its per-view coordinates');
+  assert.strictEqual(calls.force, 1, 'returning to force restarts the force worker');
+  assert.strictEqual(calls.initialized, 3, 'each layout change rebuilds GPU geometry');
 }
 
 // ---------------------------------------------------------------- colour groups (the queries Graph Styler writes)
