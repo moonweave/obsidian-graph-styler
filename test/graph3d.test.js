@@ -662,6 +662,16 @@ function uploads(calls) {
   assert.deepStrictEqual(uniform(pass('halo'), 'uScale'), [3], 'dark-theme halo stays close to the 3D node core');
   assert.deepStrictEqual(uniform(pass('halo'), 'uGain'), [0], 'native look has no ornamental glow');
   assert.deepStrictEqual(uniform(pass('core'), 'uPx'), [view.pxScale * 0.72], 'perspective node size is reduced for a flatter Obsidian-like read');
+  const dpr = view.canvas.width / view.canvas.clientWidth;
+  assert.deepStrictEqual(uniform(pass('core'), 'uMinPx'), [1.6 * dpr * 0.72], 'minimum radius receives the same perspective correction');
+  for (const nodeSize of [0.1, 0.5, 1, 2, 5]) {
+    view.style.nodeSize = nodeSize;
+    frame(-1, 0);
+    for (const name of ['core', 'halo']) {
+      assert.deepStrictEqual(uniform(pass(name), 'uMinPx'), [1.6 * dpr * 0.72 * nodeSize], 'small distant nodes follow the node-size setting in both passes');
+    }
+  }
+  delete view.style.nodeSize;
   view.graphLook = 'deep-space';
   view.posDirty = true;
   frame(-1, 0);

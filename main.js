@@ -3090,7 +3090,7 @@ class Graph3DView extends ItemView {
       gl.uniform2f(P.u.uView, c.width, c.height);
       // The same world-space radius reads much larger in perspective than in Obsidian's flat graph.
       gl.uniform1f(P.u.uPx, this.pxScale * 0.72);
-      gl.uniform1f(P.u.uMinPx, 1.6 * dpr);
+      gl.uniform1f(P.u.uMinPx, 1.6 * dpr * 0.72 * (st.nodeSize ?? 1));
       gl.uniform1f(P.u.uHover, hovering);
       gl.uniform2fv(P.u.uFog, fog);
       gl.uniform3fv(P.u.uEye, eye);
