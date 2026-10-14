@@ -152,7 +152,7 @@ Graph Styler writes Obsidian's own colour groups, so you can see and edit them u
 | One folder, no tags | That folder |
 | No folders, no tags | Your existing groups are kept; background, glow and node colours still change |
 
-**⚪ Mono** clears the groups so every note has the same colour. Applying a preset replaces your colour groups; the original `graph.json` is backed up the first time.
+With **Keep my color groups** off (the default), **⚪ Mono** clears the groups so every note has the same colour, and applying another preset replaces your colour groups. Turn the option on to preserve them instead. The original `graph.json` is backed up the first time.
 
 ## FAQ and troubleshooting
 
