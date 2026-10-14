@@ -31,6 +31,8 @@ const STRINGS = {
     desc: 'Tap a preset — colors and glow change instantly while your current graph physics stays unchanged.',
     themes: 'Themes',
     physicsNote: 'Only color and glow change; physics and sizes stay.',
+    keepGroups: 'Keep my color groups',
+    keepGroupsNote: 'On the next preset, keep group rules and colors, including Mono. Glow can still change brightness. This does not restore earlier groups.',
     restore: '↩︎ Restore original',
     restoreNote: 'Back to the settings saved before Graph Styler first changed this vault.',
     restoreConfirm: 'Restore the graph settings saved before Graph Styler first changed this vault? Changes made since then will be overwritten.',
@@ -126,6 +128,8 @@ const STRINGS = {
     desc: '프리셋을 누르면 색과 글로우가 바로 바뀌고, 현재 그래프 물리는 그대로 유지됩니다.',
     themes: '테마',
     physicsNote: '색과 글로우만 바뀌고 물리·크기 설정은 그대로입니다.',
+    keepGroups: '내 색상 그룹 유지',
+    keepGroupsNote: '다음 테마부터 Mono를 포함해 그룹 조건과 색을 유지합니다. 글로우에 따른 밝기는 바뀔 수 있으며, 이전 그룹을 복원하지는 않습니다.',
     restore: '↩︎ 원래대로 되돌리기',
     restoreNote: 'Graph Styler가 이 vault를 처음 바꾸기 전에 저장한 설정으로 돌아갑니다.',
     restoreConfirm: 'Graph Styler가 이 vault를 처음 적용하기 전의 그래프 설정으로 되돌릴까요? 그 이후의 변경은 덮어써집니다.',
@@ -933,6 +937,7 @@ class StylerView extends ItemView {
     // built-in presets
     c.createEl('div', { cls: 'gs-section', text: L.themes });
     c.createEl('p', { text: L.physicsNote, cls: 'gs-note' });
+    this.buildGroupPreservation(c);
     const list = c.createDiv({ cls: 'gs-list gs-grid' });
     for (const key of Object.keys(PRESETS)) this.presetButton(list, PRESETS[key]);
 
@@ -980,6 +985,19 @@ class StylerView extends ItemView {
     return details.createDiv({ cls: 'gs-group-body' });
   }
 
+  buildGroupPreservation(parent) {
+    const row = parent.createEl('label', { cls: 'gs-row gs-check' });
+    const toggle = row.createEl('input');
+    toggle.type = 'checkbox';
+    toggle.checked = this.plugin.settings.keepColorGroups === true;
+    row.createSpan({ text: L.keepGroups });
+    parent.createEl('p', { text: L.keepGroupsNote, cls: 'gs-note' });
+    toggle.onchange = async () => {
+      await this.plugin.setKeepColorGroups(toggle.checked);
+      for (const input of this._groupColorInputs || []) input.disabled = toggle.checked;
+    };
+  }
+
   // 컨트롤 값은 plugin.draft에 write-through → 재렌더/저장 후에도 유지(리셋 안 됨)
   buildCustomize(c) {
     const draft = this.plugin.draft;
@@ -990,10 +1008,13 @@ class StylerView extends ItemView {
     const colorRow = details.createDiv({ cls: 'gs-row' });
     colorRow.createSpan({ cls: 'gs-row-label', text: L.f.colors });
     const colorBox = colorRow.createSpan({ cls: 'gs-colors' });
+    this._groupColorInputs = [];
     draft.colors.forEach((hex, i) => {
       const input = colorBox.createEl('input');
       input.type = 'color';
       input.value = hex;
+      input.disabled = this.plugin.settings.keepColorGroups === true;
+      this._groupColorInputs.push(input);
       input.oninput = () => { draft.colors[i] = input.value; this.schedulePreview(); };
     });
 
@@ -3534,6 +3555,11 @@ module.exports = class GraphStyler extends Plugin {
     return typeof path === 'string' && path ? this.app.vault.getAbstractFileByPath(path) : null;
   }
 
+  async setKeepColorGroups(on) {
+    this.settings.keepColorGroups = on === true;
+    await this.saveData(this.settings);
+  }
+
   async setExportFolder(folder) {
     this.exportFolder = exportFolderPath(folder);
     this.settings.exportFolder = this.exportFolder;
@@ -3927,10 +3953,13 @@ module.exports = class GraphStyler extends Plugin {
 
   async _doApply(preset, opts) {
     const live = !!(opts && opts.silent);
+    const keepGroups = this.settings.keepColorGroups === true;
     try {
       await this.backupOnce();
       const graphOptions = graphOptionsForPreset(preset);
-      if (preset.colors.length === 0) {
+      if (keepGroups) {
+        delete graphOptions.colorGroups;
+      } else if (preset.colors.length === 0) {
         graphOptions.colorGroups = [];                 // mono: 강제 단색
       } else {
         const queries = this.getColorQueries(preset.colors.length);
@@ -3939,14 +3968,14 @@ module.exports = class GraphStyler extends Plugin {
       }
       const css = makeGlowCss(preset.palette);
       this.ensureLiveStyle();
-      const merged = await this.writeGraph(graphOptions);
+      const merged = await this.writeGraph(graphOptions, keepGroups);
       this.liveStyle.textContent = css;                  // graph.json 확정 뒤 즉시 시각 반영
       await this.installSnippet(preset.id, css);          // 리로드 영속용
       // Built-ins may update colors in the live engine, but never send force
       // keys. Custom presets explicitly opt into the full force update.
       // 그래프가 열려 있지 않으면 '먼저 열어주세요'만 보인다. 적용은 됐지만 눈에 보이는 건 없으니 성공이라 하지 않는다.
       let shown = true;
-      if (Object.keys(graphOptions).length) {
+      if (Object.keys(graphOptions).length || keepGroups) {
         shown = await this.reloadGraph(graphOptions, live, true, preset.applyForces);
       }
       this.currentForceOptions = forceOptionsFromGraph(merged);
@@ -3976,7 +4005,7 @@ module.exports = class GraphStyler extends Plugin {
     this._backedUp = true;
   }
 
-  async writeGraph(graphOptions) {
+  async writeGraph(graphOptions, keepGroups = false) {
     const adapter = this.app.vault.adapter;
     const maxAttempts = 2;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -3991,6 +4020,15 @@ module.exports = class GraphStyler extends Plugin {
       const after = await this.readGraphSnapshot();
       const unchanged = before.exists === after.exists && before.contents === after.contents;
       if (!unchanged) continue;
+      if (keepGroups) {
+        const core = this.app.internalPlugins && this.app.internalPlugins.plugins
+          && this.app.internalPlugins.plugins.graph && this.app.internalPlugins.plugins.graph.instance;
+        // The core graph can hold a group edit which has not reached graph.json yet.
+        if (core && core.options && Array.isArray(core.options.colorGroups)) {
+          merged.colorGroups = core.options.colorGroups.map((group) =>
+            Object.assign({}, group, { color: Object.assign({}, group.color) }));
+        }
+      }
       await adapter.write(this.graphPath(), JSON.stringify(merged, null, 2));
       this.syncCoreGraphOptions(merged);
       return merged;
@@ -4005,6 +4043,7 @@ module.exports = class GraphStyler extends Plugin {
   // 사용자가 그 로컬 그래프에 정한 그룹은 덮지 않고, 한 로컬 그래프는 한 번만 본다 — 그 뒤에 사용자가
   // 그룹을 비워도 다시 채우지 않는다.
   async colorNewLocalGraphs() {
+    if (this.settings.keepColorGroups === true) return;
     const fresh = this.app.workspace.getLeavesOfType('localgraph').filter((leaf) => !this._seenLocalGraphs.has(leaf));
     if (!fresh.length) return;
     for (const leaf of fresh) this._seenLocalGraphs.add(leaf);
@@ -4110,7 +4149,9 @@ module.exports = class GraphStyler extends Plugin {
     this.ensureLiveStyle();
     this.liveStyle.textContent = makeGlowCss(preset.palette);
     const graphOptions = graphOptionsForPreset(preset);
-    if (preset.colors.length) {
+    if (this.settings.keepColorGroups === true) {
+      delete graphOptions.colorGroups;
+    } else if (preset.colors.length) {
       const queries = this.getColorQueries(preset.colors.length);
       if (queries.length) graphOptions.colorGroups = makeGroups(queries, preset.colors);
     }

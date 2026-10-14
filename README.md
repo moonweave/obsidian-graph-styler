@@ -50,6 +50,12 @@ Fourteen presets, each with its own colours, background and glow:
 
 The presets sit in a two-column grid. The one in use has a frame and a check mark. Presets change colours, glow and colour groups only. Your forces and size settings stay as they are. Each built-in preset is also a command: **Graph Styler: Apply: Neon** and so on.
 
+### Keep your colour groups
+
+If you already use graph groups to distinguish topics, turn on **Keep my color groups** before applying a preset. Group rules, order and colours stay intact, including with Mono and live preview. Glow can still change their apparent brightness. Local graphs keep their own groups too.
+
+The option is off by default, remembered for this vault and not included in shared presets. It protects future changes; it does not recover groups replaced earlier. Group colour pickers are disabled while it is on. Other preset settings still apply, including saved physics settings in custom presets. **Restore original** remains an explicit restore, and existing 3D group-query support is unchanged.
+
 ### Make your own preset
 
 Expand **🎛️ Customize**, pick group colours, a background and the glow, and move the physics sliders. The graph follows as you drag. Name it and select **💾 Save as preset**; it appears under *My presets*.

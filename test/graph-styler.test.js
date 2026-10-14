@@ -1379,9 +1379,9 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     const empty = await renderPanel(GraphStyler);
     const top = empty.panel.children.map((el) => [el.tag, [...el.cls].join(' ')]);
     assert.deepStrictEqual(top.map(([, cls]) => cls), [
-      '', 'setting-item-description', 'gs-section', 'gs-note', 'gs-list gs-grid',
+      '', 'setting-item-description', 'gs-section', 'gs-note', 'gs-row gs-check', 'gs-note', 'gs-list gs-grid',
       'gs-group', 'gs-group', 'gs-group', 'gs-group', 'gs-footer', 'gs-credit']);
-    assert.strictEqual(empty.panel.children[4].children.length, 14);
+    assert.strictEqual(empty.panel.querySelector('.gs-grid').children.length, 14);
     assert.deepStrictEqual(empty.panel.children.filter((el) => el.tag === 'details')
       .map((el) => el.children[0].text), ['🎛️ Customize', '📋 Share code', '🖼️ Export image', '🧊 3D (experimental)']);
     assert.ok(empty.panel.children.filter((el) => el.tag === 'details').every((el) => !el.open), 'groups start closed');
@@ -1391,7 +1391,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.ok(withMine.panel.walk().some((el) => el.text === 'My presets'));
     assert.ok(withMine.panel.children.some((el) => el.cls.has('gs-list') && !el.cls.has('gs-grid') && el.children[0].cls.has('gs-preset-row')));
     // Restore is the last action before the credit and still runs plugin.restore.
-    const footer = empty.panel.children[9];
+    const footer = empty.panel.querySelector('.gs-footer');
     const restoreButton = footer.children[0];
     assert.deepStrictEqual([restoreButton.tag, restoreButton.text], ['button', '↩︎ Restore original']);
     let restored = 0;
@@ -1399,14 +1399,14 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     restoreButton.onclick();
     assert.strictEqual(restored, 1);
     // Import lives in the Share code group.
-    const share = empty.panel.children[6];
+    const share = empty.panel.children.filter((el) => el.tag === 'details')[1];
     const imports = [];
     empty.plugin.importShareCode = (code) => imports.push(code);
     share.walk().find((el) => el.tag === 'input').value = 'gs1.abc';
     share.walk().find((el) => el.cls.has('gs-import')).onclick();
     assert.deepStrictEqual(imports, ['gs1.abc']);
     // Open state is kept by group id: opening records it, the re-render restores it, closing forgets it.
-    const exportGroup = empty.panel.children[7];
+    const exportGroup = empty.panel.children.filter((el) => el.tag === 'details')[2];
     exportGroup.open = true;
     exportGroup.listeners.toggle();
     const nested = exportGroup.walk().find((el) => el.cls.has('gs-sub'));
@@ -2088,3 +2088,78 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
   assert.deepStrictEqual(rejected.saved, []);
   assert.deepStrictEqual(rejected.custom, [{ id: 'keep' }]);
 })();
+
+(async () => {
+  const mine = [
+    { query: 'tag:#question OR path:"Drafts"', color: { a: 0.7, rgb: 0x2266ff } },
+    { query: 'tag:#evidence', color: { a: 1, rgb: 0x22aa66 } },
+  ];
+  for (const custom of [false, true]) {
+    for (const mono of [false, true]) {
+      const { app, files, engineOptions } = makeHarness();
+      const disk = JSON.parse(files['.obsidian/graph.json']);
+      disk.colorGroups = [{ query: 'stale', color: { a: 1, rgb: 123 } }];
+      files['.obsidian/graph.json'] = JSON.stringify(disk);
+      app.internalPlugins = { plugins: { graph: { instance: { options: { colorGroups: structuredClone(mine) } } } } };
+      const oldLeaves = app.workspace.getLeavesOfType;
+      const localGroups = [{ query: 'local only', color: { a: 1, rgb: 456 } }];
+      const local = { view: { engine: { setOptions: (options) => { assert(!('colorGroups' in options)); }, render() {}, getOptions: () => ({ colorGroups: localGroups }) } }, getViewState: () => ({ type: 'localgraph' }), setViewState: async () => {} };
+      app.workspace.getLeavesOfType = (type) => type === 'localgraph' ? [local] : oldLeaves(type);
+      const plugin = new GraphStyler(app);
+      plugin.settings = { custom: [], keepColorGroups: true };
+      const chosen = preset(custom);
+      if (mono) chosen.colors = [];
+      await plugin._doApply(chosen);
+      assert.deepStrictEqual(JSON.parse(files['.obsidian/graph.json']).colorGroups, mine, 'preserve the latest core groups, not stale disk groups');
+      assert.deepStrictEqual(app.internalPlugins.plugins.graph.instance.options.colorGroups, mine);
+      assert(engineOptions.every((options) => !('colorGroups' in options)));
+      assert.strictEqual(localGroups[0].query, 'local only');
+      const beforePreview = files['.obsidian/graph.json'];
+      plugin.previewLive(chosen);
+      assert.strictEqual(files['.obsidian/graph.json'], beforePreview);
+      assert(engineOptions.every((options) => !('colorGroups' in options)));
+      // Empty live groups are intentional; do not revive older groups from disk.
+      app.internalPlugins.plugins.graph.instance.options.colorGroups = [];
+      await plugin._doApply(chosen);
+      assert.deepStrictEqual(JSON.parse(files['.obsidian/graph.json']).colorGroups, []);
+      await plugin.colorNewLocalGraphs(); // preservation mode must not recolor fresh local graphs
+    }
+  }
+  // Without a live core, preserve disk groups. Opting out retains the old grouping behavior.
+  for (const keepColorGroups of [true, false, undefined]) {
+    const { app, files } = makeHarness();
+    files['.obsidian/graph.json'] = JSON.stringify({ colorGroups: mine });
+    const plugin = new GraphStyler(app);
+    plugin.settings = { custom: [], keepColorGroups };
+    await plugin._doApply(preset(false));
+    const groups = JSON.parse(files['.obsidian/graph.json']).colorGroups;
+    if (keepColorGroups) assert.deepStrictEqual(groups, mine);
+    else assert.notDeepStrictEqual(groups, mine);
+    await plugin._doApply(Object.assign(preset(false), { colors: [] }));
+    assert.deepStrictEqual(JSON.parse(files['.obsidian/graph.json']).colorGroups, keepColorGroups ? mine : []);
+  }
+  const loaded = await exportScaleAfterLoad({ custom: [], keepColorGroups: true });
+  const plugin = loaded.plugin;
+  let factory;
+  plugin.registerView = (type, make) => { if (type === 'graph-styler-panel') factory = make; };
+  plugin.loadData = async () => ({ custom: [], keepColorGroups: true });
+  await plugin.onload();
+  const view = factory({});
+  view.contentEl = new FakeEl('div');
+  view.render();
+  const row = view.contentEl.walk().find((el) => el.tag === 'label' && el.children.some((child) => child.text === 'Keep my color groups'));
+  const toggle = row.children.find((el) => el.tag === 'input');
+  assert.strictEqual(toggle.checked, true);
+  assert(view._groupColorInputs.every((input) => input.disabled));
+  toggle.checked = false;
+  await toggle.onchange();
+  assert.strictEqual(loaded.saved.at(-1).keepColorGroups, false);
+  assert(view._groupColorInputs.every((input) => !input.disabled));
+  toggle.checked = true;
+  await toggle.onchange();
+  assert.strictEqual(loaded.saved.at(-1).keepColorGroups, true);
+  assert(view._groupColorInputs.every((input) => input.disabled));
+  const raw = { label: 'Public style', colors: ['#123456'], keepColorGroups: true };
+  assert.strictEqual(GraphStyler.encodeShareCode(raw), GraphStyler.encodeShareCode(Object.assign({}, raw, { keepColorGroups: false })), 'the vault-only flag is not shared');
+  console.log('Color group preservation: apply, Mono, preview, live/disk groups, local graphs, opt-out, UI persistence and sharing passed');
+})().catch((error) => { console.error(error); process.exitCode = 1; });
