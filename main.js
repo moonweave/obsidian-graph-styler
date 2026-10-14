@@ -107,6 +107,8 @@ const STRINGS = {
     group3d: '🧊 3D (experimental)',
     panel3dNote: 'A new tab with your notes and links in 3D, in the colours of the current preset.',
     rotate3d: 'Auto-rotate',
+    startRotate3d: 'Start rotation',
+    stopRotate3d: 'Pause rotation',
     rotate3dSpeed: 'Rotation speed',
     look3d: 'Look',
     layout3d: 'Layout',
@@ -204,6 +206,8 @@ const STRINGS = {
     group3d: '🧊 3D (실험)',
     panel3dNote: '새 탭에 노트와 링크를 지금 프리셋의 색으로 입체로 보여 줘요.',
     rotate3d: '자동 회전',
+    startRotate3d: '회전 시작',
+    stopRotate3d: '회전 멈춤',
     rotate3dSpeed: '회전 속도',
     look3d: '화면 분위기',
     layout3d: '노드 배치',
@@ -2096,7 +2100,7 @@ void main() {
   vec3 normal = aPos - uCenter;
   float side = length(normal) < 1e-5 ? 1.0 : dot(normalize(normal), normalize(uEye - uCenter));
   vFade = mix(1.0, mix(0.12, 1.0, smoothstep(-0.2, 0.2, side)), uGlobe);
-  float fog = smoothstep(uFog.x, uFog.y, c.w) * 0.4;
+  float fog = smoothstep(uFog.x, uFog.y, c.w) * 0.72;
   vMix = max(fog, uHover * (1.0 - aHi) * 0.7);
   gl_Position = c + vec4(aCorner * px * uScale / uView * 2.0 * c.w, 0.0, 0.0);
 }`,
@@ -2126,7 +2130,10 @@ void main() {
   float d = length(vUv);
   float a = (1.0 - smoothstep(1.0 - 1.5 / max(vPx, 1.0), 1.0, d)) * vFade;
   if (a <= 0.01) discard;
-  vec3 c = mix(mix(vCol, vec3(1.0), uSheen * (1.0 - d * d)), uFogColor, vMix);
+  vec3 normal = vec3(vUv, sqrt(max(0.0, 1.0 - d * d)));
+  float diffuse = max(0.0, dot(normal, normalize(vec3(-0.35, 0.45, 0.82))));
+  float shade = mix(1.0, 0.56 + 0.44 * diffuse, smoothstep(2.0, 5.0, vPx));
+  vec3 c = mix(mix(vCol * shade, vec3(1.0), uSheen * (1.0 - d * d)), uFogColor, vMix);
   o = vec4(c * a, a);
 }`,
 };
@@ -2162,6 +2169,9 @@ class Graph3DView extends ItemView {
       return;
     }
     this.label = el.createDiv({ cls: 'gs3d-label' });
+    this.rotationButton = el.createEl('button', { cls: 'gs3d-rotation', attr: { type: 'button' } });
+    this.syncRotationControl();
+    this.registerDomEvent(this.rotationButton, 'click', () => this.toggleRotation());
     this.registerDomEvent(this.canvas, 'webglcontextlost', (e) => {
       e.preventDefault();
       this.stopLoop();
@@ -2744,8 +2754,19 @@ class Graph3DView extends ItemView {
     return base * k * k * (3 - 2 * k);
   }
 
+  syncRotationControl() {
+    if (!this.rotationButton) return;
+    this.rotationButton.textContent = this.plugin.rotate3d ? L.stopRotate3d : L.startRotate3d;
+    this.rotationButton.ariaPressed = String(!!this.plugin.rotate3d);
+  }
+
+  toggleRotation() {
+    return this.plugin.setRotate3d(!this.plugin.rotate3d);
+  }
+
   // 자동 회전을 다시 켜면 멈춰 있던 그래프가 툭 출발하지 않게, 입력이 끝난 뒤처럼 천천히 속도를 올린다.
   resumeRotation() {
+    this.syncRotationControl();
     if (this.plugin.rotate3d && !this.drag) this.lastInput = this.contentEl.win.performance.now() - IDLE_3D_MS;
     this.kick();
   }
@@ -2958,7 +2979,7 @@ class Graph3DView extends ItemView {
     this.viewMatrix = lookAt3d(eye, cam.target);
     this.mvp = mat4Mul3d(perspective3d(cam.fov, c.width / c.height, near, dist + this.fit.max * 3), this.viewMatrix);
     this.pxScale = c.height / (2 * Math.tan(cam.fov / 2));
-    const fog = [dist - this.fit.r * 0.5, dist + this.fit.r * 1.3];
+    const fog = [dist - this.fit.r * 0.8, dist + this.fit.r];
     const hovering = this.hover >= 0 ? 1 : 0;
     const deepSpace = this.graphLook === 'deep-space' ? 1 : 0;
     const globe = this.graphLayout === 'globe' ? 1 : 0;
@@ -3309,6 +3330,7 @@ module.exports = class GraphStyler extends Plugin {
     this.rotate3d = !!on;
     this.settings.rotate3d = this.rotate3d;
     for (const view of this.views3d()) view.resumeRotation();
+    this.refreshViews();
     await this.saveData(this.settings);
   }
 

@@ -23,6 +23,37 @@ Module._load = originalLoad;
 const { graphData3d, graphDataFromRenderer3d, graphRenderer3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor,
   displayRatio3d, lineMode3d, forceCurve3d, layoutParams3d, validGraph3dOptions, orbitalCenterIndex3d, orbitalPositions3d, globePositions3d, globeLineGeometry3d, globeGuideGeometry3d, packGlobeThickPairs3d } = GraphStyler;
 
+// Rotation controls share the persisted panel setting without resetting the camera.
+{
+  const plugin = new GraphStyler();
+  plugin.settings = { rotate3d: true };
+  plugin.rotate3d = true;
+  plugin.rotate3dSpeed = 0.12;
+  const view = new Graph3DView({}, plugin);
+  view.rotationButton = {};
+  view.contentEl = { win: { performance: { now: () => 10000 } } };
+  view.kick = () => {};
+  plugin.views3d = () => [view];
+  let refreshes = 0;
+  plugin.refreshViews = () => { refreshes += 1; };
+  const saved = [];
+  plugin.saveData = async (settings) => { saved.push(settings.rotate3d); };
+  const camera = JSON.stringify(view.cam);
+  view.syncRotationControl();
+  assert.strictEqual(view.rotationButton.textContent, 'Pause rotation');
+  view.toggleRotation();
+  assert.strictEqual(view.rotationSpeed(10000), 0, 'pause stops rotation immediately');
+  assert.strictEqual(view.rotationButton.textContent, 'Start rotation');
+  assert.strictEqual(view.rotationButton.ariaPressed, 'false');
+  view.toggleRotation();
+  assert.strictEqual(view.rotationButton.textContent, 'Pause rotation');
+  assert.strictEqual(view.rotationButton.ariaPressed, 'true');
+  assert.ok(view.rotationSpeed(15000) > 0, 'start resumes rotation');
+  assert.deepStrictEqual(saved, [false, true], 'both actions persist the shared setting');
+  assert.strictEqual(refreshes, 2, 'both actions synchronize the panel');
+  assert.strictEqual(JSON.stringify(view.cam), camera, 'start and pause preserve camera');
+}
+
 // A Graph3DView with just enough of Obsidian and the DOM stubbed to drive its pointer handlers and frame().
 // draw() and pick() are replaced by recorders; the handlers come from bindInput() through registerDomEvent.
 // The view runs in whatever window holds its tab (a popout has its own), so the stub window is only reachable
