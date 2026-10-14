@@ -869,151 +869,6 @@ function canCopyImages() {
   return typeof ClipboardItem === 'function' && !!navigator.clipboard && typeof navigator.clipboard.write === 'function';
 }
 
-const EXPLORE_VIEW = 'graph-styler-explore';
-const EXPLORE_TEXT = {
-  en: { title: 'Focused exploration', command: 'Explore connected notes from current note', empty: 'Open a Markdown note, then run Focused exploration.', origin: 'Started from', back: 'Back', restart: 'Return to start', open: 'Open note', outgoing: 'Links to', incoming: 'Linked from', both: 'Links both ways', none: 'No direct note links. Try Obsidian search or add a link while writing.', selected: 'Collected notes', copy: 'Copy links', copied: 'Note links copied', copyFailed: 'Could not copy links. Your collected notes are still here.', missing: 'This note is no longer available.', readFailed: 'Could not read this note.', more: 'Show more', select: 'Collect', remove: 'Remove', loading: 'Loading…', previewEmpty: 'This note has no body text.' },
-  ko: { title: '집중 탐색', command: '현재 노트에서 연결된 노트 탐색', empty: '마크다운 노트를 열고 집중 탐색 명령을 실행하세요.', origin: '탐색 시작점', back: '뒤로', restart: '시작점으로', open: '노트 열기', outgoing: '이 노트가 연결한 노트', incoming: '이 노트를 연결한 노트', both: '서로 연결', none: '직접 연결된 노트가 없습니다. 옵시디언 검색을 쓰거나 글을 쓰면서 링크를 추가해보세요.', selected: '모은 노트', copy: '링크 목록 복사', copied: '노트 링크를 복사했습니다', copyFailed: '복사하지 못했습니다. 모은 노트는 그대로 남아 있습니다.', missing: '이 노트가 삭제되었거나 더 이상 열 수 없습니다.', readFailed: '노트를 읽지 못했습니다.', more: '더 보기', select: '모으기', remove: '빼기', loading: '불러오는 중…', previewEmpty: '본문이 없는 노트입니다.' },
-}[detectLang()];
-
-function connectedNotes(file, files, resolvedLinks) {
-  const outgoing = resolvedLinks[file.path] || {};
-  return files.filter((other) => other.path !== file.path &&
-    ((outgoing[other.path] || 0) > 0 || ((resolvedLinks[other.path] || {})[file.path] || 0) > 0))
-    .map((other) => ({ file: other, outgoing: (outgoing[other.path] || 0) > 0,
-      incoming: ((resolvedLinks[other.path] || {})[file.path] || 0) > 0 }))
-    .sort((a, b) => a.file.path.localeCompare(b.file.path));
-}
-
-function noteExcerpt(text) {
-  return text.replace(/^\uFEFF/, '').replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '')
-    .trim().slice(0, 1200);
-}
-
-class ExploreView extends ItemView {
-  constructor(leaf) {
-    super(leaf);
-    this.origin = null;
-    this.current = null;
-    this.history = [];
-    this.collected = new Set();
-    this.generation = 0;
-    this.limit = 50;
-  }
-  getViewType() { return EXPLORE_VIEW; }
-  getDisplayText() { return EXPLORE_TEXT.title; }
-  getIcon() { return 'route'; }
-  async onOpen() {
-    const refresh = () => { if (this.current) this.render(); };
-    this.registerEvent(this.app.metadataCache.on('resolved', refresh));
-    for (const event of ['rename', 'delete', 'modify']) this.registerEvent(this.app.vault.on(event, refresh));
-    await this.render();
-  }
-  async onClose() { this.generation++; }
-  async begin(file) {
-    if (this.origin !== file) {
-      this.origin = file;
-      this.current = file;
-      this.history = [];
-      this.collected.clear();
-    }
-    await this.render();
-  }
-  exists(file) { return !!file && this.app.vault.getAbstractFileByPath(file.path) === file; }
-  async navigate(file, remember = true) {
-    if (!this.exists(file)) { new Notice(EXPLORE_TEXT.missing); return; }
-    if (file !== this.current && remember && this.exists(this.current)) this.history.push(this.current);
-    this.current = file;
-    this.limit = 50;
-    await this.render();
-  }
-  async back() {
-    let file;
-    while (this.history.length && !this.exists(file)) file = this.history.pop();
-    if (this.exists(file)) await this.navigate(file, false);
-  }
-  async openNote(file) {
-    if (!this.exists(file)) { new Notice(EXPLORE_TEXT.missing); return; }
-    const workspace = this.app.workspace;
-    const existing = workspace.getLeavesOfType('markdown').find((leaf) => leaf.view.file === file);
-    if (existing) await workspace.revealLeaf(existing);
-    else await workspace.getLeaf('tab').openFile(file);
-  }
-  async copyLinks() {
-    if (!this.exists(this.origin)) { new Notice(EXPLORE_TEXT.missing); return; }
-    for (const file of this.collected) if (!this.exists(file)) this.collected.delete(file);
-    if (!this.collected.size) return;
-    try {
-      const text = [...this.collected].map((file) =>
-        `- ${this.app.fileManager.generateMarkdownLink(file, this.origin.path)}`).join('\n');
-      await this.contentEl.ownerDocument.defaultView.navigator.clipboard.writeText(text);
-      new Notice(EXPLORE_TEXT.copied);
-    } catch (_) { new Notice(EXPLORE_TEXT.copyFailed); }
-  }
-  button(parent, text, run, disabled = false) {
-    const button = parent.createEl('button', { text, attr: { type: 'button' } });
-    button.disabled = disabled;
-    button.onclick = run;
-    return button;
-  }
-  async render() {
-    const version = ++this.generation;
-    const el = this.contentEl;
-    el.empty();
-    el.addClass('gs-explore');
-    el.createEl('h3', { text: EXPLORE_TEXT.title });
-    if (!this.origin) { el.createEl('p', { text: EXPLORE_TEXT.empty }); return; }
-    for (const file of this.collected) if (!this.exists(file)) this.collected.delete(file);
-    el.createEl('p', { text: `${EXPLORE_TEXT.origin}: ${this.origin.path}`, cls: 'gs-explore-path' });
-    const navigation = el.createDiv({ cls: 'gs-explore-actions' });
-    this.button(navigation, EXPLORE_TEXT.back, () => this.back(), !this.history.some((file) => this.exists(file)));
-    this.button(navigation, EXPLORE_TEXT.restart, () => this.navigate(this.origin), !this.exists(this.origin) || this.current === this.origin);
-    this.button(navigation, EXPLORE_TEXT.open, () => this.openNote(this.current), !this.exists(this.current));
-    const basket = el.createDiv({ cls: 'gs-explore-basket' });
-    const renderBasket = () => {
-      basket.empty();
-      basket.createEl('h4', { text: `${EXPLORE_TEXT.selected} (${this.collected.size})` });
-      this.button(basket, EXPLORE_TEXT.copy, () => this.copyLinks(), !this.collected.size || !this.exists(this.origin));
-      for (const file of this.collected) {
-        const row = basket.createDiv({ cls: 'gs-explore-actions' });
-        this.button(row, file.basename, () => this.navigate(file));
-        const remove = this.button(row, EXPLORE_TEXT.remove, () => { this.collected.delete(file); this.render(); });
-        remove.setAttr('aria-label', `${EXPLORE_TEXT.remove}: ${file.path}`);
-        row.createEl('small', { text: file.path, cls: 'gs-explore-path' });
-      }
-    };
-    renderBasket();
-    if (!this.exists(this.current)) { el.createEl('p', { text: EXPLORE_TEXT.missing }); return; }
-    const file = this.current;
-    el.createEl('h4', { text: file.basename });
-    el.createEl('p', { text: file.path, cls: 'gs-explore-path' });
-    const collectLabel = el.createEl('label', { cls: 'gs-explore-collect' });
-    const collect = collectLabel.createEl('input', { attr: { type: 'checkbox' } });
-    collect.checked = this.collected.has(file);
-    collectLabel.createSpan({ text: EXPLORE_TEXT.select });
-    collect.onchange = () => {
-      if (collect.checked && this.exists(file)) this.collected.add(file);
-      else this.collected.delete(file);
-      renderBasket();
-    };
-    const preview = el.createEl('p', { text: EXPLORE_TEXT.loading, cls: 'gs-explore-preview' });
-    const rows = connectedNotes(file, this.app.vault.getMarkdownFiles(), this.app.metadataCache.resolvedLinks || {});
-    if (!rows.length) el.createEl('p', { text: EXPLORE_TEXT.none });
-    for (const row of rows.slice(0, this.limit)) {
-      const item = el.createDiv({ cls: 'gs-explore-neighbor' });
-      item.createEl('small', { text: row.incoming && row.outgoing ? EXPLORE_TEXT.both : row.outgoing ? EXPLORE_TEXT.outgoing : EXPLORE_TEXT.incoming });
-      this.button(item, row.file.basename, () => this.navigate(row.file));
-      item.createEl('small', { text: row.file.path, cls: 'gs-explore-path' });
-    }
-    if (rows.length > this.limit) this.button(el, EXPLORE_TEXT.more, () => { this.limit += 50; this.render(); });
-    try {
-      const text = await this.app.vault.cachedRead(file);
-      if (version === this.generation) preview.setText(noteExcerpt(text) || EXPLORE_TEXT.previewEmpty);
-    } catch (_) {
-      if (version === this.generation) preview.setText(EXPLORE_TEXT.readFailed);
-    }
-  }
-}
-
 class StylerView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -3322,17 +3177,7 @@ module.exports = class GraphStyler extends Plugin {
       },
     });
     this.addSettingTab(new GraphStylerSettingTab(this.app, this));
-    this.registerView(EXPLORE_VIEW, (leaf) => new ExploreView(leaf));
     this.registerView(VIEW_TYPE, (leaf) => new StylerView(leaf, this));
-    this.addCommand({
-      id: 'explore-connected-notes', name: EXPLORE_TEXT.command,
-      checkCallback: (checking) => {
-        const file = this.app.workspace.getActiveFile();
-        if (!file || file.extension !== 'md') return false;
-        if (!checking) this.openExplore(file);
-        return true;
-      },
-    });
     this.addRibbonIcon('palette', 'Graph Styler', () => this.activateView());
     this.addCommand({
       id: 'open-graph-styler',
@@ -3387,18 +3232,6 @@ module.exports = class GraphStyler extends Plugin {
       this.liveStyle.remove();
       this.liveStyle = null;
     }
-  }
-
-  async openExplore(file) {
-    const workspace = this.app.workspace;
-    let leaf = workspace.getLeavesOfType(EXPLORE_VIEW)[0];
-    if (!leaf) {
-      leaf = workspace.getRightLeaf(true);
-      if (!leaf) return;
-      await leaf.setViewState({ type: EXPLORE_VIEW, active: true });
-    }
-    await leaf.view.begin(file);
-    await workspace.revealLeaf(leaf);
   }
 
   async activateView() {
@@ -4354,6 +4187,3 @@ module.exports.displayRatio3d = displayRatio3d;
 module.exports.forceCurve3d = forceCurve3d;
 module.exports.layoutParams3d = layoutParams3d;
 module.exports.lineMode3d = lineMode3d;
-module.exports.connectedNotes = connectedNotes;
-module.exports.noteExcerpt = noteExcerpt;
-module.exports.ExploreView = ExploreView;
