@@ -50,6 +50,12 @@ Fourteen presets, each with its own colours, background and glow:
 
 The presets sit in a two-column grid. The one in use has a frame and a check mark. Presets change colours, glow and colour groups only. Your forces and size settings stay as they are. Each built-in preset is also a command: **Graph Styler: Apply: Neon** and so on.
 
+### Keep your colour groups
+
+If you already use graph groups to distinguish topics, turn on **Keep my color groups** before applying a preset. Group rules, order and colours stay intact, including with Mono and live preview. Glow can still change their apparent brightness. Local graphs keep their own groups too.
+
+The option is off by default, remembered for this vault and not included in shared presets. It protects future changes; it does not recover groups replaced earlier. Group colour pickers are disabled while it is on. Other preset settings still apply, including saved physics settings in custom presets. **Restore original** remains an explicit restore, and existing 3D group-query support is unchanged.
+
 ### Make your own preset
 
 Expand **🎛️ Customize**, pick group colours, a background and the glow, and move the physics sliders. The graph follows as you drag. Name it and select **💾 Save as preset**; it appears under *My presets*.
@@ -146,7 +152,7 @@ Graph Styler writes Obsidian's own colour groups, so you can see and edit them u
 | One folder, no tags | That folder |
 | No folders, no tags | Your existing groups are kept; background, glow and node colours still change |
 
-**⚪ Mono** clears the groups so every note has the same colour. Applying a preset replaces your colour groups; the original `graph.json` is backed up the first time.
+With **Keep my color groups** off (the default), **⚪ Mono** clears the groups so every note has the same colour, and applying another preset replaces your colour groups. Turn the option on to preserve them instead. The original `graph.json` is backed up the first time.
 
 ## FAQ and troubleshooting
 
