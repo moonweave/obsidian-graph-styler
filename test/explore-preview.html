@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Focused exploration preview</title>
+<link rel="stylesheet" href="../styles.css">
+<style>
+:root { --text-muted:#aaa; --font-smallest:12px; --background-modifier-border:#444; color-scheme:dark; }
+body { margin:0; background:#181818; color:#eee; font:15px/1.5 system-ui; }
+main { width:360px; min-height:100vh; background:#242424; border-right:1px solid #444; }
+button { color:inherit; background:#333; border:1px solid #555; border-radius:5px; padding:5px 10px; cursor:pointer; }
+button:disabled { opacity:.4; cursor:default; } button:focus-visible { outline:2px solid #ad8bfa; }
+input { accent-color:#ad8bfa; } h3,h4 { margin:12px 0; }
+</style>
+<main id="panel"></main>
+<script>
+// Manual renderer fixture: actual ExploreView, with only the Obsidian host API adapted to a browser.
+Element.prototype.createEl = function(tag, options = {}) {
+  const element = document.createElement(tag);
+  if (options.text) element.textContent = options.text;
+  if (options.cls) element.className = options.cls;
+  for (const [key, value] of Object.entries(options.attr || {})) element.setAttribute(key, value);
+  this.append(element); return element;
+};
+Element.prototype.createDiv = function(options) { return this.createEl('div', options); };
+Element.prototype.createSpan = function(options) { return this.createEl('span', options); };
+Element.prototype.empty = function() { this.replaceChildren(); };
+Element.prototype.addClass = function(cls) { this.classList.add(cls); };
+Element.prototype.setAttr = function(key, value) { this.setAttribute(key, value); };
+Element.prototype.setText = function(text) { this.textContent = text; };
+window.module = { exports:{} };
+window.require = () => ({
+  Plugin:class {}, PluginSettingTab:class {}, Setting:class {},
+  ItemView:class { constructor(leaf) { this.app=leaf.app; this.contentEl=leaf.contentEl; } registerEvent() {} },
+  Notice:class { constructor(text) { document.title=text; } },
+});
+</script>
+<script src="../main.js"></script>
+<script>
+const notes = [
+  {path:'Drafts/What makes a useful knowledge graph.md', basename:'What makes a useful knowledge graph', extension:'md', body:'My question: how can I reuse the notes I have already written?\n\nI want to collect evidence for this draft without losing the question that started the search.'},
+  {path:'Concepts/Context.md', basename:'Context', extension:'md', body:'A note makes more sense when I can read the question and sources around it.\n\nA visible connection is a starting point for reading, not proof of agreement.'},
+  {path:'Papers/Context.md', basename:'Context', extension:'md', body:'Reading notes from a paper on context.\n\nThis has the same title as the concept note, but is a different source.'},
+];
+const app={
+  vault:{getMarkdownFiles:()=>notes, getAbstractFileByPath:path=>notes.find(note=>note.path===path), cachedRead:async note=>note.body},
+  metadataCache:{resolvedLinks:{[notes[0].path]:{[notes[1].path]:1},[notes[1].path]:{[notes[0].path]:1},[notes[2].path]:{[notes[0].path]:1}}},
+  workspace:{getLeavesOfType:()=>[],getLeaf:()=>({openFile:async note=>{document.title='Opened: '+note.path;}})},
+  fileManager:{generateMarkdownLink:note=>'[['+note.path+']]'},
+};
+const view=new module.exports.ExploreView({app,contentEl:document.querySelector('#panel')});
+view.begin(notes[0]);
+</script>
+</html>
