@@ -144,11 +144,11 @@ async function main() {
       if (group) group.open = true;
       const selects = group ? [...group.querySelectorAll('select')] : [];
       return { group: !!group, look: selects[0]?.value, layout: selects[1]?.value,
-        center: !!panel?.querySelector('.gs-3d-center'), options: panel?.querySelectorAll('#gs-3d-center-options option').length || 0 };
+        center: !!panel?.querySelector('.gs-3d-center'), centerDisabled: panel?.querySelector('.gs-3d-center')?.disabled };
     })()`);
     record('sidebar Look/Layout and search-picker controls exist', panel);
     console.log('sidebar checked');
-    assert.ok(panel.group && panel.center && panel.options > 0);
+    assert.ok(panel.group && panel.center && panel.centerDisabled);
     assert.deepStrictEqual([panel.look, panel.layout], ['deep-space', 'globe']);
 
     await js(`(() => {

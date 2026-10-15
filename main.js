@@ -2215,6 +2215,12 @@ class Graph3DView extends ItemView {
     this.rotationButton = el.createEl('button', { cls: 'gs3d-rotation', attr: { type: 'button' } });
     this.syncRotationControl();
     this.registerDomEvent(this.rotationButton, 'click', () => this.toggleRotation());
+    const refreshButton = el.createEl('button', { cls: 'gs3d-refresh', text: detectLang() === 'ko' ? '2D 그래프에서 새로고침' : 'Refresh from 2D graph', attr: { title: detectLang() === 'ko' ? '현재 2D 필터와 노트·링크를 다시 불러옵니다. 카메라가 초기화됩니다.' : 'Reload current 2D filters, notes and links. Resets the camera.' } });
+    this.registerDomEvent(refreshButton, 'click', async () => {
+      refreshButton.disabled = true;
+      try { await this.build(); }
+      finally { refreshButton.disabled = false; }
+    });
     this.registerDomEvent(this.canvas, 'webglcontextlost', (e) => {
       e.preventDefault();
       this.stopLoop();
@@ -2490,7 +2496,10 @@ class Graph3DView extends ItemView {
     if (!this.gl || !this.data || !this.data.n) return;
     const previousStyle = this.style || {};
     const previousColors = JSON.stringify([previousStyle.groups, previousStyle.fill, previousStyle.tagFill, previousStyle.unresolvedFill]);
-    this.style = await this.readStyle();
+    const revision = this.styleRevision = (this.styleRevision || 0) + 1;
+    const style = await this.readStyle();
+    if (revision !== this.styleRevision) return;
+    this.style = style;
     const colorsChanged = previousColors !== JSON.stringify([this.style.groups, this.style.fill, this.style.tagFill, this.style.unresolvedFill]);
     if (this.disposed || !this.gl) return;
     // 탭을 여는 동안(build가 readStyle을 기다리는 사이) GPU 자원은 아직 없거나 이전 그래프 크기다. 그때 온 변경은

@@ -517,7 +517,14 @@ function uploads(calls) {
     options.nodeSizeMultiplier = 1;
     delete options.lineSizeMultiplier;
     return view.readStyle();
-  }).then((st) => assert.deepStrictEqual([st.nodeSize, st.lineSize], [1, 1], 'defaults → ratio 1'));
+  }).then((st) => {
+    assert.deepStrictEqual([st.nodeSize, st.lineSize], [1, 1], 'defaults → ratio 1');
+    view.plugin.previewGraphOptions = { nodeSizeMultiplier: 0.5, linkDistance: 400 };
+    return view.readStyle();
+  }).then((st) => {
+    assert.strictEqual(st.nodeSize, 0.5, '3D reads unsaved preview over stale core options');
+    assert.deepStrictEqual(st.forces, layoutParams3d({ repelStrength: 15, linkDistance: 400 }));
+  });
 }
 {
   // Picking uses the same fitted-camera CSS radius as the node shader.
