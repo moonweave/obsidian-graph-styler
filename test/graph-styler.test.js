@@ -216,6 +216,34 @@ function preview(applyForces) {
   return { engineOptions, renderCalls };
 }
 
+(async () => {
+  for (const mono of [false, true]) {
+    const { app, files, engineOptions } = makeHarness();
+    const plugin = new GraphStyler(app);
+    plugin.settings = { custom: [] };
+    plugin.draft = { name: 'Keep my name', includeView: true };
+    const chosen = preset(false);
+    if (mono) {
+      chosen.colors = [];
+      chosen.palette = Object.assign({}, chosen.palette, { bg1: '#000000', bg2: '#000000', bg3: '#000000' });
+    }
+    await plugin._doApply(chosen);
+    assert.strictEqual(plugin.draft.bg, chosen.palette.bg3, 'background editor follows the selected preset');
+    assert.strictEqual(plugin.draft.name, 'Keep my name');
+    assert.strictEqual(plugin.draft.includeView, true);
+    const saved = JSON.parse(files['.obsidian/graph.json']);
+    assert.strictEqual(plugin.draft.forces.node, saved.nodeSizeMultiplier, 'editor uses effective sizes, not built-in suggested forces');
+    const css = plugin.liveStyle.textContent;
+    const edited = preset(true);
+    edited.graph.nodeSizeMultiplier = 1.3;
+    plugin.previewLive(edited, true);
+    assert.strictEqual(plugin.liveStyle.textContent, css, 'size edit preserves exact palette and filter, including Mono');
+    assert.strictEqual(engineOptions.at(-1).nodeSizeMultiplier, 1.3);
+    assert.strictEqual(engineOptions.at(-1).colorGroups, undefined, 'size edit does not regenerate group rules');
+    assert.deepStrictEqual(plugin.currentPreset.colors, chosen.colors);
+  }
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+
 async function loadDraft() {
   const { app } = makeHarness();
   const plugin = new GraphStyler(app);
@@ -1474,9 +1502,12 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.strictEqual(off.saved[off.saved.length - 1].experimental3d, true);
     assert.deepStrictEqual(notices, [], 'no "use the command palette" notice from the panel: its Open button is right there');
     g = off.group();
-    const [onBox, center, rotateBox, speed] = inputs(g);
-    assert.deepStrictEqual([onBox.checked, center.type, center.disabled, rotateBox.type, rotateBox.checked, speed.type],
-      [true, 'search', true, 'checkbox', true, 'range']);
+    const [onBox, rotateBox, speed] = inputs(g);
+    const center = g.walk().find((el) => el.text === 'Choose note…');
+    const centerSection = g.walk().find((el) => el.cls.has('gs-3d-center-section'));
+    assert.deepStrictEqual([onBox.checked, center.tag, center.disabled, rotateBox.type, rotateBox.checked, speed.type],
+      [true, 'button', true, 'checkbox', true, 'range']);
+    assert.strictEqual(centerSection.style.display, 'block', 'the Orbital center heading and controls use normal block flow');
     const selects = g.walk().filter((el) => el.tag === 'select');
     assert.deepStrictEqual(selects.map((el) => el.value), ['original', 'force'], 'Look and Layout default to the current appearance');
     assert.deepStrictEqual([speed.min, speed.max, speed.step, speed.value, speed.disabled], ['0.02', '0.6', '0.01', '0.12', false]);
@@ -1507,7 +1538,8 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
 
     // Round trip: a new plugin instance reads the saved values back into the same controls.
     const back = await render3d(GraphStyler, off.saved[off.saved.length - 1]);
-    const [onAgain, centerAgain, rotateAgain, speedAgain] = inputs(back.group());
+    const [onAgain, rotateAgain, speedAgain] = inputs(back.group());
+    const centerAgain = back.group().walk().find((el) => el.text === 'Choose note…');
     assert.deepStrictEqual([onAgain.checked, rotateAgain.checked, speedAgain.value, speedAgain.disabled], [true, false, '0.3', true]);
     assert.strictEqual(centerAgain.disabled, true);
     // Damaged values fall back to the defaults.
@@ -1539,7 +1571,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.deepStrictEqual(inputs(back.group()).map((el) => [el.type, el.checked]), [['checkbox', false]]);
     await toggleRow.toggle.change(true);
     assert.deepStrictEqual(notices, ['Open it from the command palette: “Graph Styler: Open 3D graph”']);
-    assert.deepStrictEqual(inputs(back.group()).map((el) => el.type), ['checkbox', 'search', 'checkbox', 'range']);
+    assert.deepStrictEqual(inputs(back.group()).map((el) => el.type), ['checkbox', 'checkbox', 'range']);
 
     // Korean labels.
     const ko = await render3d(loadGraphStylerIn('ko'), { experimental3d: true });
@@ -1580,6 +1612,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     const updates = [];
     const plugin = {
       settings,
+      refreshViews() {},
       views3d: () => [{ applyGraph3dOptions: (options) => updates.push(options) }, { applyGraph3dOptions: (options) => updates.push(options) }],
       saveData: async (value) => { saves.push(JSON.parse(JSON.stringify(value))); },
     };

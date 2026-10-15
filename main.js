@@ -5,7 +5,7 @@
  */
 'use strict';
 
-const { Plugin, ItemView, Notice, Platform, PluginSettingTab, Setting, Keymap, getAllTags } = require('obsidian');
+const { Plugin, ItemView, Notice, Platform, PluginSettingTab, Setting, Keymap, getAllTags, FuzzySuggestModal } = require('obsidian');
 
 const AUTHOR = 'Moonweave';
 const AUTHOR_URL = 'https://github.com/moonweave';
@@ -107,6 +107,8 @@ const STRINGS = {
     group3d: '🧊 3D (experimental)',
     panel3dNote: 'A new tab with your notes and links in 3D, in the colours of the current preset.',
     rotate3d: 'Auto-rotate',
+    startRotate3d: 'Start rotation',
+    stopRotate3d: 'Pause rotation',
     rotate3dSpeed: 'Rotation speed',
     look3d: 'Look',
     layout3d: 'Layout',
@@ -204,6 +206,8 @@ const STRINGS = {
     group3d: '🧊 3D (실험)',
     panel3dNote: '새 탭에 노트와 링크를 지금 프리셋의 색으로 입체로 보여 줘요.',
     rotate3d: '자동 회전',
+    startRotate3d: '회전 시작',
+    stopRotate3d: '회전 멈춤',
     rotate3dSpeed: '회전 속도',
     look3d: '화면 분위기',
     layout3d: '노드 배치',
@@ -1003,6 +1007,9 @@ class StylerView extends ItemView {
     const draft = this.plugin.draft;
     const details = this.group(c, 'customize', L.customize);
     details.createEl('p', { text: L.customizeNote, cls: 'gs-note' });
+    details.createEl('p', { text: detectLang() === 'ko'
+      ? '3D Force에서 물리 설정이 적용됩니다. Orbital·Globe에서는 크기·색·선 굵기만 적용되며, Text fade는 2D 전용입니다.'
+      : 'Physics settings apply to 3D Force. Orbital and Globe use size, colors and line width; Text fade is 2D only.', cls: 'gs-note' });
 
     // group colors
     const colorRow = details.createDiv({ cls: 'gs-row' });
@@ -1015,7 +1022,7 @@ class StylerView extends ItemView {
       input.value = hex;
       input.disabled = this.plugin.settings.keepColorGroups === true;
       this._groupColorInputs.push(input);
-      input.oninput = () => { draft.colors[i] = input.value; this.schedulePreview(); };
+      input.oninput = () => { draft.colors[i] = input.value; this.schedulePreview(true); };
     });
 
     // background color
@@ -1024,10 +1031,10 @@ class StylerView extends ItemView {
     const bgEl = bgRow.createEl('input');
     bgEl.type = 'color';
     bgEl.value = draft.bg;
-    bgEl.oninput = () => { draft.bg = bgEl.value; this.schedulePreview(); };
+    bgEl.oninput = () => { draft.bg = bgEl.value; this.schedulePreview(true); };
 
     // glow + force/size sliders
-    this.sliderRow(details, L.f.glow, 0, 100, 5, draft.glow, (v) => { draft.glow = v; });
+    this.sliderRow(details, L.f.glow, 0, 100, 5, draft.glow, (v) => { draft.glow = v; }, true);
     for (const [key, min, max, step] of SLIDERS) {
       this.sliderRow(details, L.f[key], min, max, step, draft.forces[key], (v) => { draft.forces[key] = v; });
     }
@@ -1059,7 +1066,7 @@ class StylerView extends ItemView {
     importBtn.onclick = () => this.plugin.importShareCode(codeEl.value);
   }
 
-  sliderRow(parent, label, min, max, step, value, onChange) {
+  sliderRow(parent, label, min, max, step, value, onChange, appearanceChanged = false) {
     const row = parent.createDiv({ cls: 'gs-row' });
     row.createSpan({ cls: 'gs-row-label', text: label });
     const input = row.createEl('input');
@@ -1068,7 +1075,7 @@ class StylerView extends ItemView {
     input.max = String(max);
     input.step = sliderStep(value, min, step);
     input.value = String(value);
-    input.oninput = () => { onChange(Number(input.value)); this.schedulePreview(); };
+    input.oninput = () => { onChange(Number(input.value)); this.schedulePreview(appearanceChanged); };
     return input;
   }
 
@@ -1193,26 +1200,41 @@ class StylerView extends ItemView {
     layout.createEl('option', { value: 'globe', text: L.layout3dGlobe });
     layout.value = appearance.layout;
     layout.onchange = () => {
-      centerInput.disabled = layout.value !== 'orbital';
       plugin.setGraph3dOptions({ layout: layout.value });
     };
-    const centerRow = c.createDiv({ cls: 'gs-row gs-3d-center-row' });
-    centerRow.createSpan({ cls: 'gs-row-label', text: L.center3d });
-    const centerInput = centerRow.createEl('input', { cls: 'gs-3d-center' });
-    centerInput.type = 'search';
-    centerInput.placeholder = L.center3dAuto;
-    centerInput.value = appearance.centerPath;
-    centerInput.setAttr('list', 'gs-3d-center-options');
-    const candidates = plugin.graph3dCenterCandidates();
-    const options = centerRow.createEl('datalist', { attr: { id: 'gs-3d-center-options' } });
-    for (const file of candidates) options.createEl('option', { value: file.path, label: file.basename || file.path });
+    const centerSection = c.createDiv({ cls: 'gs-3d-center-section' });
+    if (typeof centerSection.style.setProperty === 'function') centerSection.style.setProperty('display', 'block', 'important');
+    else centerSection.style.display = 'block';
+    centerSection.style.width = '100%';
+    const centerLabel = centerSection.createDiv({ cls: 'gs-row-label', text: L.center3d });
+    if (typeof centerLabel.style.setProperty === 'function') centerLabel.style.setProperty('display', 'block', 'important');
+    else centerLabel.style.display = 'block';
+    centerLabel.style.width = '100%';
+    centerLabel.style.margin = '0 0 6px';
+    const centerRow = centerSection.createDiv({ cls: 'gs-row gs-3d-center-row' });
+    if (typeof centerRow.style.setProperty === 'function') centerRow.style.setProperty('display', 'block', 'important');
+    else centerRow.style.display = 'block';
+    centerRow.style.clear = 'both';
+    const ko = detectLang() === 'ko';
+    const centerControls = centerRow.createDiv({ cls: 'gs-center-controls' });
+    centerControls.style.display = 'grid';
+    centerControls.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
+    centerControls.style.gap = '6px 8px';
+    const centerInput = centerControls.createEl('button', { cls: 'gs-3d-center', text: ko ? '노트 선택…' : 'Choose note…' });
+    centerInput.style.width = '100%';
     centerInput.disabled = appearance.layout !== 'orbital';
-    centerInput.onchange = () => {
-      const selected = candidates.find((file) => file.path === centerInput.value);
-      if (!centerInput.value.trim()) plugin.setGraph3dOptions({ centerPath: '' });
-      else if (selected) plugin.setGraph3dOptions({ centerPath: selected.path });
-      else centerInput.value = validGraph3dOptions(plugin.settings).centerPath;
-    };
+    centerInput.onclick = () => new OrbitalCenterModal(plugin).open();
+    const auto = centerControls.createEl('button', { text: ko ? '자동' : 'Automatic' });
+    auto.style.width = '100%';
+    auto.disabled = appearance.layout !== 'orbital' || !appearance.centerPath;
+    auto.onclick = () => plugin.setGraph3dOptions({ centerPath: '' });
+    c.createDiv({ cls: 'gs-center-status', text: appearance.layout !== 'orbital'
+      ? (ko ? 'Orbital 배치에서 사용합니다.' : 'Available in the Orbital layout.')
+      : (ko ? 'Vault 전체에서 검색 · 열린 모든 3D 탭에 적용' : 'Search the entire vault · applies to all open 3D tabs') });
+    const selectedCenter = appearance.centerPath ? plugin.app.vault.getAbstractFileByPath(appearance.centerPath) : null;
+    const selectedStatus = c.createDiv({ cls: 'gs-center-status', text: appearance.centerPath
+      ? `${ko ? '선택' : 'Selected'}: ${selectedCenter ? selectedCenter.basename : (ko ? '노트를 찾을 수 없음' : 'Note not found')}` : L.center3dAuto });
+    if (appearance.centerPath) selectedStatus.title = appearance.centerPath;
     const rotateRow = c.createEl('label', { cls: 'gs-row gs-check' });
     const rotateBox = rotateRow.createEl('input');
     rotateBox.type = 'checkbox';
@@ -1249,11 +1271,14 @@ class StylerView extends ItemView {
   }
 
   // rAF 스로틀: 한 프레임에 한 번만, 디스크 안 건드리는 in-memory 미리보기
-  schedulePreview() {
+  schedulePreview(appearanceChanged = false) {
+    this._appearanceChanged = this._appearanceChanged || appearanceChanged;
     if (this._raf) return;
     this._raf = window.requestAnimationFrame(() => {
       this._raf = null;
-      this.plugin.previewLive(presetFromRaw(this.rawFromDraft(LIVE_ID)));
+      const preserveAppearance = !this._appearanceChanged;
+      this._appearanceChanged = false;
+      this.plugin.previewLive(presetFromRaw(this.rawFromDraft(LIVE_ID)), preserveAppearance);
     });
   }
 
@@ -1428,6 +1453,27 @@ function validGraph3dOptions(settings) {
 function comparePath3d(a, b) {
   const left = String(a || ''), right = String(b || '');
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function OrbitalCenterModal(plugin) {
+  return new class extends FuzzySuggestModal {
+    constructor() {
+      super(plugin.app);
+      this.setPlaceholder(detectLang() === 'ko' ? '노트 제목 또는 경로 검색' : 'Search note title or path');
+    }
+    getItems() { return plugin.app.vault.getMarkdownFiles(); }
+    getItemText(file) { return `${file.basename} — ${file.path}`; }
+    onChooseItem(file) {
+      const current = plugin.app.vault.getAbstractFileByPath(file.path);
+      if (!current || current !== file) return;
+      plugin.setGraph3dOptions({ centerPath: file.path });
+    }
+  }();
+}
+
+function orbitalCenterStatus3d(files, data, preferredPath) {
+  const index = orbitalCenterIndex3d(files, data, preferredPath);
+  return { path: index >= 0 ? files[index].path : '', fallback: !!preferredPath && (index < 0 || files[index].path !== preferredPath) };
 }
 
 function orbitalCenterIndex3d(files, data, preferredPath) {
@@ -2096,7 +2142,7 @@ void main() {
   vec3 normal = aPos - uCenter;
   float side = length(normal) < 1e-5 ? 1.0 : dot(normalize(normal), normalize(uEye - uCenter));
   vFade = mix(1.0, mix(0.12, 1.0, smoothstep(-0.2, 0.2, side)), uGlobe);
-  float fog = smoothstep(uFog.x, uFog.y, c.w) * 0.4;
+  float fog = smoothstep(uFog.x, uFog.y, c.w) * 0.72;
   vMix = max(fog, uHover * (1.0 - aHi) * 0.7);
   gl_Position = c + vec4(aCorner * px * uScale / uView * 2.0 * c.w, 0.0, 0.0);
 }`,
@@ -2126,7 +2172,10 @@ void main() {
   float d = length(vUv);
   float a = (1.0 - smoothstep(1.0 - 1.5 / max(vPx, 1.0), 1.0, d)) * vFade;
   if (a <= 0.01) discard;
-  vec3 c = mix(mix(vCol, vec3(1.0), uSheen * (1.0 - d * d)), uFogColor, vMix);
+  vec3 normal = vec3(vUv, sqrt(max(0.0, 1.0 - d * d)));
+  float diffuse = max(0.0, dot(normal, normalize(vec3(-0.35, 0.45, 0.82))));
+  float shade = mix(1.0, 0.56 + 0.44 * diffuse, smoothstep(2.0, 5.0, vPx));
+  vec3 c = mix(mix(vCol * shade, vec3(1.0), uSheen * (1.0 - d * d)), uFogColor, vMix);
   o = vec4(c * a, a);
 }`,
 };
@@ -2162,6 +2211,16 @@ class Graph3DView extends ItemView {
       return;
     }
     this.label = el.createDiv({ cls: 'gs3d-label' });
+    this.centerStatus = el.createDiv({ cls: 'gs3d-center-status', attr: { role: 'status' } });
+    this.rotationButton = el.createEl('button', { cls: 'gs3d-rotation', attr: { type: 'button' } });
+    this.syncRotationControl();
+    this.registerDomEvent(this.rotationButton, 'click', () => this.toggleRotation());
+    const refreshButton = el.createEl('button', { cls: 'gs3d-refresh', text: detectLang() === 'ko' ? '2D 그래프에서 새로고침' : 'Refresh from 2D graph', attr: { title: detectLang() === 'ko' ? '현재 2D 필터와 노트·링크를 다시 불러옵니다. 카메라가 초기화됩니다.' : 'Reload current 2D filters, notes and links. Resets the camera.' } });
+    this.registerDomEvent(refreshButton, 'click', async () => {
+      refreshButton.disabled = true;
+      try { await this.build(); }
+      finally { refreshButton.disabled = false; }
+    });
     this.registerDomEvent(this.canvas, 'webglcontextlost', (e) => {
       e.preventDefault();
       this.stopLoop();
@@ -2305,6 +2364,14 @@ class Graph3DView extends ItemView {
   }
 
   positionsForLayout(layout, centerPath) {
+    if (this.centerStatus) {
+      const status = orbitalCenterStatus3d(this.files, this.data, centerPath);
+      const ko = detectLang() === 'ko';
+      this.centerStatus.setText(layout !== 'orbital' ? '' :
+        `${ko ? '현재 중심' : 'Current center'}: ${status.path || (ko ? '없음' : 'None')}${status.fallback
+          ? (ko ? ' · 선택한 노트가 이 그래프에 없어 자동 대체됨' : ' · Selected note is absent from this graph; using automatic fallback')
+          : (!centerPath ? (ko ? ' · 자동' : ' · Automatic') : '')}`);
+    }
     if (layout === 'orbital') {
       const center = orbitalCenterIndex3d(this.files, this.data, centerPath);
       this.orbitalCenter = center;
@@ -2372,8 +2439,9 @@ class Graph3DView extends ItemView {
       bg = [base, base, base];
     }
     const core = this.app.internalPlugins && this.app.internalPlugins.plugins && this.app.internalPlugins.plugins.graph;
-    const options = core && core.instance && core.instance.options && Array.isArray(core.instance.options.colorGroups)
+    const baseOptions = core && core.instance && core.instance.options && Array.isArray(core.instance.options.colorGroups)
       ? core.instance.options : await plugin.readGraphOptions();
+    const options = Object.assign({}, baseOptions, plugin.previewGraphOptions);
     const groups = (Array.isArray(options.colorGroups) ? options.colorGroups : [])
       .filter((g) => g && g.color && typeof g.color.rgb === 'number')
       .map((g) => ({
@@ -2417,14 +2485,22 @@ class Graph3DView extends ItemView {
       const base = file.type === 'tag' ? tagFill : file.type === 'unresolved' ? unresolvedFill : fill;
       col.set(g ? g.rgb : base, i * 3);
       groupIndex[i] = group;
-      size[i] = (2.2 + Math.sqrt(deg[i]) * 1.1) * this.style.nodeSize;
+      // Obsidian 1.14.4 caps its sqrt(weight + 1) radii at 30. Use the same
+      // bounded shape at a compact CSS scale, rather than unbounded 3D hubs.
+      size[i] = Math.max(2, Math.min(0.75 * Math.sqrt(deg[i] + 1), 7.5)) * this.style.nodeSize;
     }
     return { col, size, groupIndex };
   }
 
   async applyStyle() {
     if (!this.gl || !this.data || !this.data.n) return;
-    this.style = await this.readStyle();
+    const previousStyle = this.style || {};
+    const previousColors = JSON.stringify([previousStyle.groups, previousStyle.fill, previousStyle.tagFill, previousStyle.unresolvedFill]);
+    const revision = this.styleRevision = (this.styleRevision || 0) + 1;
+    const style = await this.readStyle();
+    if (revision !== this.styleRevision) return;
+    this.style = style;
+    const colorsChanged = previousColors !== JSON.stringify([this.style.groups, this.style.fill, this.style.tagFill, this.style.unresolvedFill]);
     if (this.disposed || !this.gl) return;
     // 탭을 여는 동안(build가 readStyle을 기다리는 사이) GPU 자원은 아직 없거나 이전 그래프 크기다. 그때 온 변경은
     // initGL이 끝난 뒤 다시 반영한다.
@@ -2433,6 +2509,7 @@ class Graph3DView extends ItemView {
       return;
     }
     const { col, size, groupIndex } = this.nodeAttributes();
+    const groupsChanged = !this.groupIndex || groupIndex.some((group, i) => group !== this.groupIndex[i]);
     this.groupIndex = groupIndex;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.col);
@@ -2443,8 +2520,8 @@ class Graph3DView extends ItemView {
     this.uploadNodeTexture(this.tex.col, col);
     // 장력이 바뀌면 Obsidian처럼 지금 자리에서 다시 푼다(alpha 0.3). 카메라는 건드리지 않는다: 사용자가 옮긴 카메라는
     // 그 자리에 있고, 옮기지 않았다면 처음 배치 때처럼 거리만 그래프 크기를 따라간다.
-    if (this.graphLayout === 'globe') {
-      this.pos = globePositions3d(this.paths, this.groupIndex);
+    if (this.graphLayout === 'globe' && (groupsChanged || colorsChanged)) {
+      if (groupsChanged) this.pos = globePositions3d(this.paths, this.groupIndex);
       if (this.hover >= 0) this.setHover(-1);
       this.initGL();
       this.fit = this.measureFit();
@@ -2744,8 +2821,19 @@ class Graph3DView extends ItemView {
     return base * k * k * (3 - 2 * k);
   }
 
+  syncRotationControl() {
+    if (!this.rotationButton) return;
+    this.rotationButton.textContent = this.plugin.rotate3d ? L.stopRotate3d : L.startRotate3d;
+    this.rotationButton.ariaPressed = String(!!this.plugin.rotate3d);
+  }
+
+  toggleRotation() {
+    return this.plugin.setRotate3d(!this.plugin.rotate3d);
+  }
+
   // 자동 회전을 다시 켜면 멈춰 있던 그래프가 툭 출발하지 않게, 입력이 끝난 뒤처럼 천천히 속도를 올린다.
   resumeRotation() {
+    this.syncRotationControl();
     if (this.plugin.rotate3d && !this.drag) this.lastInput = this.contentEl.win.performance.now() - IDLE_3D_MS;
     this.kick();
   }
@@ -2840,6 +2928,7 @@ class Graph3DView extends ItemView {
     const dpr = c.width / Math.max(1, c.clientWidth);
     const mx = this.mouse[0] * dpr, my = this.mouse[1] * dpr;
     const minR = 6 * dpr;
+    const nodeScale = this.nodeProjectionScale();
     let best = -1, bestScore = 1;
     for (let i = 0; i < this.data.n; i++) {
       const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
@@ -2847,7 +2936,7 @@ class Graph3DView extends ItemView {
       if (w <= 0) continue;
       const sx = ((M[0] * x + M[4] * y + M[8] * z + M[12]) / w * 0.5 + 0.5) * c.width;
       const sy = (0.5 - (M[1] * x + M[5] * y + M[9] * z + M[13]) / w * 0.5) * c.height;
-      const r = Math.max(this.size[i] * this.pxScale * 0.72 / w, minR);
+      const r = Math.max(this.size[i] * nodeScale / w, minR);
       const score = Math.hypot(sx - mx, sy - my) / r;
       if (score <= bestScore) { best = i; bestScore = score; }
     }
@@ -2881,6 +2970,13 @@ class Graph3DView extends ItemView {
     const aspect = c && c.clientHeight ? c.clientWidth / c.clientHeight : 1;
     const half = Math.min(this.cam.fov / 2, Math.atan(Math.tan(this.cam.fov / 2) * aspect));
     return this.fit.r / Math.sin(half) * 1.02;
+  }
+
+  nodeProjectionScale() {
+    // At the fitted camera, radii are CSS pixels rather than layout-world units.
+    // Depth and user zoom still change apparent size, but changing layouts does not.
+    const dpr = this.canvas.width / Math.max(1, this.canvas.clientWidth);
+    return this.fitDistance() * dpr * 0.72;
   }
 
   // input=true: 입력에 대한 응답이라 프레임 상한 없이 바로 그린다.
@@ -2958,7 +3054,7 @@ class Graph3DView extends ItemView {
     this.viewMatrix = lookAt3d(eye, cam.target);
     this.mvp = mat4Mul3d(perspective3d(cam.fov, c.width / c.height, near, dist + this.fit.max * 3), this.viewMatrix);
     this.pxScale = c.height / (2 * Math.tan(cam.fov / 2));
-    const fog = [dist - this.fit.r * 0.5, dist + this.fit.r * 1.3];
+    const fog = [dist - this.fit.r * 0.8, dist + this.fit.r];
     const hovering = this.hover >= 0 ? 1 : 0;
     const deepSpace = this.graphLook === 'deep-space' ? 1 : 0;
     const globe = this.graphLayout === 'globe' ? 1 : 0;
@@ -3067,9 +3163,8 @@ class Graph3DView extends ItemView {
       gl.useProgram(P.p);
       gl.uniformMatrix4fv(P.u.uMvp, false, this.mvp);
       gl.uniform2f(P.u.uView, c.width, c.height);
-      // The same world-space radius reads much larger in perspective than in Obsidian's flat graph.
-      gl.uniform1f(P.u.uPx, this.pxScale * 0.72);
-      gl.uniform1f(P.u.uMinPx, 1.6 * dpr);
+      gl.uniform1f(P.u.uPx, this.nodeProjectionScale());
+      gl.uniform1f(P.u.uMinPx, 1.6 * dpr * 0.72 * (st.nodeSize ?? 1));
       gl.uniform1f(P.u.uHover, hovering);
       gl.uniform2fv(P.u.uFog, fog);
       gl.uniform3fv(P.u.uEye, eye);
@@ -3227,7 +3322,7 @@ module.exports = class GraphStyler extends Plugin {
     }));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
       invalidate();
-      if (oldPath && oldPath === this.settings.orbitalCenterPath) this.setGraph3dOptions({ centerPath: '' });
+      if (oldPath && oldPath === this.settings.orbitalCenterPath) this.setGraph3dOptions({ centerPath: file.path });
     }));
   }
 
@@ -3309,6 +3404,7 @@ module.exports = class GraphStyler extends Plugin {
     this.rotate3d = !!on;
     this.settings.rotate3d = this.rotate3d;
     for (const view of this.views3d()) view.resumeRotation();
+    this.refreshViews();
     await this.saveData(this.settings);
   }
 
@@ -3333,6 +3429,7 @@ module.exports = class GraphStyler extends Plugin {
     if (next.centerPath) this.settings.orbitalCenterPath = next.centerPath;
     else delete this.settings.orbitalCenterPath;
     for (const view of this.views3d()) view.applyGraph3dOptions(next);
+    this.refreshViews();
     const prior = this._save3dSettings || Promise.resolve();
     this._save3dSettings = prior.catch(() => {}).then(() => this.saveData(this.settings));
     await this._save3dSettings;
@@ -3952,6 +4049,7 @@ module.exports = class GraphStyler extends Plugin {
   }
 
   async _doApply(preset, opts) {
+    this.previewGraphOptions = null;
     const live = !!(opts && opts.silent);
     const keepGroups = this.settings.keepColorGroups === true;
     try {
@@ -3980,6 +4078,11 @@ module.exports = class GraphStyler extends Plugin {
       }
       this.currentForceOptions = forceOptionsFromGraph(merged);
       this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, graphOptions) });
+      if (!live && this.draft) {
+        this.draft.forces = draftFromGraph(merged).forces;
+        this.draft.bg = preset.palette.bg3;
+        if (preset.colors.length) this.draft.colors = preset.colors.slice();
+      }
       if (!live) this.refreshViews();
       if (!live) this.refresh3d();
       if (!live && shown) new Notice(L.applied(preset));
@@ -4145,18 +4248,21 @@ module.exports = class GraphStyler extends Plugin {
   }
 
   // 라이브 미리보기: 디스크 I/O 0. 글로우/색=주입 <style>, forces/색그룹=engine(메모리).
-  previewLive(preset) {
+  previewLive(preset, preserveAppearance = false) {
+    const current = preserveAppearance && this.currentPreset;
+    if (current) preset = Object.assign({}, preset, { palette: current.palette, colors: current.colors });
     this.ensureLiveStyle();
     this.liveStyle.textContent = makeGlowCss(preset.palette);
     const graphOptions = graphOptionsForPreset(preset);
     if (this.settings.keepColorGroups === true) {
       delete graphOptions.colorGroups;
-    } else if (preset.colors.length) {
+    } else if (!current && preset.colors.length) {
       const queries = this.getColorQueries(preset.colors.length);
       if (queries.length) graphOptions.colorGroups = makeGroups(queries, preset.colors);
     }
     if (preset.applyForces) this.currentForceOptions = forceOptionsFromGraph(graphOptions);
-    this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, graphOptions) });
+    this.previewGraphOptions = Object.assign({}, graphOptions);
+    this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, current && current.graph, graphOptions) });
     const leaves = this.app.workspace
       .getLeavesOfType('graph')
       .concat(this.app.workspace.getLeavesOfType('localgraph'));
@@ -4170,9 +4276,11 @@ module.exports = class GraphStyler extends Plugin {
         } catch (_) { /* engine API drift — preview just skips */ }
       }
     }
+    this.refresh3d();
   }
 
   async restore() {
+    this.previewGraphOptions = null;
     if (this._applying && this._applyIdle) await this._applyIdle;
     const adapter = this.app.vault.adapter;
     const bak = `${this.graphPath()}.styler-bak`;
@@ -4212,6 +4320,8 @@ module.exports.graphDataFromRenderer3d = graphDataFromRenderer3d;
 module.exports.graphRenderer3d = graphRenderer3d;
 module.exports.validGraph3dOptions = validGraph3dOptions;
 module.exports.orbitalCenterIndex3d = orbitalCenterIndex3d;
+module.exports.orbitalCenterStatus3d = orbitalCenterStatus3d;
+module.exports.OrbitalCenterModal = OrbitalCenterModal;
 module.exports.orbitalPositions3d = orbitalPositions3d;
 module.exports.globePositions3d = globePositions3d;
 module.exports.globeLineGeometry3d = globeLineGeometry3d;

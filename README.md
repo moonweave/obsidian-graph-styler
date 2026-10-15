@@ -129,6 +129,8 @@ Turn it on in **Settings → Graph Styler → Experimental → 3D graph view** (
 ![A 1,627-note vault in Neon in the 3D graph tab](docs/3d-graph.jpg)
 
 - Drag to turn it, scroll or pinch to zoom, Shift-drag or right-drag to move it. When you let go, it starts turning slowly again after a few seconds (unless Auto-rotate is off).
+- Use **Start rotation / Pause rotation** at the top right of the 3D view without opening the panel. It shares the Auto-rotate setting and preserves your camera angle. Distance fading and subtle spherical node shading help distinguish depth while paused; the layout algorithm is unchanged.
+- At the fitted camera, node radii use a consistent screen-space scale across Force, Orbital and Globe. Hub growth is capped, following Obsidian's bounded square-root sizing. Depth and zoom still affect apparent size; this does not promise identical pixels to an independently zoomed 2D graph.
 - Hover a note to light up its links and see its name; click to open it in a note tab (Cmd/Ctrl-click for a new tab).
 - The layout is computed in the background, so Obsidian stays responsive while it settles: about 2 s for 1,600 notes and 7 s for 5,000 on an M1 Pro.
 - Node size and link thickness follow the graph view's own **Node size** and **Link thickness** settings (graph settings → **Display**); the 3D node radius is scaled to 72% to account for perspective, then the graph setting is applied (at 2, nodes are twice their 3D default size). An open 3D tab picks up a change within half a second of letting go of the slider, without moving the camera. Above 1, links are drawn that many times as wide as the default line (up to the slider's 5); below 1 they get fainter instead of thinner, because the default line is already one pixel wide.

@@ -14,7 +14,7 @@ global.document = { head: { createEl: () => ({ remove() {} }) } };
 const originalLoad = Module._load;
 Module._load = function load(request, parent, isMain) {
   if (request === 'obsidian') {
-    return { Plugin: class {}, ItemView: class {}, PluginSettingTab: class {}, Setting: class {}, Notice: class {} };
+    return { Plugin: class {}, ItemView: class {}, PluginSettingTab: class {}, Setting: class {}, Notice: class {}, FuzzySuggestModal: class { setPlaceholder() {} } };
   }
   return originalLoad.call(this, request, parent, isMain);
 };
@@ -22,6 +22,75 @@ const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
 Module._load = originalLoad;
 const { graphData3d, graphDataFromRenderer3d, graphRenderer3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor,
   displayRatio3d, lineMode3d, forceCurve3d, layoutParams3d, validGraph3dOptions, orbitalCenterIndex3d, orbitalPositions3d, globePositions3d, globeLineGeometry3d, globeGuideGeometry3d, packGlobeThickPairs3d } = GraphStyler;
+
+{
+  const plugin = new GraphStyler();
+  let refreshed = 0;
+  Object.assign(plugin, {
+    settings: { keepColorGroups: true },
+    ensureLiveStyle() {}, liveStyle: {},
+    app: { workspace: { getLeavesOfType: () => [] } },
+    refresh3d() { refreshed++; },
+  });
+  const preset = GraphStyler.presetFromRaw({ id: 'preview', label: 'Preview', forces: { dist: 400, node: 0.5 } });
+  plugin.previewLive(preset);
+  assert.strictEqual(refreshed, 1, 'preview reaches 3D even with no open 2D leaf');
+  assert.strictEqual(plugin.previewGraphOptions.linkDistance, 400);
+  assert.strictEqual(plugin.previewGraphOptions.nodeSizeMultiplier, 0.5);
+  assert(!Object.hasOwn(plugin.previewGraphOptions, 'colorGroups'), 'preview preserves existing groups');
+}
+
+{
+  const files = ['한글 폴더/a & b.md', 'other/a & b.md'].map((path) => ({ path, basename: 'a & b', type: 'file' }));
+  const data = { deg: [2, 1] };
+  assert.deepStrictEqual(GraphStyler.orbitalCenterStatus3d(files, data, ''), { path: files[0].path, fallback: false });
+  assert.deepStrictEqual(GraphStyler.orbitalCenterStatus3d(files, data, files[1].path), { path: files[1].path, fallback: false });
+  assert.deepStrictEqual(GraphStyler.orbitalCenterStatus3d(files, data, 'deleted.md'), { path: files[0].path, fallback: true });
+  assert.deepStrictEqual(GraphStyler.orbitalCenterStatus3d([], { deg: [] }, 'deleted.md'), { path: '', fallback: true });
+  const chosen = [];
+  const plugin = { app: { vault: { getMarkdownFiles: () => files, getAbstractFileByPath: (path) => files.find((f) => f.path === path) } }, setGraph3dOptions: (patch) => chosen.push(patch) };
+  const modal = GraphStyler.OrbitalCenterModal(plugin);
+  assert.deepStrictEqual(modal.getItems(), files);
+  assert.notStrictEqual(modal.getItemText(files[0]), modal.getItemText(files[1]));
+  assert.deepStrictEqual(chosen, [], 'opening/searching/cancelling does not save');
+  modal.onChooseItem(files[1]);
+  assert.deepStrictEqual(chosen, [{ centerPath: files[1].path }]);
+  modal.onChooseItem({ path: 'deleted.md' });
+  assert.strictEqual(chosen.length, 1, 'stale selections do not save');
+  assert.strictEqual(GraphStyler.orbitalCenterStatus3d([files[0]], { deg: [0] }, files[1].path).fallback, true);
+  assert.strictEqual(GraphStyler.orbitalCenterStatus3d(files, data, files[1].path).fallback, false, 'restored graph restores preferred center');
+}
+
+// Rotation controls share the persisted panel setting without resetting the camera.
+{
+  const plugin = new GraphStyler();
+  plugin.settings = { rotate3d: true };
+  plugin.rotate3d = true;
+  plugin.rotate3dSpeed = 0.12;
+  const view = new Graph3DView({}, plugin);
+  view.rotationButton = {};
+  view.contentEl = { win: { performance: { now: () => 10000 } } };
+  view.kick = () => {};
+  plugin.views3d = () => [view];
+  let refreshes = 0;
+  plugin.refreshViews = () => { refreshes += 1; };
+  const saved = [];
+  plugin.saveData = async (settings) => { saved.push(settings.rotate3d); };
+  const camera = JSON.stringify(view.cam);
+  view.syncRotationControl();
+  assert.strictEqual(view.rotationButton.textContent, 'Pause rotation');
+  view.toggleRotation();
+  assert.strictEqual(view.rotationSpeed(10000), 0, 'pause stops rotation immediately');
+  assert.strictEqual(view.rotationButton.textContent, 'Start rotation');
+  assert.strictEqual(view.rotationButton.ariaPressed, 'false');
+  view.toggleRotation();
+  assert.strictEqual(view.rotationButton.textContent, 'Pause rotation');
+  assert.strictEqual(view.rotationButton.ariaPressed, 'true');
+  assert.ok(view.rotationSpeed(15000) > 0, 'start resumes rotation');
+  assert.deepStrictEqual(saved, [false, true], 'both actions persist the shared setting');
+  assert.strictEqual(refreshes, 2, 'both actions synchronize the panel');
+  assert.strictEqual(JSON.stringify(view.cam), camera, 'start and pause preserve camera');
+}
 
 // A Graph3DView with just enough of Obsidian and the DOM stubbed to drive its pointer handlers and frame().
 // draw() and pick() are replaced by recorders; the handlers come from bindInput() through registerDomEvent.
@@ -422,15 +491,17 @@ function uploads(calls) {
   assert.deepStrictEqual(lineMode3d(0.3), { thick: false, alpha: 0.3, width: 1 }, 'thinner = fainter 1 px lines');
   assert.deepStrictEqual(lineMode3d(3), { thick: true, alpha: 1, width: 3 }, 'thicker = 3 px quads');
 
-  // node radii: same sqrt(degree) shape, times the node size ratio; default 1 = the old radii
+  // Bounded sqrt radii follow Obsidian's shape, including the hub cap.
   const view = new Graph3DView({}, { settings: {} });
   view.data = { n: 3, deg: Uint32Array.from([0, 4, 9]) };
   view.files = [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md' }];
   view.style = { groups: [], fill: [1, 1, 1], nodeSize: 1 };
-  const old = [0, 4, 9].map((d) => 2.2 + Math.sqrt(d) * 1.1);
+  const old = [0, 4, 9].map((d) => Math.max(2, Math.min(0.75 * Math.sqrt(d + 1), 7.5)));
   assert.deepStrictEqual(Array.from(view.nodeAttributes().size).map((v) => +v.toFixed(5)), old.map((v) => +v.toFixed(5)));
   view.style.nodeSize = 2;
   assert.deepStrictEqual(Array.from(view.nodeAttributes().size).map((v) => +v.toFixed(5)), old.map((v) => +(v * 2).toFixed(5)));
+  view.data.deg = Uint32Array.from([99, 1000, 100000]);
+  assert.deepStrictEqual(Array.from(view.nodeAttributes().size), [15, 15, 15], 'high-degree hubs cannot grow without bound');
 }
 {
   // readStyle takes the ratios from the effective graph options (the core graph plugin's live options)
@@ -446,10 +517,17 @@ function uploads(calls) {
     options.nodeSizeMultiplier = 1;
     delete options.lineSizeMultiplier;
     return view.readStyle();
-  }).then((st) => assert.deepStrictEqual([st.nodeSize, st.lineSize], [1, 1], 'defaults → ratio 1'));
+  }).then((st) => {
+    assert.deepStrictEqual([st.nodeSize, st.lineSize], [1, 1], 'defaults → ratio 1');
+    view.plugin.previewGraphOptions = { nodeSizeMultiplier: 0.5, linkDistance: 400 };
+    return view.readStyle();
+  }).then((st) => {
+    assert.strictEqual(st.nodeSize, 0.5, '3D reads unsaved preview over stale core options');
+    assert.deepStrictEqual(st.forces, layoutParams3d({ repelStrength: 15, linkDistance: 400 }));
+  });
 }
 {
-  // the pick radius follows the 72% perspective size used by the node shader
+  // Picking uses the same fitted-camera CSS radius as the node shader.
   const { view } = stubView();
   delete view.pick;
   view.setHover = (i) => { view.hover = i; };
@@ -458,16 +536,34 @@ function uploads(calls) {
   view.pos = new Float32Array([0, 0, 0]);
   view.mvp = Float32Array.from([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
   view.pxScale = 10;
-  view.mouse = [200 + 15, 150];   // node at the canvas centre (400x300 CSS), cursor 15 CSS px = 30 device px away
+  view.mvp[15] = view.fitDistance();
+  view.mouse = [200 + 30, 150];
   view.size = Float32Array.from([2.2]);
   view.pick();
   assert.strictEqual(view.hover, -1, 'small node: 30 px away is a miss');
-  view.size = Float32Array.from([4]);
+  view.size = Float32Array.from([40]);
   view.pick();
   assert.strictEqual(view.hover, -1, 'the unscaled radius would incorrectly catch this point');
-  view.mouse = [200 + 14, 150];   // 28 device px, inside the 28.8 px rendered radius
+  view.mouse = [200 + 28, 150];
   view.pick();
   assert.strictEqual(view.hover, 0, 'the rendered 72% node radius remains selectable');
+}
+{
+  const { view } = stubView();
+  for (const dpr of [1, 2]) {
+    view.canvas.width = view.canvas.clientWidth * dpr;
+    for (const r of [30, 140, 800, 5000]) {
+      view.fit = { r, max: r };
+      for (const nodeSize of [0.1, 0.5, 1, 2, 5]) {
+        const base = 2.2 * nodeSize;
+        const radiusCss = base * view.nodeProjectionScale() / view.fitDistance() / dpr;
+        assert.ok(Math.abs(radiusCss - base * 0.72) < 1e-9, 'fitted radius is independent of layout scale and DPR');
+        const near = base * view.nodeProjectionScale() / (view.fitDistance() * 0.8);
+        const far = base * view.nodeProjectionScale() / (view.fitDistance() * 1.2);
+        assert.ok(near > far, 'depth still changes apparent size');
+      }
+    }
+  }
 }
 {
   // a 2D graph-settings change (graph.json rewritten) reaches an open 3D tab: a burst of writes leaves one re-style
@@ -517,7 +613,7 @@ function uploads(calls) {
   view.files = [{ path: 'a.md' }, { path: 'b.md' }];
   view.readStyle = async () => ({ groups: [], fill: [0.5, 0.25, 1], nodeSize: 3, lineSize: 1 });
   view.applyStyle().then(() => {
-    const want = (2.2 + 1.1) * 3;
+    const want = 2 * 3;
     const got = uploads(gl.calls);
     assert.deepStrictEqual(Array.from(got.get('sizeBuf')[0]).map((v) => +v.toFixed(5)), [want, want].map((v) => +v.toFixed(5)), 'size buffer');
     assert.deepStrictEqual(Array.from(got.get('colBuf')[0]), [0.5, 0.25, 1, 0.5, 0.25, 1], 'colour buffer');
@@ -567,7 +663,7 @@ function uploads(calls) {
   }).then(() => {
     assert.strictEqual(view.style.nodeSize, 2, 'the change that came while opening is applied after initGL');
     const sizes = uploads(gl.calls).get(view.buf.size);
-    assert.strictEqual(+sizes[sizes.length - 1][2].toFixed(5), +(2 * 2.2).toFixed(5), 'c.md (no links) at twice its radius');
+    assert.strictEqual(+sizes[sizes.length - 1][2].toFixed(5), 4, 'c.md (no links) at twice its radius');
   });
 }
 {
@@ -630,7 +726,18 @@ function uploads(calls) {
   assert.deepStrictEqual([view.fit.r, view.cam.dist], [30, view.shownDist], 'camera held, but fog and zoom limits follow the layout size');
   assert.deepStrictEqual(uniform(pass('halo'), 'uScale'), [3], 'dark-theme halo stays close to the 3D node core');
   assert.deepStrictEqual(uniform(pass('halo'), 'uGain'), [0], 'native look has no ornamental glow');
-  assert.deepStrictEqual(uniform(pass('core'), 'uPx'), [view.pxScale * 0.72], 'perspective node size is reduced for a flatter Obsidian-like read');
+  assert.deepStrictEqual(uniform(pass('core'), 'uPx'), [view.nodeProjectionScale()], 'GPU uses layout-normalized CSS radii');
+  assert.deepStrictEqual(uniform(pass('halo'), 'uPx'), [view.nodeProjectionScale()], 'halo shares core normalization');
+  const dpr = view.canvas.width / view.canvas.clientWidth;
+  assert.deepStrictEqual(uniform(pass('core'), 'uMinPx'), [1.6 * dpr * 0.72], 'minimum radius receives the same perspective correction');
+  for (const nodeSize of [0.1, 0.5, 1, 2, 5]) {
+    view.style.nodeSize = nodeSize;
+    frame(-1, 0);
+    for (const name of ['core', 'halo']) {
+      assert.deepStrictEqual(uniform(pass(name), 'uMinPx'), [1.6 * dpr * 0.72 * nodeSize], 'small distant nodes follow the node-size setting in both passes');
+    }
+  }
+  delete view.style.nodeSize;
   view.graphLook = 'deep-space';
   view.posDirty = true;
   frame(-1, 0);
