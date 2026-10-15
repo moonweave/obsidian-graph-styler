@@ -1928,9 +1928,15 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
   const restoredCore = await coreOptionsAtReopen(async (plugin, files) => {
     files['.obsidian/graph.json.styler-bak'] = JSON.stringify({ repelStrength: 3 });
     const originalConfirm = global.window.confirm;
-    global.window.confirm = () => true;
+    const preview = { nodeSizeMultiplier: 0.5 };
+    plugin.previewGraphOptions = preview;
+    global.window.confirm = () => false;
     try {
       await plugin.restore();
+      assert.strictEqual(plugin.previewGraphOptions, preview, 'cancelled restore preserves live preview state');
+      global.window.confirm = () => true;
+      await plugin.restore();
+      assert.strictEqual(plugin.previewGraphOptions, null, 'successful restore clears preview state');
     } finally {
       global.window.confirm = originalConfirm;
     }
