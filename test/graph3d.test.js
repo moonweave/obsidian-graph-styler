@@ -14,7 +14,7 @@ global.document = { head: { createEl: () => ({ remove() {} }) } };
 const originalLoad = Module._load;
 Module._load = function load(request, parent, isMain) {
   if (request === 'obsidian') {
-    return { Plugin: class {}, ItemView: class {}, PluginSettingTab: class {}, Setting: class {}, Notice: class {} };
+    return { Plugin: class {}, ItemView: class {}, PluginSettingTab: class {}, Setting: class {}, Notice: class {}, FuzzySuggestModal: class { setPlaceholder() {} } };
   }
   return originalLoad.call(this, request, parent, isMain);
 };
@@ -22,6 +22,27 @@ const GraphStyler = require(path.join(__dirname, '..', 'main.js'));
 Module._load = originalLoad;
 const { graphData3d, graphDataFromRenderer3d, graphRenderer3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor,
   displayRatio3d, lineMode3d, forceCurve3d, layoutParams3d, validGraph3dOptions, orbitalCenterIndex3d, orbitalPositions3d, globePositions3d, globeLineGeometry3d, globeGuideGeometry3d, packGlobeThickPairs3d } = GraphStyler;
+
+{
+  const files = ['한글 폴더/a & b.md', 'other/a & b.md'].map((path) => ({ path, basename: 'a & b', type: 'file' }));
+  const data = { deg: [2, 1] };
+  assert.deepStrictEqual(GraphStyler.orbitalCenterStatus3d(files, data, ''), { path: files[0].path, fallback: false });
+  assert.deepStrictEqual(GraphStyler.orbitalCenterStatus3d(files, data, files[1].path), { path: files[1].path, fallback: false });
+  assert.deepStrictEqual(GraphStyler.orbitalCenterStatus3d(files, data, 'deleted.md'), { path: files[0].path, fallback: true });
+  assert.deepStrictEqual(GraphStyler.orbitalCenterStatus3d([], { deg: [] }, 'deleted.md'), { path: '', fallback: true });
+  const chosen = [];
+  const plugin = { app: { vault: { getMarkdownFiles: () => files, getAbstractFileByPath: (path) => files.find((f) => f.path === path) } }, setGraph3dOptions: (patch) => chosen.push(patch) };
+  const modal = GraphStyler.OrbitalCenterModal(plugin);
+  assert.deepStrictEqual(modal.getItems(), files);
+  assert.notStrictEqual(modal.getItemText(files[0]), modal.getItemText(files[1]));
+  assert.deepStrictEqual(chosen, [], 'opening/searching/cancelling does not save');
+  modal.onChooseItem(files[1]);
+  assert.deepStrictEqual(chosen, [{ centerPath: files[1].path }]);
+  modal.onChooseItem({ path: 'deleted.md' });
+  assert.strictEqual(chosen.length, 1, 'stale selections do not save');
+  assert.strictEqual(GraphStyler.orbitalCenterStatus3d([files[0]], { deg: [0] }, files[1].path).fallback, true);
+  assert.strictEqual(GraphStyler.orbitalCenterStatus3d(files, data, files[1].path).fallback, false, 'restored graph restores preferred center');
+}
 
 // Rotation controls share the persisted panel setting without resetting the camera.
 {

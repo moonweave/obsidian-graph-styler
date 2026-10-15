@@ -5,7 +5,7 @@
  */
 'use strict';
 
-const { Plugin, ItemView, Notice, Platform, PluginSettingTab, Setting, Keymap, getAllTags } = require('obsidian');
+const { Plugin, ItemView, Notice, Platform, PluginSettingTab, Setting, Keymap, getAllTags, FuzzySuggestModal } = require('obsidian');
 
 const AUTHOR = 'Moonweave';
 const AUTHOR_URL = 'https://github.com/moonweave';
@@ -1197,26 +1197,37 @@ class StylerView extends ItemView {
     layout.createEl('option', { value: 'globe', text: L.layout3dGlobe });
     layout.value = appearance.layout;
     layout.onchange = () => {
-      centerInput.disabled = layout.value !== 'orbital';
       plugin.setGraph3dOptions({ layout: layout.value });
     };
-    const centerRow = c.createDiv({ cls: 'gs-row gs-3d-center-row' });
-    centerRow.createSpan({ cls: 'gs-row-label', text: L.center3d });
-    const centerInput = centerRow.createEl('input', { cls: 'gs-3d-center' });
-    centerInput.type = 'search';
-    centerInput.placeholder = L.center3dAuto;
-    centerInput.value = appearance.centerPath;
-    centerInput.setAttr('list', 'gs-3d-center-options');
-    const candidates = plugin.graph3dCenterCandidates();
-    const options = centerRow.createEl('datalist', { attr: { id: 'gs-3d-center-options' } });
-    for (const file of candidates) options.createEl('option', { value: file.path, label: file.basename || file.path });
+    const centerSection = c.createDiv({ cls: 'gs-3d-center-section' });
+    centerSection.style.display = 'block';
+    centerSection.style.width = '100%';
+    centerSection.style.flex = '1 0 100%';
+    const centerLabel = centerSection.createDiv({ cls: 'gs-row-label', text: L.center3d });
+    centerLabel.style.display = 'block';
+    centerLabel.style.width = 'auto';
+    const centerRow = centerSection.createDiv({ cls: 'gs-row gs-3d-center-row' });
+    centerRow.style.display = 'block';
+    const ko = detectLang() === 'ko';
+    const centerControls = centerRow.createDiv({ cls: 'gs-center-controls' });
+    centerControls.style.display = 'grid';
+    centerControls.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
+    centerControls.style.gap = '6px 8px';
+    const centerInput = centerControls.createEl('button', { cls: 'gs-3d-center', text: ko ? '노트 선택…' : 'Choose note…' });
+    centerInput.style.width = '100%';
     centerInput.disabled = appearance.layout !== 'orbital';
-    centerInput.onchange = () => {
-      const selected = candidates.find((file) => file.path === centerInput.value);
-      if (!centerInput.value.trim()) plugin.setGraph3dOptions({ centerPath: '' });
-      else if (selected) plugin.setGraph3dOptions({ centerPath: selected.path });
-      else centerInput.value = validGraph3dOptions(plugin.settings).centerPath;
-    };
+    centerInput.onclick = () => new OrbitalCenterModal(plugin).open();
+    const auto = centerControls.createEl('button', { text: ko ? '자동' : 'Automatic' });
+    auto.style.width = '100%';
+    auto.disabled = appearance.layout !== 'orbital' || !appearance.centerPath;
+    auto.onclick = () => plugin.setGraph3dOptions({ centerPath: '' });
+    c.createDiv({ cls: 'gs-center-status', text: appearance.layout !== 'orbital'
+      ? (ko ? 'Orbital 배치에서 사용합니다.' : 'Available in the Orbital layout.')
+      : (ko ? 'Vault 전체에서 검색 · 열린 모든 3D 탭에 적용' : 'Search the entire vault · applies to all open 3D tabs') });
+    const selectedCenter = appearance.centerPath ? plugin.app.vault.getAbstractFileByPath(appearance.centerPath) : null;
+    const selectedStatus = c.createDiv({ cls: 'gs-center-status', text: appearance.centerPath
+      ? `${ko ? '선택' : 'Selected'}: ${selectedCenter ? selectedCenter.basename : (ko ? '노트를 찾을 수 없음' : 'Note not found')}` : L.center3dAuto });
+    if (appearance.centerPath) selectedStatus.title = appearance.centerPath;
     const rotateRow = c.createEl('label', { cls: 'gs-row gs-check' });
     const rotateBox = rotateRow.createEl('input');
     rotateBox.type = 'checkbox';
@@ -1435,6 +1446,27 @@ function validGraph3dOptions(settings) {
 function comparePath3d(a, b) {
   const left = String(a || ''), right = String(b || '');
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function OrbitalCenterModal(plugin) {
+  return new class extends FuzzySuggestModal {
+    constructor() {
+      super(plugin.app);
+      this.setPlaceholder(detectLang() === 'ko' ? '노트 제목 또는 경로 검색' : 'Search note title or path');
+    }
+    getItems() { return plugin.app.vault.getMarkdownFiles(); }
+    getItemText(file) { return `${file.basename} — ${file.path}`; }
+    onChooseItem(file) {
+      const current = plugin.app.vault.getAbstractFileByPath(file.path);
+      if (!current || current !== file) return;
+      plugin.setGraph3dOptions({ centerPath: file.path });
+    }
+  }();
+}
+
+function orbitalCenterStatus3d(files, data, preferredPath) {
+  const index = orbitalCenterIndex3d(files, data, preferredPath);
+  return { path: index >= 0 ? files[index].path : '', fallback: !!preferredPath && (index < 0 || files[index].path !== preferredPath) };
 }
 
 function orbitalCenterIndex3d(files, data, preferredPath) {
@@ -2172,6 +2204,7 @@ class Graph3DView extends ItemView {
       return;
     }
     this.label = el.createDiv({ cls: 'gs3d-label' });
+    this.centerStatus = el.createDiv({ cls: 'gs3d-center-status', attr: { role: 'status' } });
     this.rotationButton = el.createEl('button', { cls: 'gs3d-rotation', attr: { type: 'button' } });
     this.syncRotationControl();
     this.registerDomEvent(this.rotationButton, 'click', () => this.toggleRotation());
@@ -2318,6 +2351,14 @@ class Graph3DView extends ItemView {
   }
 
   positionsForLayout(layout, centerPath) {
+    if (this.centerStatus) {
+      const status = orbitalCenterStatus3d(this.files, this.data, centerPath);
+      const ko = detectLang() === 'ko';
+      this.centerStatus.setText(layout !== 'orbital' ? '' :
+        `${ko ? '현재 중심' : 'Current center'}: ${status.path || (ko ? '없음' : 'None')}${status.fallback
+          ? (ko ? ' · 선택한 노트가 이 그래프에 없어 자동 대체됨' : ' · Selected note is absent from this graph; using automatic fallback')
+          : (!centerPath ? (ko ? ' · 자동' : ' · Automatic') : '')}`);
+    }
     if (layout === 'orbital') {
       const center = orbitalCenterIndex3d(this.files, this.data, centerPath);
       this.orbitalCenter = center;
@@ -3367,6 +3408,7 @@ module.exports = class GraphStyler extends Plugin {
     if (next.centerPath) this.settings.orbitalCenterPath = next.centerPath;
     else delete this.settings.orbitalCenterPath;
     for (const view of this.views3d()) view.applyGraph3dOptions(next);
+    this.refreshViews();
     const prior = this._save3dSettings || Promise.resolve();
     this._save3dSettings = prior.catch(() => {}).then(() => this.saveData(this.settings));
     await this._save3dSettings;
@@ -4253,6 +4295,8 @@ module.exports.graphDataFromRenderer3d = graphDataFromRenderer3d;
 module.exports.graphRenderer3d = graphRenderer3d;
 module.exports.validGraph3dOptions = validGraph3dOptions;
 module.exports.orbitalCenterIndex3d = orbitalCenterIndex3d;
+module.exports.orbitalCenterStatus3d = orbitalCenterStatus3d;
+module.exports.OrbitalCenterModal = OrbitalCenterModal;
 module.exports.orbitalPositions3d = orbitalPositions3d;
 module.exports.globePositions3d = globePositions3d;
 module.exports.globeLineGeometry3d = globeLineGeometry3d;

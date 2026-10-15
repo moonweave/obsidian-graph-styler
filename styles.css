@@ -286,6 +286,29 @@
   opacity: 0.8;
 }
 
+.graph-styler-panel .gs-3d-center-row {
+  display: block;
+}
+
+.graph-styler-panel .gs-3d-center-row > .gs-row-label {
+  display: block;
+  width: auto;
+  margin: 0 0 6px;
+}
+
+.graph-styler-panel .gs-center-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 8px;
+}
+
+.graph-styler-panel .gs-center-controls button {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
 .graph-styler-panel .gs-row input[type="range"] {
   flex: 1;
 }
@@ -303,6 +326,29 @@
   font-size: 12px;
   cursor: pointer;
 }
+
+.gs-center-status {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  margin: 6px 0;
+}
+
+.gs3d-center-status {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  max-width: calc(100% - 24px);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  background: var(--background-primary);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.gs3d-center-status:empty { display: none; }
 
 .graph-styler-panel .gs-caption-items {
   display: flex;

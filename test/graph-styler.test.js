@@ -1502,9 +1502,10 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.strictEqual(off.saved[off.saved.length - 1].experimental3d, true);
     assert.deepStrictEqual(notices, [], 'no "use the command palette" notice from the panel: its Open button is right there');
     g = off.group();
-    const [onBox, center, rotateBox, speed] = inputs(g);
-    assert.deepStrictEqual([onBox.checked, center.type, center.disabled, rotateBox.type, rotateBox.checked, speed.type],
-      [true, 'search', true, 'checkbox', true, 'range']);
+    const [onBox, rotateBox, speed] = inputs(g);
+    const center = g.walk().find((el) => el.text === 'Choose note…');
+    assert.deepStrictEqual([onBox.checked, center.tag, center.disabled, rotateBox.type, rotateBox.checked, speed.type],
+      [true, 'button', true, 'checkbox', true, 'range']);
     const selects = g.walk().filter((el) => el.tag === 'select');
     assert.deepStrictEqual(selects.map((el) => el.value), ['original', 'force'], 'Look and Layout default to the current appearance');
     assert.deepStrictEqual([speed.min, speed.max, speed.step, speed.value, speed.disabled], ['0.02', '0.6', '0.01', '0.12', false]);
@@ -1535,7 +1536,8 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
 
     // Round trip: a new plugin instance reads the saved values back into the same controls.
     const back = await render3d(GraphStyler, off.saved[off.saved.length - 1]);
-    const [onAgain, centerAgain, rotateAgain, speedAgain] = inputs(back.group());
+    const [onAgain, rotateAgain, speedAgain] = inputs(back.group());
+    const centerAgain = back.group().walk().find((el) => el.text === 'Choose note…');
     assert.deepStrictEqual([onAgain.checked, rotateAgain.checked, speedAgain.value, speedAgain.disabled], [true, false, '0.3', true]);
     assert.strictEqual(centerAgain.disabled, true);
     // Damaged values fall back to the defaults.
@@ -1567,7 +1569,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     assert.deepStrictEqual(inputs(back.group()).map((el) => [el.type, el.checked]), [['checkbox', false]]);
     await toggleRow.toggle.change(true);
     assert.deepStrictEqual(notices, ['Open it from the command palette: “Graph Styler: Open 3D graph”']);
-    assert.deepStrictEqual(inputs(back.group()).map((el) => el.type), ['checkbox', 'search', 'checkbox', 'range']);
+    assert.deepStrictEqual(inputs(back.group()).map((el) => el.type), ['checkbox', 'checkbox', 'range']);
 
     // Korean labels.
     const ko = await render3d(loadGraphStylerIn('ko'), { experimental3d: true });
@@ -1608,6 +1610,7 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     const updates = [];
     const plugin = {
       settings,
+      refreshViews() {},
       views3d: () => [{ applyGraph3dOptions: (options) => updates.push(options) }, { applyGraph3dOptions: (options) => updates.push(options) }],
       saveData: async (value) => { saves.push(JSON.parse(JSON.stringify(value))); },
     };
