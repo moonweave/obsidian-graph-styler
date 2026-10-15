@@ -168,6 +168,7 @@ const EMPTY = `(() => { const leaf = ${LEAF}; const r = leaf.view.renderer; cons
 
   const hubNow = await js(CENTRE_ON(geo.hub.id));
   for (let i = 0; i < 6; i++) { await mouse('mouseMoved', hubNow.x - 18 + 3 * i, hubNow.y); await sleep(40); }
+  await mouse('mouseMoved', hubNow.x, hubNow.y);
   await sleep(500);
   const hovered = await js(`(() => { const r = ${LEAF}.view.renderer; const h = r.getHighlightNode && r.getHighlightNode(); return h ? h.id : null; })()`);
   check('hovering a node highlights it', hovered === geo.hub.id, hovered);
