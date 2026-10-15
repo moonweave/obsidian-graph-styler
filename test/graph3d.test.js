@@ -453,15 +453,17 @@ function uploads(calls) {
   assert.deepStrictEqual(lineMode3d(0.3), { thick: false, alpha: 0.3, width: 1 }, 'thinner = fainter 1 px lines');
   assert.deepStrictEqual(lineMode3d(3), { thick: true, alpha: 1, width: 3 }, 'thicker = 3 px quads');
 
-  // node radii: same sqrt(degree) shape, times the node size ratio; default 1 = the old radii
+  // Bounded sqrt radii follow Obsidian's shape, including the hub cap.
   const view = new Graph3DView({}, { settings: {} });
   view.data = { n: 3, deg: Uint32Array.from([0, 4, 9]) };
   view.files = [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md' }];
   view.style = { groups: [], fill: [1, 1, 1], nodeSize: 1 };
-  const old = [0, 4, 9].map((d) => 2.2 + Math.sqrt(d) * 1.1);
+  const old = [0, 4, 9].map((d) => Math.max(2, Math.min(0.75 * Math.sqrt(d + 1), 7.5)));
   assert.deepStrictEqual(Array.from(view.nodeAttributes().size).map((v) => +v.toFixed(5)), old.map((v) => +v.toFixed(5)));
   view.style.nodeSize = 2;
   assert.deepStrictEqual(Array.from(view.nodeAttributes().size).map((v) => +v.toFixed(5)), old.map((v) => +(v * 2).toFixed(5)));
+  view.data.deg = Uint32Array.from([99, 1000, 100000]);
+  assert.deepStrictEqual(Array.from(view.nodeAttributes().size), [15, 15, 15], 'high-degree hubs cannot grow without bound');
 }
 {
   // readStyle takes the ratios from the effective graph options (the core graph plugin's live options)
@@ -480,7 +482,7 @@ function uploads(calls) {
   }).then((st) => assert.deepStrictEqual([st.nodeSize, st.lineSize], [1, 1], 'defaults → ratio 1'));
 }
 {
-  // the pick radius follows the 72% perspective size used by the node shader
+  // Picking uses the same fitted-camera CSS radius as the node shader.
   const { view } = stubView();
   delete view.pick;
   view.setHover = (i) => { view.hover = i; };
@@ -489,16 +491,34 @@ function uploads(calls) {
   view.pos = new Float32Array([0, 0, 0]);
   view.mvp = Float32Array.from([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
   view.pxScale = 10;
-  view.mouse = [200 + 15, 150];   // node at the canvas centre (400x300 CSS), cursor 15 CSS px = 30 device px away
+  view.mvp[15] = view.fitDistance();
+  view.mouse = [200 + 30, 150];
   view.size = Float32Array.from([2.2]);
   view.pick();
   assert.strictEqual(view.hover, -1, 'small node: 30 px away is a miss');
-  view.size = Float32Array.from([4]);
+  view.size = Float32Array.from([40]);
   view.pick();
   assert.strictEqual(view.hover, -1, 'the unscaled radius would incorrectly catch this point');
-  view.mouse = [200 + 14, 150];   // 28 device px, inside the 28.8 px rendered radius
+  view.mouse = [200 + 28, 150];
   view.pick();
   assert.strictEqual(view.hover, 0, 'the rendered 72% node radius remains selectable');
+}
+{
+  const { view } = stubView();
+  for (const dpr of [1, 2]) {
+    view.canvas.width = view.canvas.clientWidth * dpr;
+    for (const r of [30, 140, 800, 5000]) {
+      view.fit = { r, max: r };
+      for (const nodeSize of [0.1, 0.5, 1, 2, 5]) {
+        const base = 2.2 * nodeSize;
+        const radiusCss = base * view.nodeProjectionScale() / view.fitDistance() / dpr;
+        assert.ok(Math.abs(radiusCss - base * 0.72) < 1e-9, 'fitted radius is independent of layout scale and DPR');
+        const near = base * view.nodeProjectionScale() / (view.fitDistance() * 0.8);
+        const far = base * view.nodeProjectionScale() / (view.fitDistance() * 1.2);
+        assert.ok(near > far, 'depth still changes apparent size');
+      }
+    }
+  }
 }
 {
   // a 2D graph-settings change (graph.json rewritten) reaches an open 3D tab: a burst of writes leaves one re-style
@@ -548,7 +568,7 @@ function uploads(calls) {
   view.files = [{ path: 'a.md' }, { path: 'b.md' }];
   view.readStyle = async () => ({ groups: [], fill: [0.5, 0.25, 1], nodeSize: 3, lineSize: 1 });
   view.applyStyle().then(() => {
-    const want = (2.2 + 1.1) * 3;
+    const want = 2 * 3;
     const got = uploads(gl.calls);
     assert.deepStrictEqual(Array.from(got.get('sizeBuf')[0]).map((v) => +v.toFixed(5)), [want, want].map((v) => +v.toFixed(5)), 'size buffer');
     assert.deepStrictEqual(Array.from(got.get('colBuf')[0]), [0.5, 0.25, 1, 0.5, 0.25, 1], 'colour buffer');
@@ -598,7 +618,7 @@ function uploads(calls) {
   }).then(() => {
     assert.strictEqual(view.style.nodeSize, 2, 'the change that came while opening is applied after initGL');
     const sizes = uploads(gl.calls).get(view.buf.size);
-    assert.strictEqual(+sizes[sizes.length - 1][2].toFixed(5), +(2 * 2.2).toFixed(5), 'c.md (no links) at twice its radius');
+    assert.strictEqual(+sizes[sizes.length - 1][2].toFixed(5), 4, 'c.md (no links) at twice its radius');
   });
 }
 {
@@ -661,7 +681,8 @@ function uploads(calls) {
   assert.deepStrictEqual([view.fit.r, view.cam.dist], [30, view.shownDist], 'camera held, but fog and zoom limits follow the layout size');
   assert.deepStrictEqual(uniform(pass('halo'), 'uScale'), [3], 'dark-theme halo stays close to the 3D node core');
   assert.deepStrictEqual(uniform(pass('halo'), 'uGain'), [0], 'native look has no ornamental glow');
-  assert.deepStrictEqual(uniform(pass('core'), 'uPx'), [view.pxScale * 0.72], 'perspective node size is reduced for a flatter Obsidian-like read');
+  assert.deepStrictEqual(uniform(pass('core'), 'uPx'), [view.nodeProjectionScale()], 'GPU uses layout-normalized CSS radii');
+  assert.deepStrictEqual(uniform(pass('halo'), 'uPx'), [view.nodeProjectionScale()], 'halo shares core normalization');
   const dpr = view.canvas.width / view.canvas.clientWidth;
   assert.deepStrictEqual(uniform(pass('core'), 'uMinPx'), [1.6 * dpr * 0.72], 'minimum radius receives the same perspective correction');
   for (const nodeSize of [0.1, 0.5, 1, 2, 5]) {

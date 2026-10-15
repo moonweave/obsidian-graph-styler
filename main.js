@@ -1019,7 +1019,7 @@ class StylerView extends ItemView {
       input.value = hex;
       input.disabled = this.plugin.settings.keepColorGroups === true;
       this._groupColorInputs.push(input);
-      input.oninput = () => { draft.colors[i] = input.value; this.schedulePreview(); };
+      input.oninput = () => { draft.colors[i] = input.value; this.schedulePreview(true); };
     });
 
     // background color
@@ -1028,10 +1028,10 @@ class StylerView extends ItemView {
     const bgEl = bgRow.createEl('input');
     bgEl.type = 'color';
     bgEl.value = draft.bg;
-    bgEl.oninput = () => { draft.bg = bgEl.value; this.schedulePreview(); };
+    bgEl.oninput = () => { draft.bg = bgEl.value; this.schedulePreview(true); };
 
     // glow + force/size sliders
-    this.sliderRow(details, L.f.glow, 0, 100, 5, draft.glow, (v) => { draft.glow = v; });
+    this.sliderRow(details, L.f.glow, 0, 100, 5, draft.glow, (v) => { draft.glow = v; }, true);
     for (const [key, min, max, step] of SLIDERS) {
       this.sliderRow(details, L.f[key], min, max, step, draft.forces[key], (v) => { draft.forces[key] = v; });
     }
@@ -1063,7 +1063,7 @@ class StylerView extends ItemView {
     importBtn.onclick = () => this.plugin.importShareCode(codeEl.value);
   }
 
-  sliderRow(parent, label, min, max, step, value, onChange) {
+  sliderRow(parent, label, min, max, step, value, onChange, appearanceChanged = false) {
     const row = parent.createDiv({ cls: 'gs-row' });
     row.createSpan({ cls: 'gs-row-label', text: label });
     const input = row.createEl('input');
@@ -1072,7 +1072,7 @@ class StylerView extends ItemView {
     input.max = String(max);
     input.step = sliderStep(value, min, step);
     input.value = String(value);
-    input.oninput = () => { onChange(Number(input.value)); this.schedulePreview(); };
+    input.oninput = () => { onChange(Number(input.value)); this.schedulePreview(appearanceChanged); };
     return input;
   }
 
@@ -1253,11 +1253,14 @@ class StylerView extends ItemView {
   }
 
   // rAF 스로틀: 한 프레임에 한 번만, 디스크 안 건드리는 in-memory 미리보기
-  schedulePreview() {
+  schedulePreview(appearanceChanged = false) {
+    this._appearanceChanged = this._appearanceChanged || appearanceChanged;
     if (this._raf) return;
     this._raf = window.requestAnimationFrame(() => {
       this._raf = null;
-      this.plugin.previewLive(presetFromRaw(this.rawFromDraft(LIVE_ID)));
+      const preserveAppearance = !this._appearanceChanged;
+      this._appearanceChanged = false;
+      this.plugin.previewLive(presetFromRaw(this.rawFromDraft(LIVE_ID)), preserveAppearance);
     });
   }
 
@@ -2427,7 +2430,9 @@ class Graph3DView extends ItemView {
       const base = file.type === 'tag' ? tagFill : file.type === 'unresolved' ? unresolvedFill : fill;
       col.set(g ? g.rgb : base, i * 3);
       groupIndex[i] = group;
-      size[i] = (2.2 + Math.sqrt(deg[i]) * 1.1) * this.style.nodeSize;
+      // Obsidian 1.14.4 caps its sqrt(weight + 1) radii at 30. Use the same
+      // bounded shape at a compact CSS scale, rather than unbounded 3D hubs.
+      size[i] = Math.max(2, Math.min(0.75 * Math.sqrt(deg[i] + 1), 7.5)) * this.style.nodeSize;
     }
     return { col, size, groupIndex };
   }
@@ -2861,6 +2866,7 @@ class Graph3DView extends ItemView {
     const dpr = c.width / Math.max(1, c.clientWidth);
     const mx = this.mouse[0] * dpr, my = this.mouse[1] * dpr;
     const minR = 6 * dpr;
+    const nodeScale = this.nodeProjectionScale();
     let best = -1, bestScore = 1;
     for (let i = 0; i < this.data.n; i++) {
       const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
@@ -2868,7 +2874,7 @@ class Graph3DView extends ItemView {
       if (w <= 0) continue;
       const sx = ((M[0] * x + M[4] * y + M[8] * z + M[12]) / w * 0.5 + 0.5) * c.width;
       const sy = (0.5 - (M[1] * x + M[5] * y + M[9] * z + M[13]) / w * 0.5) * c.height;
-      const r = Math.max(this.size[i] * this.pxScale * 0.72 / w, minR);
+      const r = Math.max(this.size[i] * nodeScale / w, minR);
       const score = Math.hypot(sx - mx, sy - my) / r;
       if (score <= bestScore) { best = i; bestScore = score; }
     }
@@ -2902,6 +2908,13 @@ class Graph3DView extends ItemView {
     const aspect = c && c.clientHeight ? c.clientWidth / c.clientHeight : 1;
     const half = Math.min(this.cam.fov / 2, Math.atan(Math.tan(this.cam.fov / 2) * aspect));
     return this.fit.r / Math.sin(half) * 1.02;
+  }
+
+  nodeProjectionScale() {
+    // At the fitted camera, radii are CSS pixels rather than layout-world units.
+    // Depth and user zoom still change apparent size, but changing layouts does not.
+    const dpr = this.canvas.width / Math.max(1, this.canvas.clientWidth);
+    return this.fitDistance() * dpr * 0.72;
   }
 
   // input=true: 입력에 대한 응답이라 프레임 상한 없이 바로 그린다.
@@ -3088,8 +3101,7 @@ class Graph3DView extends ItemView {
       gl.useProgram(P.p);
       gl.uniformMatrix4fv(P.u.uMvp, false, this.mvp);
       gl.uniform2f(P.u.uView, c.width, c.height);
-      // The same world-space radius reads much larger in perspective than in Obsidian's flat graph.
-      gl.uniform1f(P.u.uPx, this.pxScale * 0.72);
+      gl.uniform1f(P.u.uPx, this.nodeProjectionScale());
       gl.uniform1f(P.u.uMinPx, 1.6 * dpr * 0.72 * (st.nodeSize ?? 1));
       gl.uniform1f(P.u.uHover, hovering);
       gl.uniform2fv(P.u.uFog, fog);
@@ -4002,6 +4014,11 @@ module.exports = class GraphStyler extends Plugin {
       }
       this.currentForceOptions = forceOptionsFromGraph(merged);
       this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, graphOptions) });
+      if (!live && this.draft) {
+        this.draft.forces = draftFromGraph(merged).forces;
+        this.draft.bg = preset.palette.bg3;
+        if (preset.colors.length) this.draft.colors = preset.colors.slice();
+      }
       if (!live) this.refreshViews();
       if (!live) this.refresh3d();
       if (!live && shown) new Notice(L.applied(preset));
@@ -4167,18 +4184,20 @@ module.exports = class GraphStyler extends Plugin {
   }
 
   // 라이브 미리보기: 디스크 I/O 0. 글로우/색=주입 <style>, forces/색그룹=engine(메모리).
-  previewLive(preset) {
+  previewLive(preset, preserveAppearance = false) {
+    const current = preserveAppearance && this.currentPreset;
+    if (current) preset = Object.assign({}, preset, { palette: current.palette, colors: current.colors });
     this.ensureLiveStyle();
     this.liveStyle.textContent = makeGlowCss(preset.palette);
     const graphOptions = graphOptionsForPreset(preset);
     if (this.settings.keepColorGroups === true) {
       delete graphOptions.colorGroups;
-    } else if (preset.colors.length) {
+    } else if (!current && preset.colors.length) {
       const queries = this.getColorQueries(preset.colors.length);
       if (queries.length) graphOptions.colorGroups = makeGroups(queries, preset.colors);
     }
     if (preset.applyForces) this.currentForceOptions = forceOptionsFromGraph(graphOptions);
-    this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, graphOptions) });
+    this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, current && current.graph, graphOptions) });
     const leaves = this.app.workspace
       .getLeavesOfType('graph')
       .concat(this.app.workspace.getLeavesOfType('localgraph'));

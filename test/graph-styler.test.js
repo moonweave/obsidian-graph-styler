@@ -216,6 +216,34 @@ function preview(applyForces) {
   return { engineOptions, renderCalls };
 }
 
+(async () => {
+  for (const mono of [false, true]) {
+    const { app, files, engineOptions } = makeHarness();
+    const plugin = new GraphStyler(app);
+    plugin.settings = { custom: [] };
+    plugin.draft = { name: 'Keep my name', includeView: true };
+    const chosen = preset(false);
+    if (mono) {
+      chosen.colors = [];
+      chosen.palette = Object.assign({}, chosen.palette, { bg1: '#000000', bg2: '#000000', bg3: '#000000' });
+    }
+    await plugin._doApply(chosen);
+    assert.strictEqual(plugin.draft.bg, chosen.palette.bg3, 'background editor follows the selected preset');
+    assert.strictEqual(plugin.draft.name, 'Keep my name');
+    assert.strictEqual(plugin.draft.includeView, true);
+    const saved = JSON.parse(files['.obsidian/graph.json']);
+    assert.strictEqual(plugin.draft.forces.node, saved.nodeSizeMultiplier, 'editor uses effective sizes, not built-in suggested forces');
+    const css = plugin.liveStyle.textContent;
+    const edited = preset(true);
+    edited.graph.nodeSizeMultiplier = 1.3;
+    plugin.previewLive(edited, true);
+    assert.strictEqual(plugin.liveStyle.textContent, css, 'size edit preserves exact palette and filter, including Mono');
+    assert.strictEqual(engineOptions.at(-1).nodeSizeMultiplier, 1.3);
+    assert.strictEqual(engineOptions.at(-1).colorGroups, undefined, 'size edit does not regenerate group rules');
+    assert.deepStrictEqual(plugin.currentPreset.colors, chosen.colors);
+  }
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+
 async function loadDraft() {
   const { app } = makeHarness();
   const plugin = new GraphStyler(app);
