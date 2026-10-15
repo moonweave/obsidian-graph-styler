@@ -57,12 +57,23 @@ async function main() {
   const select = async (index, option) => {
     await js(`(() => { const e=${GROUP}.querySelectorAll('select')[${index}]; e.selectedIndex=${option}; e.dispatchEvent(new Event('change',{bubbles:true})); })()`);
   };
-  const centerInput = async text => {
-    await js(`document.querySelector('.gs-3d-center').focus(); document.querySelector('.gs-3d-center').select()`);
-    await call('Input.insertText', { text });
-    if (!text) await press('Backspace', 'Backspace', 8);
-    await press('Tab', 'Tab', 9);
+  const openCenterPicker = async () => {
+    await clickElement("document.querySelector('.gs-3d-center')");
+    await wait("document.querySelector('.modal-container .prompt-input') !== null", Boolean, 'center picker opens');
+  };
+  const chooseCenter = async path => {
+    await openCenterPicker();
+    await call('Input.insertText', { text: path });
+    await wait("document.querySelectorAll('.modal-container .suggestion-item').length", n => n > 0, 'center search results');
+    await press('Enter', 'Enter', 13);
+    await wait(`${P}.settings.orbitalCenterPath`, selected => selected === path, 'center selection saved');
+  };
+  const cancelCenterSearch = async query => {
+    await openCenterPicker();
+    await call('Input.insertText', { text: query });
     await sleep(100);
+    await press('Escape', 'Escape', 27);
+    await wait("document.querySelector('.modal-container') === null", Boolean, 'center search cancelled');
   };
   const geometry = () => js(`(() => {const c=${V}.canvas,r=c.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,w:r.width,h:r.height,hit:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===c};})()`);
   const capture = async name => {
@@ -110,13 +121,14 @@ async function main() {
     }
     await select(1, 1);
     const center = await js(`${V}.files.filter(f=>f.type==='file'&&f.file&&/\.md$/i.test(f.path))[0].path`);
-    await centerInput(center);
+    await chooseCenter(center);
     assert.deepStrictEqual(await js(`(()=>{const v=${V};return [v.centerPath,Array.from(v.pos.slice(v.orbitalCenter*3,v.orbitalCenter*3+3))];})()`), [center, [0, 0, 0]]);
-    await centerInput('__missing_graph_styler_qa__.md');
-    assert.strictEqual(await js(`document.querySelector('.gs-3d-center').value`), center);
-    await centerInput('');
+    await cancelCenterSearch('__missing_graph_styler_qa__.md');
+    assert.strictEqual(await js(`${P}.settings.orbitalCenterPath`), center, 'cancelling an unmatched search preserves the saved center');
+    await clickElement("document.querySelector('.gs-center-controls button:nth-of-type(2)')");
     assert.strictEqual(await js(`${V}.centerPath`), '');
-    record('center picker: valid, invalid, and automatic center');
+    await chooseCenter(center);
+    record('center picker: search, explicit selection, cancelled unmatched search, and automatic center');
     await capture('orbital-controls');
 
     await js(`app.workspace.rightSplit.collapse()`);
