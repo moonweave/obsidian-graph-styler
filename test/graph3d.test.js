@@ -23,6 +23,21 @@ Module._load = originalLoad;
 const { graphData3d, graphDataFromRenderer3d, graphRenderer3d, colorGroupTest3d, initialPositions3d, forceLayout3d, LAYOUT_WORKER_3D, applyCssFilter, Graph3DView, parseCssColor,
   displayRatio3d, lineMode3d, forceCurve3d, layoutParams3d, validGraph3dOptions, orbitalCenterIndex3d, orbitalPositions3d, globePositions3d, globeLineGeometry3d, globeGuideGeometry3d, packGlobeThickPairs3d } = GraphStyler;
 
+(async () => {
+  let release;
+  const delayed = new Promise(resolve => { release = resolve; });
+  const plugin = new GraphStyler();
+  plugin.views3d = () => [{ applyStyle: () => delayed }, { applyStyle: async () => 'second' }];
+  let completed = false;
+  const refresh = plugin.refresh3d().then(values => { completed = true; return values; });
+  await Promise.resolve();
+  assert.strictEqual(completed, false, 'refresh waits for all 3D views');
+  release('first');
+  assert.deepStrictEqual(await refresh, ['first', 'second']);
+  plugin.views3d = () => [{ applyStyle: async () => { throw new Error('GPU update failed'); } }];
+  await assert.rejects(plugin.refresh3d(), /GPU update failed/, 'render failure reaches the applying caller');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+
 {
   const plugin = new GraphStyler();
   let refreshed = 0;

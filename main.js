@@ -3435,29 +3435,13 @@ module.exports = class GraphStyler extends Plugin {
     await this._save3dSettings;
   }
 
-  graph3dCenterCandidates() {
-    const active3d = this.views3d().find((view) => Array.isArray(view.files));
-    let files = active3d && active3d.files;
-    if (!files) {
-      const renderer = graphRenderer3d(this.app.workspace);
-      if (renderer) files = renderer.nodes.map((node) => {
-        const path = node && node.id;
-        const file = typeof path === 'string' ? this.app.vault.getAbstractFileByPath(path) : null;
-        return file ? { path, basename: file.basename, type: node.type || 'file' } : null;
-      }).filter(Boolean);
-    }
-    if (!files) files = this.app.vault.getMarkdownFiles().map((file) => ({ path: file.path, basename: file.basename, type: 'file' }));
-    return files.filter((file) => file.type === 'file' && /\.md$/i.test(file.path || ''))
-      .sort((a, b) => comparePath3d(a.path, b.path));
-  }
-
   views3d() {
     return this.app.workspace.getLeavesOfType(VIEW_TYPE_3D).map((leaf) => leaf.view).filter((view) => view instanceof Graph3DView);
   }
 
   // 프리셋을 바꾸면 열린 3D 그래프도 새 색을 쓴다(테마 전환은 3D 뷰가 css-change로 직접 받는다).
-  refresh3d() {
-    for (const view of this.views3d()) view.applyStyle();
+  async refresh3d() {
+    return Promise.all(this.views3d().map((view) => view.applyStyle()));
   }
 
   // 찍을 그래프: 활성 leaf가 그래프·로컬 그래프면 그것(명령 팔레트), 아니면 가장 최근에 활성이던 것
@@ -4084,7 +4068,7 @@ module.exports = class GraphStyler extends Plugin {
         if (preset.colors.length) this.draft.colors = preset.colors.slice();
       }
       if (!live) this.refreshViews();
-      if (!live) this.refresh3d();
+      if (!live) await this.refresh3d();
       if (!live && shown) new Notice(L.applied(preset));
     } catch (e) {
       console.error('[graph-styler] apply failed', e);
@@ -4276,11 +4260,10 @@ module.exports = class GraphStyler extends Plugin {
         } catch (_) { /* engine API drift — preview just skips */ }
       }
     }
-    this.refresh3d();
+    Promise.resolve(this.refresh3d()).catch((error) => console.error('[graph-styler] 3D preview failed', error));
   }
 
   async restore() {
-    this.previewGraphOptions = null;
     if (this._applying && this._applyIdle) await this._applyIdle;
     const adapter = this.app.vault.adapter;
     const bak = `${this.graphPath()}.styler-bak`;
@@ -4291,6 +4274,7 @@ module.exports = class GraphStyler extends Plugin {
     if (typeof window.confirm === 'function' && !window.confirm(L.restoreConfirm)) return;
     const original = await adapter.read(bak);
     await adapter.write(this.graphPath(), original);
+    this.previewGraphOptions = null;
     await this.setActiveSnippet('__none__');
     if (this.liveStyle) this.liveStyle.textContent = '';
     let originalOptions = {};
@@ -4306,7 +4290,7 @@ module.exports = class GraphStyler extends Plugin {
     this.syncCoreGraphOptions(restoredOptions);
     await this.reloadGraph(restoredOptions);
     this.refreshViews();
-    this.refresh3d();
+    await this.refresh3d();
     new Notice(L.restored);
   }
 };
