@@ -1007,6 +1007,9 @@ class StylerView extends ItemView {
     const draft = this.plugin.draft;
     const details = this.group(c, 'customize', L.customize);
     details.createEl('p', { text: L.customizeNote, cls: 'gs-note' });
+    details.createEl('p', { text: detectLang() === 'ko'
+      ? '3D Force에서 물리 설정이 적용됩니다. Orbital·Globe에서는 크기·색·선 굵기만 적용되며, Text fade는 2D 전용입니다.'
+      : 'Physics settings apply to 3D Force. Orbital and Globe use size, colors and line width; Text fade is 2D only.', cls: 'gs-note' });
 
     // group colors
     const colorRow = details.createDiv({ cls: 'gs-row' });
@@ -2430,8 +2433,9 @@ class Graph3DView extends ItemView {
       bg = [base, base, base];
     }
     const core = this.app.internalPlugins && this.app.internalPlugins.plugins && this.app.internalPlugins.plugins.graph;
-    const options = core && core.instance && core.instance.options && Array.isArray(core.instance.options.colorGroups)
+    const baseOptions = core && core.instance && core.instance.options && Array.isArray(core.instance.options.colorGroups)
       ? core.instance.options : await plugin.readGraphOptions();
+    const options = Object.assign({}, baseOptions, plugin.previewGraphOptions);
     const groups = (Array.isArray(options.colorGroups) ? options.colorGroups : [])
       .filter((g) => g && g.color && typeof g.color.rgb === 'number')
       .map((g) => ({
@@ -2484,7 +2488,10 @@ class Graph3DView extends ItemView {
 
   async applyStyle() {
     if (!this.gl || !this.data || !this.data.n) return;
+    const previousStyle = this.style || {};
+    const previousColors = JSON.stringify([previousStyle.groups, previousStyle.fill, previousStyle.tagFill, previousStyle.unresolvedFill]);
     this.style = await this.readStyle();
+    const colorsChanged = previousColors !== JSON.stringify([this.style.groups, this.style.fill, this.style.tagFill, this.style.unresolvedFill]);
     if (this.disposed || !this.gl) return;
     // 탭을 여는 동안(build가 readStyle을 기다리는 사이) GPU 자원은 아직 없거나 이전 그래프 크기다. 그때 온 변경은
     // initGL이 끝난 뒤 다시 반영한다.
@@ -2493,6 +2500,7 @@ class Graph3DView extends ItemView {
       return;
     }
     const { col, size, groupIndex } = this.nodeAttributes();
+    const groupsChanged = !this.groupIndex || groupIndex.some((group, i) => group !== this.groupIndex[i]);
     this.groupIndex = groupIndex;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.col);
@@ -2503,8 +2511,8 @@ class Graph3DView extends ItemView {
     this.uploadNodeTexture(this.tex.col, col);
     // 장력이 바뀌면 Obsidian처럼 지금 자리에서 다시 푼다(alpha 0.3). 카메라는 건드리지 않는다: 사용자가 옮긴 카메라는
     // 그 자리에 있고, 옮기지 않았다면 처음 배치 때처럼 거리만 그래프 크기를 따라간다.
-    if (this.graphLayout === 'globe') {
-      this.pos = globePositions3d(this.paths, this.groupIndex);
+    if (this.graphLayout === 'globe' && (groupsChanged || colorsChanged)) {
+      if (groupsChanged) this.pos = globePositions3d(this.paths, this.groupIndex);
       if (this.hover >= 0) this.setHover(-1);
       this.initGL();
       this.fit = this.measureFit();
@@ -3305,7 +3313,7 @@ module.exports = class GraphStyler extends Plugin {
     }));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
       invalidate();
-      if (oldPath && oldPath === this.settings.orbitalCenterPath) this.setGraph3dOptions({ centerPath: '' });
+      if (oldPath && oldPath === this.settings.orbitalCenterPath) this.setGraph3dOptions({ centerPath: file.path });
     }));
   }
 
@@ -4032,6 +4040,7 @@ module.exports = class GraphStyler extends Plugin {
   }
 
   async _doApply(preset, opts) {
+    this.previewGraphOptions = null;
     const live = !!(opts && opts.silent);
     const keepGroups = this.settings.keepColorGroups === true;
     try {
@@ -4243,6 +4252,7 @@ module.exports = class GraphStyler extends Plugin {
       if (queries.length) graphOptions.colorGroups = makeGroups(queries, preset.colors);
     }
     if (preset.applyForces) this.currentForceOptions = forceOptionsFromGraph(graphOptions);
+    this.previewGraphOptions = Object.assign({}, graphOptions);
     this.currentPreset = Object.assign({}, preset, { graph: Object.assign({}, current && current.graph, graphOptions) });
     const leaves = this.app.workspace
       .getLeavesOfType('graph')
@@ -4257,9 +4267,11 @@ module.exports = class GraphStyler extends Plugin {
         } catch (_) { /* engine API drift — preview just skips */ }
       }
     }
+    this.refresh3d();
   }
 
   async restore() {
+    this.previewGraphOptions = null;
     if (this._applying && this._applyIdle) await this._applyIdle;
     const adapter = this.app.vault.adapter;
     const bak = `${this.graphPath()}.styler-bak`;

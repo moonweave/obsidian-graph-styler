@@ -24,6 +24,23 @@ const { graphData3d, graphDataFromRenderer3d, graphRenderer3d, colorGroupTest3d,
   displayRatio3d, lineMode3d, forceCurve3d, layoutParams3d, validGraph3dOptions, orbitalCenterIndex3d, orbitalPositions3d, globePositions3d, globeLineGeometry3d, globeGuideGeometry3d, packGlobeThickPairs3d } = GraphStyler;
 
 {
+  const plugin = new GraphStyler();
+  let refreshed = 0;
+  Object.assign(plugin, {
+    settings: { keepColorGroups: true },
+    ensureLiveStyle() {}, liveStyle: {},
+    app: { workspace: { getLeavesOfType: () => [] } },
+    refresh3d() { refreshed++; },
+  });
+  const preset = GraphStyler.presetFromRaw({ id: 'preview', label: 'Preview', forces: { dist: 400, node: 0.5 } });
+  plugin.previewLive(preset);
+  assert.strictEqual(refreshed, 1, 'preview reaches 3D even with no open 2D leaf');
+  assert.strictEqual(plugin.previewGraphOptions.linkDistance, 400);
+  assert.strictEqual(plugin.previewGraphOptions.nodeSizeMultiplier, 0.5);
+  assert(!Object.hasOwn(plugin.previewGraphOptions, 'colorGroups'), 'preview preserves existing groups');
+}
+
+{
   const files = ['한글 폴더/a & b.md', 'other/a & b.md'].map((path) => ({ path, basename: 'a & b', type: 'file' }));
   const data = { deg: [2, 1] };
   assert.deepStrictEqual(GraphStyler.orbitalCenterStatus3d(files, data, ''), { path: files[0].path, fallback: false });
