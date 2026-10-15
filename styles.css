@@ -287,14 +287,24 @@
 }
 
 .graph-styler-panel .gs-3d-center-row {
-  display: block;
+  display: block !important;
+  width: 100%;
 }
 
-.graph-styler-panel .gs-3d-center-row > .gs-row-label {
-  display: block;
-  width: auto;
+.graph-styler-panel .gs-3d-center-section {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+}
+
+.graph-styler-panel .gs-3d-center-section > .gs-row-label {
+  display: block !important;
+  width: 100%;
+  box-sizing: border-box;
   margin: 0 0 6px;
 }
+
+.graph-styler-panel .gs-3d-center-section > .gs-3d-center-row { grid-column: 1; }
 
 .graph-styler-panel .gs-center-controls {
   display: grid;
