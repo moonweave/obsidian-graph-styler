@@ -292,8 +292,7 @@
 }
 
 .graph-styler-panel .gs-3d-center-section {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr);
+  display: block !important;
   width: 100%;
 }
 
@@ -304,7 +303,7 @@
   margin: 0 0 6px;
 }
 
-.graph-styler-panel .gs-3d-center-section > .gs-3d-center-row { grid-column: 1; }
+.graph-styler-panel .gs-3d-center-section > .gs-3d-center-row { clear: both; }
 
 .graph-styler-panel .gs-center-controls {
   display: grid;

@@ -1504,8 +1504,10 @@ async function localGraphColours({ styled = true, globalGroups = [{ query: 'path
     g = off.group();
     const [onBox, rotateBox, speed] = inputs(g);
     const center = g.walk().find((el) => el.text === 'Choose note…');
+    const centerSection = g.walk().find((el) => el.cls.has('gs-3d-center-section'));
     assert.deepStrictEqual([onBox.checked, center.tag, center.disabled, rotateBox.type, rotateBox.checked, speed.type],
       [true, 'button', true, 'checkbox', true, 'range']);
+    assert.strictEqual(centerSection.style.display, 'block', 'the Orbital center heading and controls use normal block flow');
     const selects = g.walk().filter((el) => el.tag === 'select');
     assert.deepStrictEqual(selects.map((el) => el.value), ['original', 'force'], 'Look and Layout default to the current appearance');
     assert.deepStrictEqual([speed.min, speed.max, speed.step, speed.value, speed.disabled], ['0.02', '0.6', '0.01', '0.12', false]);
